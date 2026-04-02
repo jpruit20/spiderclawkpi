@@ -1,0 +1,16 @@
+[Unit]
+Description=Spider KPI Flask App
+After=network.target
+
+[Service]
+Type=simple
+User=jpruit20
+WorkingDirectory=/home/jpruit20/.openclaw/workspace/spider-kpi
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider-kpi/.env
+ExecStart=/home/jpruit20/.openclaw/workspace/spider-kpi/.venv/bin/python /home/jpruit20/.openclaw/workspace/spider-kpi/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

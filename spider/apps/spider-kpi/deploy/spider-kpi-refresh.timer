@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Spider KPI refresh every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=spider-kpi-refresh.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

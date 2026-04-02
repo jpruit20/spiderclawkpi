@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+.venv-kpi/
+
+# Node
+frontend/node_modules/
+node_modules/
+
+# Local runtime artifacts
+logs/
+.openclaw/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

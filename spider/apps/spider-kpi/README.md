@@ -1,0 +1,136 @@
+# Spider KPI Decision Engine
+
+Production-oriented KPI and decision engine for Spider Grills.
+
+## Current status
+
+The backend-backed KPI stack is now the primary path.
+It ingests Shopify, Triple Whale, and Freshdesk into PostgreSQL, computes KPI rows, and exposes source-health / alert visibility through the API.
+
+## What this system does
+
+This stack is designed to ingest, store, compute, and serve company-wide operating intelligence for:
+- ecommerce performance
+- marketing efficiency
+- support / CX health
+- issue detection
+- recommendation generation
+- source health visibility
+
+## Architecture
+
+### Backend
+- FastAPI
+- SQLAlchemy
+- Alembic
+- APScheduler
+- PostgreSQL
+
+### Frontend
+- React + Vite
+
+### Sources
+Integrated:
+- Shopify polling
+- Shopify webhook scaffold
+- Triple Whale polling
+- Freshdesk polling
+
+Scaffolded for future:
+- Reddit
+- Discord
+- reviews
+- generic public web mentions
+
+## Directory structure
+
+- `backend/` FastAPI app, models, migrations, ingestion, compute layer
+- `frontend/` React dashboard
+- `data/` prototype data and bootstrap artifacts
+- `deploy/` deployment notes and service artifacts
+- `docker-compose.yml` local orchestration attempt
+
+## Main API surface
+
+- `GET /health`
+- `GET /api/overview`
+- `GET /api/kpis/daily`
+- `GET /api/kpis/intraday`
+- `GET /api/diagnostics`
+- `GET /api/alerts`
+- `GET /api/recommendations`
+- `GET /api/issues`
+- `GET /api/support/overview`
+- `GET /api/support/tickets`
+- `GET /api/source-health`
+- `POST /api/admin/run-sync/{source}`
+- `POST /api/admin/backfill/{source}`
+- `POST /api/admin/seed`
+
+## Source-health behavior
+
+Every source now tracks:
+- configured vs not configured
+- latest run status
+- latest success/failure time
+- records processed
+- derived health state
+- stale sync detection
+- surfaced failure summaries
+
+This is intended to push broken connectors to the top instead of hiding them.
+
+## Local development
+
+### 1. Create env and venv
+
+```bash
+cd /home/jpruit20/.openclaw/workspace/spider-kpi
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+### 2. Ensure PostgreSQL is reachable
+
+Set `DATABASE_URL` in `.env`.
+
+### 3. Run migrations
+
+```bash
+cd backend
+PYTHONPATH=../backend alembic -c alembic.ini upgrade head
+```
+
+### 4. Start backend
+
+```bash
+cd backend
+source ../.venv/bin/activate
+PYTHONPATH=../backend uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### 5. Start frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Current deployment recommendation
+
+Use:
+- PostgreSQL
+- FastAPI backend via uvicorn/systemd
+- Vite frontend behind nginx
+- `.env` for credentials
+- API-backed source health as the operational truth
+
+See `DEPLOYMENT.md` for the locked deploy path.
+
+## Notes
+
+- The old Flask dashboard and JSON prototype files remain in-repo, but they are now legacy/prototype artifacts.
+- Docker compose is present, but local Docker access may still depend on host permissions.
+- The database-backed backend is the preferred path forward.

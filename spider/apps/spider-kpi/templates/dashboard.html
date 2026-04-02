@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spider KPI</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #08111f;
+      --panel: rgba(13, 22, 45, 0.88);
+      --panel-2: rgba(17, 28, 56, 0.96);
+      --border: rgba(110, 142, 211, 0.18);
+      --text: #eef4ff;
+      --muted: #9fb0d4;
+      --blue: #6ea8ff;
+      --green: #39d08f;
+      --orange: #ffb257;
+      --red: #ff6d7a;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+      --radius: 22px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, var(--bg) 0%, #050b17 100%);
+      color: var(--text);
+      font-family: Inter, system-ui, sans-serif;
+    }
+    .app {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .topbar h1 {
+      margin: 0;
+      font-size: 34px;
+    }
+    .sub {
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .nav a, .button {
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .nav a.active {
+      background: rgba(110,168,255,0.18);
+      border-color: rgba(110,168,255,0.4);
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .chip {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      padding: 10px 14px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+    .cards {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+    .main {
+      grid-template-columns: 2fr 1fr;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.022), rgba(255,255,255,0.015));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .stat {
+      padding: 18px;
+      min-height: 140px;
+    }
+    .label {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .value {
+      font-size: 30px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    .delta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .section-head {
+      padding: 18px 18px 0;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .section-body {
+      padding: 18px;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(17, 27, 57, 0.78);
+    }
+    .row .k { color: var(--muted); }
+    .row .v { font-weight: 700; text-align: right; }
+    .chart-shell {
+      height: 360px;
+    }
+    .alerts {
+      display: grid;
+      gap: 12px;
+    }
+    .alert {
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 178, 87, 0.26);
+      background: rgba(255, 178, 87, 0.08);
+      line-height: 1.5;
+    }
+    .ok {
+      border-color: rgba(57, 208, 143, 0.26);
+      background: rgba(57, 208, 143, 0.08);
+    }
+    @media (max-width: 1100px) {
+      .cards, .main { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div>
+        <h1 id="pageTitle">Spider KPI</h1>
+        <div class="sub" id="pageSubtitle">Loading page…</div>
+        <div class="nav">
+          {% for key, info in pages.items() %}
+            <a href="{{ url_for('dashboard_page', page_name=key) }}" class="{% if key == current_page %}active{% endif %}">{{ info.title }}</a>
+          {% endfor %}
+          <a href="{{ url_for('logout') }}">Logout</a>
+        </div>
+      </div>
+      <div class="toolbar">
+        <span class="chip" id="lastUpdated">Waiting for data</span>
+        <button class="button" id="refreshDataBtn">Refresh data now</button>
+      </div>
+    </div>
+
+    <div class="grid cards" id="cardsGrid"></div>
+
+    <div class="grid main">
+      <div class="card">
+        <div class="section-head">Trend</div>
+        <div class="section-body">
+          <div class="chart-shell">
+            <canvas id="mainChart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-head">Highlights</div>
+        <div class="section-body">
+          <div class="list" id="highlightsList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-head">Alerts</div>
+      <div class="section-body">
+        <div class="alerts" id="alertsList"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const pageName = {{ current_page | tojson }};
+    const refreshSeconds = {{ refresh_seconds | tojson }};
+    let chart;
+
+    function formatValue(value, kind) {
+      const number = Number(value || 0);
+      if (kind === 'currency') {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          maximumFractionDigits: 2,
+        }).format(number);
+      }
+      if (kind === 'percent') {
+        return `${number.toFixed(2)}%`;
+      }
+      if (kind === 'integer') {
+        return new Intl.NumberFormat('en-US', {
+          maximumFractionDigits: 0,
+        }).format(number);
+      }
+      if (kind === 'hours') {
+        return `${number.toFixed(2)} hrs`;
+      }
+      if (kind === 'ratio') {
+        return number.toFixed(2);
+      }
+      return String(value ?? '—');
+    }
+
+    function renderCards(cards) {
+      const grid = document.getElementById('cardsGrid');
+      grid.innerHTML = '';
+      for (const card of cards) {
+        const div = document.createElement('div');
+        div.className = 'card stat';
+        const deltaText = card.delta === null || card.delta === undefined
+          ? 'No comparison'
+          : `${Number(card.delta).toFixed(1)}%`;
+        div.innerHTML = `
+          <div class="label">${card.label}</div>
+          <div class="value">${formatValue(card.value, card.format)}</div>
+          <div class="delta">${deltaText}</div>
+        `;
+        grid.appendChild(div);
+      }
+    }
+
+    function renderList(targetId, rows, treatAsAlerts = false) {
+      const el = document.getElementById(targetId);
+      el.innerHTML = '';
+      if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = treatAsAlerts ? 'alert ok' : 'row';
+        empty.textContent = treatAsAlerts
+          ? 'No active alerts.'
+          : 'No highlights available.';
+        el.appendChild(empty);
+        return;
+      }
+
+      for (const row of rows) {
+        const item = document.createElement('div');
+        if (treatAsAlerts) {
+          item.className = 'alert';
+          item.textContent = row;
+        } else {
+          item.className = 'row';
+          item.innerHTML = `<div class="k">Insight</div><div class="v">${row}</div>`;
+        }
+        el.appendChild(item);
+      }
+    }
+
+    function buildSeries(payload) {
+      if (payload.page === 'sales-marketing') {
+        return {
+          labels: payload.series.labels,
+          datasets: [
+            {
+              label: 'Revenue',
+              data: payload.series.revenue,
+              borderColor: '#6ea8ff',
+              backgroundColor: 'rgba(110,168,255,0.16)',
+              fill: true,
+              tension: 0.35,
+            },
+            {
+              label: 'Orders',
+              data: payload.series.orders,
+              borderColor: '#39d08f',
+              backgroundColor: 'rgba(57,208,143,0.12)',
+              fill: false,
+              tension: 0.35,
+            },
+          ],
+        };
+      }
+
+      const keys = Object.keys(payload.series).filter((key) => key !== 'labels');
+      const colors = ['#6ea8ff', '#39d08f', '#ffb257', '#9b87ff'];
+      return {
+        labels: payload.series.labels,
+        datasets: keys.map((key, index) => ({
+          label: key.replaceAll('_', ' '),
+          data: payload.series[key],
+          borderColor: colors[index % colors.length],
+          backgroundColor: 'rgba(110,168,255,0.12)',
+          fill: false,
+          tension: 0.35,
+        })),
+      };
+    }
+
+    function renderChart(payload) {
+      const ctx = document.getElementById('mainChart');
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: buildSeries(payload),
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: { color: '#eef4ff' },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#9fb0d4' },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+            y: {
+              ticks: { color: '#9fb0d4' },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+          },
+        },
+      });
+    }
+
+    async function loadPage() {
+      const response = await fetch(`/api/page/${pageName}`, { cache: 'no-store' });
+      const payload = await response.json();
+      document.getElementById('pageTitle').textContent = payload.title;
+      document.getElementById('pageSubtitle').textContent = payload.page.replace('-', ' · ');
+      document.getElementById('lastUpdated').textContent = `Updated ${payload.updated_at}`;
+      renderCards(payload.cards || []);
+      renderList('highlightsList', payload.highlights || []);
+      renderList('alertsList', payload.alerts || [], true);
+      renderChart(payload);
+    }
+
+    async function refreshDataNow() {
+      const button = document.getElementById('refreshDataBtn');
+      button.disabled = true;
+      button.textContent = 'Refreshing…';
+      try {
+        const response = await fetch('/api/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const payload = await response.json();
+        await loadPage();
+        alert(payload.ok ? 'Data refresh completed.' : `Refresh failed: ${payload.message || payload.stderr || 'unknown error'}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Refresh data now';
+      }
+    }
+
+    document.getElementById('refreshDataBtn').addEventListener('click', refreshDataNow);
+    loadPage();
+    setInterval(loadPage, refreshSeconds * 1000);
+  </script>
+</body>
+</html>

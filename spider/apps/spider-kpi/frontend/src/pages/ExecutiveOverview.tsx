@@ -1,0 +1,288 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Card } from '../components/Card'
+import { KpiGrid } from '../components/KpiGrid'
+import { RangeToolbar } from '../components/RangeToolbar'
+import { TrendChart } from '../components/TrendChart'
+import { ApiError, api, getApiBase } from '../lib/api'
+import { buildPresetRange, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
+import { DataQualityResponse, IntradayStatus, KPIIntraday, KPIDaily, KpiDisplayMode, OverviewResponse, SourceHealthItem } from '../lib/types'
+
+const ACTIVE_CONNECTORS = new Set(['shopify', 'triplewhale', 'freshdesk'])
+const SCAFFOLDED = new Set(['discord', 'facebook', 'google_reviews', 'reddit', 'reviews'])
+
+function truthyConnectorRows(rows: SourceHealthItem[]) {
+  return rows.filter((row) => ACTIVE_CONNECTORS.has(row.source))
+}
+
+function getIntradayStatus(intraday: KPIIntraday | null, latestCompleteDay?: KPIDaily): { status: IntradayStatus; message: string } {
+  if (!intraday) {
+    return { status: 'unavailable', message: 'Intraday feed unavailable.' }
+  }
+  if (intraday.sessions === 0 && intraday.orders > 0) {
+    return { status: 'partial', message: 'Data not yet available for sessions; showing partial intraday data instead of misleading zero activity.' }
+  }
+  if (latestCompleteDay && intraday.sessions < latestCompleteDay.sessions * 0.1) {
+    return { status: 'delayed', message: 'Intraday feed appears delayed relative to the latest complete day.' }
+  }
+  return { status: 'live', message: 'Live intraday signal available.' }
+}
+
+function dataQualitySeverity(row: Record<string, unknown>) {
+  if (Array.isArray(row.warnings) && row.warnings.length) return 'bad'
+  const sessionsPctDiff = typeof row.sessions_pct_diff === 'number' ? row.sessions_pct_diff : null
+  const ordersPctDiff = typeof row.orders_vs_purchases_pct_diff === 'number' ? row.orders_vs_purchases_pct_diff : null
+  const maxDiff = Math.max(sessionsPctDiff ?? 0, ordersPctDiff ?? 0)
+  if (maxDiff >= 100) return 'bad'
+  if (maxDiff >= 25 || row.type === 'shopify_sessions_missing') return 'warn'
+  return 'good'
+}
+
+function localDateKey(value: string) {
+  const date = new Date(value)
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function ExecutiveOverview() {
+  const [data, setData] = useState<OverviewResponse | null>(null)
+  const [intraday, setIntraday] = useState<KPIIntraday | null>(null)
+  const [intradaySeries, setIntradaySeries] = useState<Array<{ bucket_start: string; hour_label: string; revenue: number; sessions: number; orders: number }>>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [dataQuality, setDataQuality] = useState<DataQualityResponse | null>(null)
+  const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError(null)
+      try {
+        const [overviewPayload, intradayPayload, intradaySeriesPayload, dataQualityPayload] = await Promise.all([api.overview(), api.currentKpi(), api.intradaySeries(), api.dataQuality()])
+        if (!cancelled) {
+          const orderedSeries = [...(overviewPayload.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
+          setData({ ...overviewPayload, daily_series: orderedSeries })
+          setIntraday(intradayPayload)
+          setIntradaySeries(intradaySeriesPayload.rows || [])
+          setDataQuality(dataQualityPayload)
+          setRange(buildPresetRange('7d', orderedSeries))
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load overview')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const rangeRows = useMemo(() => filterRowsByRange(data?.daily_series || [], range), [data, range])
+  const rangeSummary = useMemo(() => summarizeKpis(rangeRows), [rangeRows])
+  const todaysIntradaySeries = useMemo(() => {
+    if (range.preset !== 'today' || !range.endDate) return intradaySeries
+    return intradaySeries.filter((row) => localDateKey(row.bucket_start) === range.endDate)
+  }, [intradaySeries, range])
+  const todaySeriesSummary = useMemo(() => {
+    if (!todaysIntradaySeries.length) return undefined
+    const revenue = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
+    const sessions = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.sessions || 0), 0)
+    const orders = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.orders || 0), 0)
+    return {
+      business_date: range.endDate || 'Today',
+      revenue,
+      orders,
+      average_order_value: orders ? revenue / orders : 0,
+      sessions,
+      conversion_rate: sessions ? (orders / sessions) * 100 : 0,
+      revenue_per_session: sessions ? revenue / sessions : 0,
+      add_to_cart_rate: 0,
+      bounce_rate: 0,
+      purchases: orders,
+      ad_spend: 0,
+      mer: 0,
+      cost_per_purchase: 0,
+      tickets_created: 0,
+      tickets_resolved: 0,
+      open_backlog: 0,
+      first_response_time: 0,
+      resolution_time: 0,
+      sla_breach_rate: 0,
+      csat: 0,
+      reopen_rate: 0,
+      tickets_per_100_orders: 0,
+    } as KPIDaily
+  }, [todaysIntradaySeries, range.endDate])
+  const latestCompleteDay = useMemo(() => {
+    const rows = data?.daily_series || []
+    return rows.length > 0 ? rows[rows.length - 1] : undefined
+  }, [data])
+  const sourceHealth = data?.source_health || []
+  const liveConnectors = truthyConnectorRows(sourceHealth)
+  const scaffoldedCount = sourceHealth.filter((row) => SCAFFOLDED.has(row.source)).length
+
+  const displayMode: KpiDisplayMode = range.preset === 'today' ? 'today_intraday' : rangeSummary ? 'selected_range_summary' : latestCompleteDay ? 'latest_complete_day' : 'today_intraday'
+  const displayKpi = range.preset === 'today' ? todaySeriesSummary : rangeSummary || latestCompleteDay
+  const displayIntraday = range.preset === 'today'
+    ? (todaySeriesSummary
+        ? {
+            revenue: todaySeriesSummary.revenue,
+            orders: todaySeriesSummary.orders,
+            sessions: todaySeriesSummary.sessions,
+            average_order_value: todaySeriesSummary.average_order_value,
+            conversion_rate: todaySeriesSummary.conversion_rate,
+          }
+        : null)
+    : intraday
+  const intradayState = getIntradayStatus(displayIntraday, latestCompleteDay)
+  const scopeLabel = summarizeRangeLabel(range)
+
+  return (
+    <div className="page-grid">
+      <div className="page-head">
+        <h2>Executive Overview</h2>
+        <p>Truthful KPI scope, clear intraday status, and source health that reflects what is actually live.</p>
+        <small className="page-meta">API base: {getApiBase()}</small>
+      </div>
+
+      <RangeToolbar rows={data?.daily_series || []} range={range} onChange={setRange} />
+
+      {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
+      {error ? <Card title="Overview Error"><div className="state-message error">{error}</div></Card> : null}
+
+      {!loading && !error ? (
+        <>
+          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} />
+          <div className="two-col two-col-equal">
+            <Card title="Revenue + Sessions Trend">
+              {range.preset === 'today' ? (
+                todaysIntradaySeries.length ? (
+                  <TrendChart
+                    rows={todaysIntradaySeries.map((row) => ({ business_date: row.hour_label, revenue: row.revenue, sessions: row.sessions, orders: row.orders } as KPIDaily))}
+                    lines={[
+                      { key: 'revenue', label: 'Revenue', color: '#6ea8ff', axisId: 'left' },
+                      { key: 'sessions', label: 'Sessions', color: '#ffb257', axisId: 'right' },
+                    ]}
+                  />
+                ) : <div className="state-message">No KPI rows available for selected range</div>
+              ) : rangeRows.length ? (
+                <TrendChart
+                  rows={rangeRows}
+                  lines={[
+                    { key: 'revenue', label: 'Revenue', color: '#6ea8ff', axisId: 'left' },
+                    { key: 'sessions', label: 'Sessions', color: '#ffb257', axisId: 'right' },
+                  ]}
+                />
+              ) : <div className="state-message">No KPI rows available for selected range</div>}
+            </Card>
+            <Card title="Orders Trend">
+              {range.preset === 'today' ? (
+                todaysIntradaySeries.length ? (
+                  <TrendChart
+                    rows={todaysIntradaySeries.map((row) => ({ business_date: row.hour_label, revenue: row.revenue, sessions: row.sessions, orders: row.orders } as KPIDaily))}
+                    lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]}
+                    height={220}
+                  />
+                ) : <div className="state-message">No KPI rows available for selected range</div>
+              ) : rangeRows.length ? (
+                <TrendChart
+                  rows={rangeRows}
+                  lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]}
+                  height={220}
+                />
+              ) : <div className="state-message">No KPI rows available for selected range</div>}
+            </Card>
+          </div>
+          <div className="two-col">
+            <Card title="Top Alerts">
+              <div className="stack-list">
+                {(data?.alerts || []).slice(0, 6).map((alert) => (
+                  <div className="list-item" key={alert.id}>
+                    <strong>{alert.title}</strong>
+                    <p>{alert.message}</p>
+                  </div>
+                ))}
+                {!data?.alerts?.length ? <div className="state-message">No alerts returned.</div> : null}
+              </div>
+            </Card>
+            <Card title="Source Health Snapshot">
+              <div className="stack-list">
+                {liveConnectors.map((item) => {
+                  const truthfulHealthy = item.latest_run_status === 'success' && item.latest_records_processed > 0 && item.last_success_at
+                  return (
+                    <div className={`list-item ${truthfulHealthy ? 'status-good' : ''}`} key={item.source}>
+                      <div className="item-head">
+                        <strong>{item.source}</strong>
+                        <div className="inline-badges">
+                          <span className="badge badge-good">Live</span>
+                          <span className={`badge ${truthfulHealthy ? 'badge-good' : 'badge-neutral'}`}>{truthfulHealthy ? 'healthy' : item.derived_status}</span>
+                        </div>
+                      </div>
+                      <p>{truthfulHealthy ? 'Recent successful sync exists. Showing live connector as healthy.' : item.status_summary}</p>
+                      <small>Latest run: {item.latest_run_status} · Records: {item.latest_records_processed}</small>
+                    </div>
+                  )
+                })}
+                <div className="list-item scaffold-source">
+                  <div className="item-head">
+                    <strong>Scaffolded future sources</strong>
+                    <span className="badge badge-muted">Scaffolded</span>
+                  </div>
+                  <p>{scaffoldedCount} intentionally disabled / not yet live sources are excluded from live connector health.</p>
+                </div>
+              </div>
+            </Card>
+          </div>
+          <div className="two-col">
+            <Card title="Recommendations">
+              <div className="stack-list">
+                {(data?.recommendations || []).slice(0, 6).map((item) => (
+                  <div className="list-item" key={item.id}>
+                    <strong>{item.title}</strong>
+                    <p>{item.recommended_action}</p>
+                  </div>
+                ))}
+                {!data?.recommendations?.length ? <div className="state-message">No recommendations returned.</div> : null}
+              </div>
+            </Card>
+            <Card title="Data Quality Visibility">
+              <div className="stack-list">
+                {(dataQuality?.missing_data || []).map((item, index) => (
+                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`missing-${index}`}>
+                    <strong>Missing data</strong>
+                    <p>{String(item.message || 'Missing data note')}</p>
+                    <small>{String(item.business_date || 'n/a')}</small>
+                  </div>
+                ))}
+                {(dataQuality?.source_drift || []).slice(0, 5).map((item, index) => (
+                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`drift-${index}`}>
+                    <strong>Source drift</strong>
+                    <p>{String(item.business_date || 'n/a')}</p>
+                    <small>Sessions drift: {String(item.sessions_pct_diff ?? 'n/a')}% · Orders vs purchases drift: {String(item.orders_vs_purchases_pct_diff ?? 'n/a')}%</small>
+                  </div>
+                ))}
+                {(dataQuality?.validation_warnings || []).map((item, index) => (
+                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`validation-${index}`}>
+                    <strong>Validation warning</strong>
+                    <p>{Array.isArray(item.warnings) ? item.warnings.join(' · ') : 'Validation mismatch detected'}</p>
+                    <small>{String(item.business_date || 'n/a')}</small>
+                  </div>
+                ))}
+                {!dataQuality?.missing_data?.length && !dataQuality?.source_drift?.length && !dataQuality?.validation_warnings?.length ? (
+                  <div className="list-item status-good">
+                    <strong>Data quality</strong>
+                    <p>No data-quality warnings returned.</p>
+                  </div>
+                ) : null}
+              </div>
+            </Card>
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
