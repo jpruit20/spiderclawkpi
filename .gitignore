@@ -1,0 +1,4 @@
+spider/sidecar/.env
+spider/sidecar/outbox/
+spider/sidecar/inbox/processed/
+spider/sidecar/inbox/failed/
