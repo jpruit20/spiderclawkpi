@@ -12,7 +12,7 @@ import type {
   SupportOverviewResponse,
 } from './types'
 
-const DEFAULT_API_BASE = 'http://127.0.0.1:8011'
+const DEFAULT_API_BASE = ''
 const API_BASE = (import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).replace(/\/$/, '')
 const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD || ''
 
