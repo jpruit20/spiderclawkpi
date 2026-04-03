@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { buildPresetRange, filterRowsByRange, RangeState } from '../lib/range'
+import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { FreshdeskAgentDailyItem, FreshdeskTicketItem, IssueRadarResponse, KPIDaily } from '../lib/types'
 
 function percentShare(value: number, total: number) {
@@ -31,6 +31,7 @@ function isClosedStatus(status?: string) {
 }
 
 export function SupportCX() {
+  const todayDate = businessTodayDate()
   const [rows, setRows] = useState<KPIDaily[]>([])
   const [issues, setIssues] = useState<IssueRadarResponse | null>(null)
   const [agents, setAgents] = useState<FreshdeskAgentDailyItem[]>([])
@@ -38,36 +39,40 @@ export function SupportCX() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
     async function load() {
+      const requestId = ++requestIdRef.current
       setLoading(true)
       setError(null)
       try {
         const [supportPayload, issuesPayload, agentsPayload, ticketsPayload] = await Promise.all([
-          api.supportOverview(),
-          api.issues(),
-          api.supportAgents(),
-          api.supportTickets(),
+          api.supportOverview(controller.signal),
+          api.issues(controller.signal),
+          api.supportAgents(controller.signal),
+          api.supportTickets(controller.signal),
         ])
-        if (!cancelled) {
-          const supportRows = [...(supportPayload.rows || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
-          setRows(supportRows)
-          setIssues(issuesPayload)
-          setAgents(agentsPayload || [])
-          setTickets(ticketsPayload || [])
-          setRange(buildPresetRange('7d', supportRows))
-        }
+        if (controller.signal.aborted || requestId !== requestIdRef.current) return
+        const supportRows = [...(supportPayload.rows || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
+        setRows(supportRows)
+        setIssues(issuesPayload)
+        setAgents(agentsPayload || [])
+        setTickets(ticketsPayload || [])
+        setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', supportRows, { anchorDate: todayDate }))
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load support overview')
+        if (controller.signal.aborted || requestId !== requestIdRef.current) return
+        setError(err instanceof ApiError ? err.message : 'Failed to load support overview')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (controller.signal.aborted || requestId !== requestIdRef.current) return
+        setLoading(false)
       }
     }
-    load()
+    void load()
     return () => {
-      cancelled = true
+      controller.abort()
+      requestIdRef.current += 1
     }
   }, [])
 
@@ -194,7 +199,7 @@ export function SupportCX() {
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
 
-      <RangeToolbar rows={rows} range={range} onChange={setRange} />
+      <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
 
       {loading ? <Card title="Support Status"><div className="state-message">Loading live support data…</div></Card> : null}
       {error ? <Card title="Support Error"><div className="state-message error">{error}</div></Card> : null}

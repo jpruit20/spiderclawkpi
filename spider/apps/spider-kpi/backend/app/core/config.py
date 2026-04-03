@@ -78,7 +78,8 @@ class Settings(BaseSettings):
     freshdesk_api_user: Optional[str] = None
 
     sync_interval_minutes: int = 5
-    backfill_days: int = 365
+    historical_start_date: str = "2024-01-01"
+    backfill_days: int = 824
 
 
 @lru_cache(maxsize=1)

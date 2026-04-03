@@ -3,7 +3,7 @@ import { Card } from '../components/Card'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { buildPresetRange, filterRowsByRange, RangeState } from '../lib/range'
+import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { KPIDaily } from '../lib/types'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
@@ -37,6 +37,7 @@ function isIncompleteLatestDay(row?: KPIDaily) {
 }
 
 export function CommercialPerformance() {
+  const todayDate = businessTodayDate()
   const [rows, setRows] = useState<KPIDaily[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -53,7 +54,7 @@ export function CommercialPerformance() {
         const ordered = [...payload].sort((a, b) => a.business_date.localeCompare(b.business_date))
         const safeRows = isIncompleteLatestDay(ordered[ordered.length - 1]) ? ordered.slice(0, -1) : ordered
         setRows(safeRows)
-        setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', safeRows))
+        setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', safeRows, { anchorDate: todayDate }))
       } catch (err) {
         if (signal?.aborted || requestId !== requestIdRef.current) return
         setError(err instanceof ApiError ? err.message : 'Failed to load daily KPIs')
@@ -108,7 +109,7 @@ export function CommercialPerformance() {
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
 
-      <RangeToolbar rows={rows} range={range} onChange={setRange} />
+      <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
 
       {loading ? (
         <Card title="Performance Summary"><div className="state-message">Loading live KPI summary…</div></Card>

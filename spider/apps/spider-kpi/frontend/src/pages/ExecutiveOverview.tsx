@@ -4,7 +4,7 @@ import { KpiGrid } from '../components/KpiGrid'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { buildPresetRange, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
+import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
 import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
 import { DataQualityResponse, IntradayStatus, KPIIntraday, KPIDaily, KpiDisplayMode, KpiDisplayRow, OverviewResponse, SourceHealthItem } from '../lib/types'
 
@@ -41,6 +41,7 @@ function isIncompleteLatestDay(row?: KPIDaily) {
 }
 
 export function ExecutiveOverview() {
+  const todayDate = businessTodayDate()
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [intraday, setIntraday] = useState<KPIIntraday | null>(null)
   const [intradaySeries, setIntradaySeries] = useState<Array<{ bucket_start: string; business_date: string; hour_label: string; revenue: number; sessions: number; orders: number }>>([])
@@ -76,7 +77,7 @@ export function ExecutiveOverview() {
           const orderedSeries = [...(overviewPayload.value.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
           const safeSeries = sanitizeDailyRows(orderedSeries)
           setData({ ...overviewPayload.value, daily_series: orderedSeries })
-          setRange(buildPresetRange('7d', safeSeries))
+          setRange(buildPresetRange('7d', safeSeries, { anchorDate: todayDate }))
       } else {
         setData(null)
         setError(overviewPayload.reason instanceof ApiError ? overviewPayload.reason.message : 'Failed to load overview')
@@ -126,16 +127,16 @@ export function ExecutiveOverview() {
   const latestIntradayDate = useMemo(() => intradaySeries.at(-1)?.business_date || intraday?.bucket_start?.slice(0, 10) || safeDailyRows.at(-1)?.business_date, [intradaySeries, intraday, safeDailyRows])
   const todaysIntradaySeries = useMemo(() => {
     if (range.preset !== 'today') return intradaySeries
-    const targetDate = latestIntradayDate || range.endDate
+    const targetDate = todayDate
     return intradaySeries.filter((row) => row.business_date === targetDate)
-  }, [intradaySeries, range, latestIntradayDate])
+  }, [intradaySeries, range, todayDate])
   const todaySeriesSummary = useMemo(() => {
     if (!todaysIntradaySeries.length) return undefined
     const revenue = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
     const sessions = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.sessions || 0), 0)
     const orders = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.orders || 0), 0)
     return {
-      business_date: latestIntradayDate || range.endDate || 'Today',
+      business_date: todayDate,
       revenue,
       orders,
       average_order_value: orders ? revenue / orders : 0,
@@ -158,7 +159,7 @@ export function ExecutiveOverview() {
       reopen_rate: null,
       tickets_per_100_orders: null,
     } as KpiDisplayRow
-  }, [todaysIntradaySeries, range.endDate, latestIntradayDate])
+  }, [todaysIntradaySeries, todayDate])
   const latestCompleteDay = useMemo(() => {
     if (data?.latest_kpi) return data.latest_kpi
     const rows = data?.daily_series || []
@@ -199,7 +200,7 @@ export function ExecutiveOverview() {
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
 
-      <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} latestDateOverride={latestIntradayDate} />
+      <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
       {error ? <Card title="Overview Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}

@@ -153,7 +153,7 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
     if not configured:
         return {"ok": False, "message": "Triple Whale not configured", "records_processed": 0}
 
-    days = max(1, min(backfill_days or settings.backfill_days, 30))
+    days = max(1, backfill_days or settings.backfill_days)
     run = start_sync_run(db, "triplewhale", "backfill_daily", {"days": days})
     db.commit()
 
