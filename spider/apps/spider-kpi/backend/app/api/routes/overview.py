@@ -1,16 +1,20 @@
+from datetime import timezone
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_auth
 from app.compute.kpis import get_data_quality
-from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsIntraday
+from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation
 from app.schemas.overview import AlertOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut
 from app.services.issue_radar import build_issue_radar
 from app.services.overview import build_overview
 from app.services.source_health import get_source_health
 
 router = APIRouter(prefix="/api", tags=["overview"], dependencies=[Depends(require_auth)])
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 
 @router.get("/overview", response_model=OverviewResponse)
@@ -32,14 +36,15 @@ def get_kpis_intraday(db: Session = Depends(db_session)):
 
 @router.get("/kpis/intraday-series")
 def get_kpis_intraday_series(db: Session = Depends(db_session)):
-    rows = db.execute(select(ShopifyAnalyticsIntraday).order_by(ShopifyAnalyticsIntraday.bucket_start)).scalars().all()
+    rows = db.execute(select(KPIIntraday).order_by(KPIIntraday.bucket_start)).scalars().all()
     payload = [
         {
             "bucket_start": row.bucket_start,
-            "hour_label": row.bucket_start.strftime("%H:%M") if row.bucket_start else None,
+            "business_date": row.bucket_start.astimezone(BUSINESS_TZ).date().isoformat() if row.bucket_start else None,
+            "hour_label": row.bucket_start.astimezone(BUSINESS_TZ).strftime("%H:%M") if row.bucket_start else None,
             "revenue": row.revenue,
             "sessions": row.sessions,
-            "orders": int(round((row.revenue / row.average_order_value))) if getattr(row, "average_order_value", 0) else 0,
+            "orders": row.orders,
         }
         for row in rows
     ]

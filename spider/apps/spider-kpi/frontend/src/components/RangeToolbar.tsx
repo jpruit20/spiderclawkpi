@@ -13,16 +13,18 @@ export function RangeToolbar({
   rows,
   range,
   onChange,
+  latestDateOverride,
 }: {
   rows: { business_date: string }[]
   range: RangeState
   onChange: (range: RangeState) => void
+  latestDateOverride?: string
 }) {
   const [draftStart, setDraftStart] = useState(range.startDate)
   const [draftEnd, setDraftEnd] = useState(range.endDate)
 
   const minDate = '2024-01-01'
-  const maxDate = useMemo(() => [...rows].sort((a, b) => a.business_date.localeCompare(b.business_date)).at(-1)?.business_date || new Date().toISOString().slice(0, 10), [rows])
+  const maxDate = useMemo(() => latestDateOverride || [...rows].sort((a, b) => a.business_date.localeCompare(b.business_date)).at(-1)?.business_date || new Date().toISOString().slice(0, 10), [rows, latestDateOverride])
   const availableDays = rows.filter((row) => row.business_date >= range.startDate && row.business_date <= range.endDate).length
   const requestedDays = range.startDate && range.endDate ? Math.max(1, Math.round((new Date(`${range.endDate}T00:00:00Z`).getTime() - new Date(`${range.startDate}T00:00:00Z`).getTime()) / 86400000) + 1) : 0
 
@@ -34,7 +36,7 @@ export function RangeToolbar({
             key={preset.key}
             className={range.preset === preset.key ? 'range-button active' : 'range-button'}
             onClick={() => {
-              const next = buildPresetRange(preset.key as Exclude<RangePreset, 'custom'>, rows)
+              const next = buildPresetRange(preset.key as Exclude<RangePreset, 'custom'>, rows, { latestDate: latestDateOverride })
               setDraftStart(next.startDate)
               setDraftEnd(next.endDate)
               onChange(next)

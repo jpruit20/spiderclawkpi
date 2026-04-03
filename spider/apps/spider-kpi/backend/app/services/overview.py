@@ -16,7 +16,7 @@ def is_incomplete_kpi_day(row: KPIDaily | None) -> bool:
 
 def build_overview(db: Session) -> dict:
     kpis = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    alerts = db.execute(select(Alert).order_by(desc(Alert.created_at)).limit(10)).scalars().all()
+    alerts = db.execute(select(Alert).where(Alert.status == "open").order_by(desc(Alert.created_at)).limit(10)).scalars().all()
     diagnostics = db.execute(select(DriverDiagnostic).order_by(desc(DriverDiagnostic.business_date)).limit(10)).scalars().all()
     recommendations = db.execute(select(Recommendation).order_by(desc(Recommendation.created_at)).limit(10)).scalars().all()
 

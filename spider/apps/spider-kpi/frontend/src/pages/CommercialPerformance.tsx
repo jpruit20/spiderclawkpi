@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
@@ -21,12 +21,12 @@ function formatNumber(value?: number | null, digits = 2, prefix = '', suffix = '
   return `${prefix}${value.toFixed(digits)}${suffix}`
 }
 
-function SummaryBlock({ label, current, prior, format = (v: number) => v.toFixed(2) }: { label: string; current: number; prior: number; format?: (v: number) => string }) {
+function SummaryBlock({ label, current, prior, comparable, format = (v: number) => v.toFixed(2) }: { label: string; current: number; prior: number; comparable: boolean; format?: (v: number) => string }) {
   return (
     <div className="stat-card">
       <div className="stat-label">{label}</div>
       <div className="stat-value compact">{format(current)}</div>
-      <div className="stat-subvalue">vs prior period {compare(current, prior)}</div>
+      <div className="stat-subvalue">{comparable ? `vs prior period ${compare(current, prior)}` : 'Prior period not comparable'}</div>
     </div>
   )
 }
@@ -41,19 +41,24 @@ export function CommercialPerformance() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
+  const requestIdRef = useRef(0)
 
   async function load(signal?: AbortSignal) {
+      const requestId = ++requestIdRef.current
       setLoading(true)
       setError(null)
       try {
         const payload = await api.dailyKpis(signal)
+        if (signal?.aborted || requestId !== requestIdRef.current) return
         const ordered = [...payload].sort((a, b) => a.business_date.localeCompare(b.business_date))
         const safeRows = isIncompleteLatestDay(ordered[ordered.length - 1]) ? ordered.slice(0, -1) : ordered
         setRows(safeRows)
-        setRange(buildPresetRange('7d', safeRows))
+        setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', safeRows))
       } catch (err) {
+        if (signal?.aborted || requestId !== requestIdRef.current) return
         setError(err instanceof ApiError ? err.message : 'Failed to load daily KPIs')
       } finally {
+        if (signal?.aborted || requestId !== requestIdRef.current) return
         setLoading(false)
       }
   }
@@ -63,6 +68,7 @@ export function CommercialPerformance() {
     void load(controller.signal)
     return () => {
       controller.abort()
+      requestIdRef.current += 1
     }
   }, [])
 
@@ -111,13 +117,13 @@ export function CommercialPerformance() {
       ) : currentRows.length ? (
         <>
           <div className="kpi-grid summary-grid">
-            <SummaryBlock label="Revenue" current={currentRevenue} prior={priorRevenue} format={(v) => `$${v.toFixed(2)}`} />
-            <SummaryBlock label="Sessions" current={currentSessions} prior={priorSessions} format={(v) => v.toFixed(0)} />
-            <SummaryBlock label="Orders" current={currentOrders} prior={priorOrders} format={(v) => v.toFixed(0)} />
-            <SummaryBlock label="Conversion" current={currentConversion} prior={priorConversion} format={(v) => `${v.toFixed(2)}%`} />
-            <SummaryBlock label="AOV" current={currentAov} prior={priorAov} format={(v) => `$${v.toFixed(2)}`} />
-            <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} format={(v) => `$${v.toFixed(2)}`} />
-            <SummaryBlock label="MER" current={currentMer} prior={priorMer} format={(v) => v.toFixed(2)} />
+            <SummaryBlock label="Revenue" current={currentRevenue} prior={priorRevenue} comparable={priorComparable} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="Sessions" current={currentSessions} prior={priorSessions} comparable={priorComparable} format={(v) => v.toFixed(0)} />
+            <SummaryBlock label="Orders" current={currentOrders} prior={priorOrders} comparable={priorComparable} format={(v) => v.toFixed(0)} />
+            <SummaryBlock label="Conversion" current={currentConversion} prior={priorConversion} comparable={priorComparable} format={(v) => `${v.toFixed(2)}%`} />
+            <SummaryBlock label="AOV" current={currentAov} prior={priorAov} comparable={priorComparable} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} comparable={priorComparable} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="MER" current={currentMer} prior={priorMer} comparable={priorComparable} format={(v) => v.toFixed(2)} />
           </div>
           {!priorComparable ? <div className="state-message">Prior period incomplete; comparison may be distorted.</div> : null}
         </>
@@ -142,12 +148,12 @@ export function CommercialPerformance() {
         <Card title="Orders Trend">
           {loading ? <div className="state-message">Loading live orders trend…</div> : error ? <div className="state-message error">{error}</div> : currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]} height={220} /> : <div className="state-message">No order rows returned.</div>}
         </Card>
-        <Card title="Revenue Delta Decomposition">
+        <Card title="Driver Change Summary">
           <div className="stack-list">
-            <div className="list-item"><strong>Traffic contribution</strong><p>{trafficContribution.toFixed(1)}%</p></div>
-            <div className="list-item"><strong>Conversion contribution</strong><p>{conversionContribution.toFixed(1)}%</p></div>
-            <div className="list-item"><strong>AOV contribution</strong><p>{aovContribution.toFixed(1)}%</p></div>
-            <div className="list-item"><strong>Formula</strong><p>Revenue delta = traffic + conversion + AOV. This is directional decomposition for operating review, not causal attribution.</p></div>
+            <div className="list-item"><strong>Traffic change</strong><p>{priorComparable ? `${trafficContribution.toFixed(1)}%` : '—'}</p></div>
+            <div className="list-item"><strong>Conversion change</strong><p>{priorComparable ? `${conversionContribution.toFixed(1)}%` : '—'}</p></div>
+            <div className="list-item"><strong>AOV change</strong><p>{priorComparable ? `${aovContribution.toFixed(1)}%` : '—'}</p></div>
+            <div className="list-item"><strong>Interpretation</strong><p>These are directional driver changes vs the prior comparison window, not an additive revenue decomposition.</p></div>
           </div>
         </Card>
       </div>

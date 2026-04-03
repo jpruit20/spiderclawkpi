@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { KpiGrid } from '../components/KpiGrid'
 import { RangeToolbar } from '../components/RangeToolbar'
@@ -29,18 +29,10 @@ function dataQualitySeverity(row: Record<string, unknown>) {
   if (Array.isArray(row.warnings) && row.warnings.length) return 'bad'
   const sessionsPctDiff = typeof row.sessions_pct_diff === 'number' ? row.sessions_pct_diff : null
   const ordersPctDiff = typeof row.orders_vs_purchases_pct_diff === 'number' ? row.orders_vs_purchases_pct_diff : null
-  const maxDiff = Math.max(sessionsPctDiff ?? 0, ordersPctDiff ?? 0)
+  const maxDiff = Math.max(Math.abs(sessionsPctDiff ?? 0), Math.abs(ordersPctDiff ?? 0))
   if (maxDiff >= 100) return 'bad'
   if (maxDiff >= 25 || row.type === 'shopify_sessions_missing') return 'warn'
   return 'good'
-}
-
-function localDateKey(value: string) {
-  const date = new Date(value)
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
 }
 
 function isIncompleteLatestDay(row?: KPIDaily) {
@@ -51,15 +43,22 @@ function isIncompleteLatestDay(row?: KPIDaily) {
 export function ExecutiveOverview() {
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [intraday, setIntraday] = useState<KPIIntraday | null>(null)
-  const [intradaySeries, setIntradaySeries] = useState<Array<{ bucket_start: string; hour_label: string; revenue: number; sessions: number; orders: number }>>([])
+  const [intradaySeries, setIntradaySeries] = useState<Array<{ bucket_start: string; business_date: string; hour_label: string; revenue: number; sessions: number; orders: number }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dataQuality, setDataQuality] = useState<DataQualityResponse | null>(null)
   const [intradayError, setIntradayError] = useState<string | null>(null)
   const [dataQualityError, setDataQualityError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
+  const requestIdRef = useRef(0)
+
+  function sanitizeDailyRows(rows: KPIDaily[]) {
+    if (!rows.length) return rows
+    return isIncompleteLatestDay(rows[rows.length - 1]) ? rows.slice(0, -1) : rows
+  }
 
   async function load(signal?: AbortSignal) {
+      const requestId = ++requestIdRef.current
       setLoading(true)
       setError(null)
       setIntradayError(null)
@@ -71,10 +70,13 @@ export function ExecutiveOverview() {
         api.dataQuality(signal),
       ])
 
+      if (signal?.aborted || requestId !== requestIdRef.current) return
+
       if (overviewPayload.status === 'fulfilled') {
           const orderedSeries = [...(overviewPayload.value.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
+          const safeSeries = sanitizeDailyRows(orderedSeries)
           setData({ ...overviewPayload.value, daily_series: orderedSeries })
-          setRange(buildPresetRange('7d', orderedSeries))
+          setRange(buildPresetRange('7d', safeSeries))
       } else {
         setData(null)
         setError(overviewPayload.reason instanceof ApiError ? overviewPayload.reason.message : 'Failed to load overview')
@@ -107,27 +109,33 @@ export function ExecutiveOverview() {
   useEffect(() => {
     const controller = new AbortController()
     load(controller.signal).catch((err) => {
+      if (controller.signal.aborted) return
+      if (requestIdRef.current === 0) return
       setLoading(false)
       setError(err instanceof ApiError ? err.message : 'Failed to load overview')
     })
     return () => {
       controller.abort()
+      requestIdRef.current += 1
     }
   }, [])
 
-  const rangeRows = useMemo(() => filterRowsByRange(data?.daily_series || [], range), [data, range])
+  const safeDailyRows = useMemo(() => sanitizeDailyRows(data?.daily_series || []), [data])
+  const rangeRows = useMemo(() => filterRowsByRange(safeDailyRows, range), [safeDailyRows, range])
   const rangeSummary = useMemo(() => summarizeKpis(rangeRows), [rangeRows])
+  const latestIntradayDate = useMemo(() => intradaySeries.at(-1)?.business_date || intraday?.bucket_start?.slice(0, 10) || safeDailyRows.at(-1)?.business_date, [intradaySeries, intraday, safeDailyRows])
   const todaysIntradaySeries = useMemo(() => {
-    if (range.preset !== 'today' || !range.endDate) return intradaySeries
-    return intradaySeries.filter((row) => localDateKey(row.bucket_start) === range.endDate)
-  }, [intradaySeries, range])
+    if (range.preset !== 'today') return intradaySeries
+    const targetDate = latestIntradayDate || range.endDate
+    return intradaySeries.filter((row) => row.business_date === targetDate)
+  }, [intradaySeries, range, latestIntradayDate])
   const todaySeriesSummary = useMemo(() => {
     if (!todaysIntradaySeries.length) return undefined
     const revenue = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
     const sessions = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.sessions || 0), 0)
     const orders = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.orders || 0), 0)
     return {
-      business_date: range.endDate || 'Today',
+      business_date: latestIntradayDate || range.endDate || 'Today',
       revenue,
       orders,
       average_order_value: orders ? revenue / orders : 0,
@@ -150,7 +158,7 @@ export function ExecutiveOverview() {
       reopen_rate: null,
       tickets_per_100_orders: null,
     } as KpiDisplayRow
-  }, [todaysIntradaySeries, range.endDate])
+  }, [todaysIntradaySeries, range.endDate, latestIntradayDate])
   const latestCompleteDay = useMemo(() => {
     if (data?.latest_kpi) return data.latest_kpi
     const rows = data?.daily_series || []
@@ -176,9 +184,11 @@ export function ExecutiveOverview() {
         : null)
     : intraday
   const computedIntradayState = getIntradayStatus(displayIntraday, latestCompleteDay)
-  const intradayState = range.preset === 'today' && intradayError
+  const intradayState = range.preset === 'today' && intradayError && !todaysIntradaySeries.length
     ? { status: 'unavailable' as IntradayStatus, message: `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` }
-    : computedIntradayState
+    : range.preset === 'today' && intradayError && todaysIntradaySeries.length
+      ? { status: 'partial' as IntradayStatus, message: `Intraday summary endpoint failed, but hourly series is available. ${intradayError}` }
+      : computedIntradayState
   const scopeLabel = summarizeRangeLabel(range)
 
   return (
@@ -189,7 +199,7 @@ export function ExecutiveOverview() {
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
 
-      <RangeToolbar rows={data?.daily_series || []} range={range} onChange={setRange} />
+      <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} latestDateOverride={latestIntradayDate} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
       {error ? <Card title="Overview Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
@@ -319,7 +329,7 @@ export function ExecutiveOverview() {
                     <small>{String(item.business_date || 'n/a')}</small>
                   </div>
                 ))}
-                {!dataQuality?.missing_data?.length && !dataQuality?.source_drift?.length && !dataQuality?.validation_warnings?.length ? (
+                {!dataQualityError && dataQuality && !dataQuality.missing_data.length && !dataQuality.source_drift.length && !dataQuality.validation_warnings.length ? (
                   <div className="list-item status-good">
                     <strong>Data quality</strong>
                     <p>No data-quality warnings returned.</p>

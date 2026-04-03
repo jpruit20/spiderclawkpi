@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { ACTIVE_CONNECTORS, isLiveConnector, isScaffolded, isTruthfullyHealthy } from '../lib/sourceHealth'
@@ -59,24 +59,31 @@ export function SourceHealthPage() {
   const [rows, setRows] = useState<SourceHealthItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestIdRef = useRef(0)
+
+  async function load(signal?: AbortSignal) {
+    const requestId = ++requestIdRef.current
+    setLoading(true)
+    setError(null)
+    try {
+      const payload = await api.sourceHealth(signal)
+      if (signal?.aborted || requestId !== requestIdRef.current) return
+      setRows(payload)
+    } catch (err) {
+      if (signal?.aborted || requestId !== requestIdRef.current) return
+      if (!signal?.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load source health')
+    } finally {
+      if (signal?.aborted || requestId !== requestIdRef.current) return
+      if (!signal?.aborted) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const payload = await api.sourceHealth(controller.signal)
-        setRows(payload)
-      } catch (err) {
-        if (!controller.signal.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load source health')
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    }
-    void load()
+    void load(controller.signal)
     return () => {
       controller.abort()
+      requestIdRef.current += 1
     }
   }, [])
 
@@ -92,7 +99,7 @@ export function SourceHealthPage() {
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {loading ? <Card title="Source Health Status"><div className="state-message">Loading live source health…</div></Card> : null}
-      {error ? <Card title="Source Health Error"><div className="state-message error">{error}</div></Card> : null}
+      {error ? <Card title="Source Health Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
       {!loading && !error ? (
         <>
           <Card title="Live Connectors">

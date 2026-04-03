@@ -72,9 +72,9 @@ export function KpiGrid({
         ['Revenue', currency(latest.revenue), false],
         ['Orders', integer(latest.orders), false],
         ['AOV', currency(latest.average_order_value), false],
-        ['Sessions', integer(latest.sessions), false],
-        ['Conversion', percent(latest.conversion_rate), false],
-        ['Revenue / Session', currency(latest.revenue_per_session), false],
+        ['Sessions', integer(latest.sessions), displayMode === 'today_intraday' && intradayUnavailable],
+        ['Conversion', percent(latest.conversion_rate), displayMode === 'today_intraday' && intradayUnavailable],
+        ['Revenue / Session', currency(latest.revenue_per_session), displayMode === 'today_intraday' && intradayUnavailable],
         ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null],
         ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null],
       ]

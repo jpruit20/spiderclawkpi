@@ -8,6 +8,10 @@ export interface RangeState {
   endDate: string
 }
 
+type BuildPresetOptions = {
+  latestDate?: string
+}
+
 function toIsoDate(value: Date) {
   return value.toISOString().slice(0, 10)
 }
@@ -16,9 +20,9 @@ export function dateInputValue(value?: string) {
   return value || ''
 }
 
-export function buildPresetRange(preset: Exclude<RangePreset, 'custom'>, rows: { business_date: string }[]): RangeState {
+export function buildPresetRange(preset: Exclude<RangePreset, 'custom'>, rows: { business_date: string }[], options: BuildPresetOptions = {}): RangeState {
   const sorted = [...rows].sort((a, b) => a.business_date.localeCompare(b.business_date))
-  const latest = sorted[sorted.length - 1]?.business_date || toIsoDate(new Date())
+  const latest = options.latestDate || sorted[sorted.length - 1]?.business_date || toIsoDate(new Date())
   if (preset === 'today') {
     return { preset, startDate: latest, endDate: latest }
   }

@@ -55,8 +55,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
   } catch (error) {
     if (error instanceof ApiError) throw error
+    if (signal?.aborted) {
+      throw new ApiError(`Request was aborted for ${path}`, undefined, path)
+    }
     if (controller.signal.aborted) {
-      throw new ApiError(`Request timed out or was aborted for ${path}`, undefined, path)
+      throw new ApiError(`Request timed out for ${path}`, undefined, path)
     }
     throw new ApiError(`Network error for ${path}`, undefined, path)
   } finally {
@@ -76,7 +79,7 @@ export const api = {
     const payload = await request<{ latest: KPIIntraday | null }>('/api/kpis/intraday', { signal })
     return payload.latest
   },
-  intradaySeries: (signal?: AbortSignal) => request<{ rows: Array<{ bucket_start: string; hour_label: string; revenue: number; sessions: number; orders: number }> }>('/api/kpis/intraday-series', { signal }),
+  intradaySeries: (signal?: AbortSignal) => request<{ rows: Array<{ bucket_start: string; business_date: string; hour_label: string; revenue: number; sessions: number; orders: number }> }>('/api/kpis/intraday-series', { signal }),
   diagnostics: (signal?: AbortSignal) => request<DiagnosticItem[]>('/api/diagnostics', { signal }),
   alerts: (signal?: AbortSignal) => request('/api/alerts', { signal }),
   recommendations: (signal?: AbortSignal) => request<RecommendationItem[]>('/api/recommendations', { signal }),
