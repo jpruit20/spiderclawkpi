@@ -16,6 +16,7 @@ Sidecar is a file-driven KPI dashboard copilot for this Spider workspace.
 - Failed inbox: `sidecar/inbox/failed/`
 - Outbox latest reply: `sidecar/outbox/latest_feedback.md`
 - Outbox structured logs: `sidecar/outbox/*.json`
+- Runtime status/latency snapshot: `sidecar/outbox/status.json`
 
 ## Request formats
 
@@ -49,6 +50,7 @@ Context files may be absolute paths or workspace-relative paths.
 - It only watches source-like file types such as `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.json`, `.md`, `.sql`, `.yaml`, `.yml`.
 - `latest_feedback.md` is always replaced with the most recent file-watch analysis or inbox reply.
 - Timestamped JSON files preserve a history of feedback/replies.
+- `status.json` exposes the active model, PID, last request file, last request latency, last model latency, counters, and current runtime status.
 
 ## Start
 

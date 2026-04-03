@@ -18,6 +18,7 @@ SIDECAR_ROOT = WORKSPACE_ROOT / "sidecar"
 INBOX = SIDECAR_ROOT / "inbox"
 OUTBOX = SIDECAR_ROOT / "outbox"
 LOCK_FILE = SIDECAR_ROOT / ".sidecar.lock"
+STATUS_FILE = OUTBOX / "status.json"
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4")
 MAX_FILE_CHARS = int(os.getenv("MAX_FILE_CHARS", "12000"))
 POLL_SECONDS = float(os.getenv("POLL_SECONDS", "2"))
@@ -42,6 +43,24 @@ IGNORE_PATHS = {
 }
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+RUNTIME_STATE: dict[str, object] = {
+    "started_at": None,
+    "last_loop_at": None,
+    "last_inbox_scan_at": None,
+    "last_repo_scan_at": None,
+    "last_request_started_at": None,
+    "last_request_finished_at": None,
+    "last_request_file": None,
+    "last_request_kind": None,
+    "last_request_latency_ms": None,
+    "last_model_latency_ms": None,
+    "last_status": "starting",
+    "last_error": None,
+    "processed_requests": 0,
+    "failed_requests": 0,
+    "last_reply_preview": None,
+}
 
 
 def acquire_lock() -> None:
@@ -134,6 +153,18 @@ def snapshot_files(root: Path) -> dict[str, float]:
     return files
 
 
+def write_atomic_text(path: Path, content: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+
+
+def iso_from_epoch(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+
+
 def gather_neighbor_context(changed_file: Path) -> str:
     siblings = []
     parent = changed_file.parent
@@ -209,7 +240,9 @@ def call_model(prompt: str) -> str:
     print(f"[sidecar] calling model={MODEL}")
     response = client.responses.create(model=MODEL, input=prompt)
     text = getattr(response, "output_text", "").strip()
-    print(f"[sidecar] model call finished in {time.time() - started:.2f}s")
+    model_latency_ms = round((time.time() - started) * 1000, 1)
+    RUNTIME_STATE["last_model_latency_ms"] = model_latency_ms
+    print(f"[sidecar] model call finished in {model_latency_ms}ms")
     return text or "No feedback returned."
 
 
@@ -222,11 +255,11 @@ def write_latest_feedback(title: str, body: str, meta: dict[str, object] | None 
             lines.append(f"- {key}: {value}")
         lines.append("")
     lines.extend(["## Feedback", body.strip(), ""])
-    (OUTBOX / "latest_feedback.md").write_text("\n".join(lines), encoding="utf-8")
+    write_atomic_text(OUTBOX / "latest_feedback.md", "\n".join(lines))
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    write_atomic_text(path, json.dumps(payload, indent=2) + "\n")
 
 
 def analyze_file(path: Path) -> None:
@@ -265,14 +298,22 @@ def parse_inbox_request(path: Path) -> tuple[str, list[Path]]:
 
 
 def process_inbox() -> None:
+    RUNTIME_STATE["last_inbox_scan_at"] = utc_now()
     requests = sorted(
         [p for p in INBOX.iterdir() if p.is_file() and p.suffix.lower() in {".md", ".txt", ".json"}],
         key=lambda p: p.stat().st_mtime,
     )
     for path in requests:
+        request_started = time.time()
         try:
             message_text, context_files = parse_inbox_request(path)
             print(f"[sidecar] processing inbox file {path.name}")
+            RUNTIME_STATE["last_request_started_at"] = iso_from_epoch(request_started)
+            RUNTIME_STATE["last_request_file"] = path.name
+            RUNTIME_STATE["last_request_kind"] = "inbox"
+            RUNTIME_STATE["last_status"] = "processing"
+            RUNTIME_STATE["last_error"] = None
+            write_status()
             if not message_text:
                 reply = "Inbox request was empty."
             else:
@@ -297,7 +338,14 @@ def process_inbox() -> None:
             destination = processed_dir / path.name
             if path.exists():
                 path.rename(destination)
+            finished = time.time()
+            RUNTIME_STATE["last_request_finished_at"] = iso_from_epoch(finished)
+            RUNTIME_STATE["last_request_latency_ms"] = round((finished - request_started) * 1000, 1)
+            RUNTIME_STATE["last_status"] = "idle"
+            RUNTIME_STATE["processed_requests"] = int(RUNTIME_STATE["processed_requests"] or 0) + 1
+            RUNTIME_STATE["last_reply_preview"] = reply[:240]
             print(f"[sidecar] replied to {path.name}")
+            write_status()
         except Exception as exc:
             error_payload = {
                 "type": "inbox_error",
@@ -317,7 +365,14 @@ def process_inbox() -> None:
             destination = failed_dir / path.name
             if path.exists():
                 path.rename(destination)
+            finished = time.time()
+            RUNTIME_STATE["last_request_finished_at"] = iso_from_epoch(finished)
+            RUNTIME_STATE["last_request_latency_ms"] = round((finished - request_started) * 1000, 1)
+            RUNTIME_STATE["last_status"] = "error"
+            RUNTIME_STATE["failed_requests"] = int(RUNTIME_STATE["failed_requests"] or 0) + 1
+            RUNTIME_STATE["last_error"] = str(exc)
             print(f"[sidecar] failed to process {path.name}: {exc}")
+            write_status()
 
 
 def write_status() -> None:
@@ -329,29 +384,43 @@ def write_status() -> None:
         "model": MODEL,
         "poll_seconds": POLL_SECONDS,
         "watch_exts": sorted(WATCH_EXTS),
+        "pid": os.getpid(),
+        "lock_file": str(LOCK_FILE),
+        "inbox": str(INBOX),
+        "processed_inbox": str(INBOX / "processed"),
+        "failed_inbox": str(INBOX / "failed"),
+        "outbox": str(OUTBOX),
+        "runtime": RUNTIME_STATE,
     }
-    write_json(OUTBOX / "status.json", payload)
+    write_json(STATUS_FILE, payload)
 
 
 def main() -> None:
     acquire_lock()
     try:
         ensure_dirs()
+        RUNTIME_STATE["started_at"] = utc_now()
+        RUNTIME_STATE["last_status"] = "idle"
         write_status()
         print(f"[sidecar] workspace={WORKSPACE_ROOT}")
         print(f"[sidecar] watching {TARGET_REPO}")
         prev = snapshot_files(TARGET_REPO)
 
         while True:
+            RUNTIME_STATE["last_loop_at"] = utc_now()
             process_inbox()
+            RUNTIME_STATE["last_repo_scan_at"] = utc_now()
             curr = snapshot_files(TARGET_REPO)
             changed = [Path(p) for p, mt in curr.items() if prev.get(p) != mt]
             if changed:
                 changed.sort(key=lambda p: curr[str(p.resolve())], reverse=True)
                 analyze_file(changed[0])
             prev = curr
+            write_status()
             time.sleep(POLL_SECONDS)
     finally:
+        RUNTIME_STATE["last_status"] = "stopped"
+        write_status()
         release_lock()
 
 
