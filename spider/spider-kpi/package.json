@@ -1,0 +1,19 @@
+{
+  "name": "spider-kpi",
+  "version": "2.0.0",
+  "description": "Embedded Shopify auth shell for Spider KPI on Vercel",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "shopify",
+    "embedded-app",
+    "vercel"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@vercel/node": "^5.7.0",
+    "express": "^5.2.1"
+  }
+}

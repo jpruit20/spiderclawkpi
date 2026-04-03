@@ -1,0 +1,24 @@
+client_id = "${SHOPIFY_API_KEY}"
+name = "Spider KPI Dashboard"
+handle = "spider-kpi-dashboard"
+application_url = "https://kpi.spidergrills.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2025-01"
+
+[access_scopes]
+scopes = "read_orders,read_all_orders,read_products,read_customers,read_inventory,read_fulfillments,read_locations,read_reports,read_returns,read_markets"
+
+[auth]
+redirect_urls = [
+  "https://kpi.spidergrills.com/auth/callback",
+  "https://kpi.spidergrills.com/api/auth/callback"
+]
+
+[pos]
+embedded = false
