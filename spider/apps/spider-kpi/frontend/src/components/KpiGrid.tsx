@@ -1,19 +1,22 @@
-import { KPIDaily, KPIIntraday, IntradayStatus, KpiDisplayMode } from '../lib/types'
+import { KPIIntraday, IntradayStatus, KpiDisplayMode, KpiDisplayRow } from '../lib/types'
 
-function currency(value: number) {
+function currency(value?: number | null) {
+  if (value == null) return '—'
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 2,
-  }).format(value || 0)
+  }).format(value)
 }
 
-function integer(value: number) {
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value || 0)
+function integer(value?: number | null) {
+  if (value == null) return '—'
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)
 }
 
-function percent(value: number) {
-  return `${(value || 0).toFixed(2)}%`
+function percent(value?: number | null) {
+  if (value == null) return '—'
+  return `${value.toFixed(2)}%`
 }
 
 function modeLabel(mode: KpiDisplayMode) {
@@ -42,7 +45,7 @@ function intradayStatusTone(status: IntradayStatus) {
 }
 
 function metricValue(value: string, unavailable: boolean) {
-  return unavailable ? 'partial / unavailable' : value
+  return unavailable && value !== '—' ? 'partial / unavailable' : value
 }
 
 export function KpiGrid({
@@ -54,7 +57,7 @@ export function KpiGrid({
   intradayMessage,
   noDataMessage,
 }: {
-  latest?: KPIDaily
+  latest?: KpiDisplayRow
   intraday?: KPIIntraday | null
   scopeLabel: string
   displayMode: KpiDisplayMode
@@ -72,8 +75,8 @@ export function KpiGrid({
         ['Sessions', integer(latest.sessions), false],
         ['Conversion', percent(latest.conversion_rate), false],
         ['Revenue / Session', currency(latest.revenue_per_session), false],
-        ['Ad Spend', currency(latest.ad_spend), false],
-        ['MER', latest.mer.toFixed(2), false],
+        ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null],
+        ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null],
       ]
     : []
 

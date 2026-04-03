@@ -16,6 +16,11 @@ function compare(current: number, prior: number) {
   return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`
 }
 
+function formatNumber(value?: number | null, digits = 2, prefix = '', suffix = '') {
+  if (value == null) return '—'
+  return `${prefix}${value.toFixed(digits)}${suffix}`
+}
+
 function SummaryBlock({ label, current, prior, format = (v: number) => v.toFixed(2) }: { label: string; current: number; prior: number; format?: (v: number) => string }) {
   return (
     <div className="stat-card">
@@ -37,28 +42,27 @@ export function CommercialPerformance() {
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
+  async function load(signal?: AbortSignal) {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.dailyKpis()
-        if (!cancelled) {
-          const ordered = [...payload].sort((a, b) => a.business_date.localeCompare(b.business_date))
-          const safeRows = isIncompleteLatestDay(ordered[ordered.length - 1]) ? ordered.slice(0, -1) : ordered
-          setRows(safeRows)
-          setRange(buildPresetRange('7d', safeRows))
-        }
+        const payload = await api.dailyKpis(signal)
+        const ordered = [...payload].sort((a, b) => a.business_date.localeCompare(b.business_date))
+        const safeRows = isIncompleteLatestDay(ordered[ordered.length - 1]) ? ordered.slice(0, -1) : ordered
+        setRows(safeRows)
+        setRange(buildPresetRange('7d', safeRows))
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load daily KPIs')
+        setError(err instanceof ApiError ? err.message : 'Failed to load daily KPIs')
       } finally {
-        if (!cancelled) setLoading(false)
+        setLoading(false)
       }
-    }
-    load()
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void load(controller.signal)
     return () => {
-      cancelled = true
+      controller.abort()
     }
   }, [])
 
@@ -85,6 +89,7 @@ export function CommercialPerformance() {
   const priorConversion = priorSessions ? (priorOrders / priorSessions) * 100 : 0
   const priorAov = priorOrders ? priorRevenue / priorOrders : 0
   const priorMer = priorAdSpend ? priorRevenue / priorAdSpend : 0
+  const priorComparable = priorRows.length === currentRows.length && currentRows.length > 0
   const trafficContribution = priorRevenue ? ((currentSessions - priorSessions) / Math.max(priorSessions, 1)) * 100 : 0
   const conversionContribution = priorConversion ? ((currentConversion - priorConversion) / priorConversion) * 100 : 0
   const aovContribution = priorAov ? ((currentAov - priorAov) / priorAov) * 100 : 0
@@ -99,15 +104,26 @@ export function CommercialPerformance() {
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} />
 
-      <div className="kpi-grid summary-grid">
-        <SummaryBlock label="Revenue" current={currentRevenue} prior={priorRevenue} format={(v) => `$${v.toFixed(2)}`} />
-        <SummaryBlock label="Sessions" current={currentSessions} prior={priorSessions} format={(v) => v.toFixed(0)} />
-        <SummaryBlock label="Orders" current={currentOrders} prior={priorOrders} format={(v) => v.toFixed(0)} />
-        <SummaryBlock label="Conversion" current={currentConversion} prior={priorConversion} format={(v) => `${v.toFixed(2)}%`} />
-        <SummaryBlock label="AOV" current={currentAov} prior={priorAov} format={(v) => `$${v.toFixed(2)}`} />
-        <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} format={(v) => `$${v.toFixed(2)}`} />
-        <SummaryBlock label="MER" current={currentMer} prior={priorMer} format={(v) => v.toFixed(2)} />
-      </div>
+      {loading ? (
+        <Card title="Performance Summary"><div className="state-message">Loading live KPI summary…</div></Card>
+      ) : error ? (
+        <Card title="Performance Summary"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card>
+      ) : currentRows.length ? (
+        <>
+          <div className="kpi-grid summary-grid">
+            <SummaryBlock label="Revenue" current={currentRevenue} prior={priorRevenue} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="Sessions" current={currentSessions} prior={priorSessions} format={(v) => v.toFixed(0)} />
+            <SummaryBlock label="Orders" current={currentOrders} prior={priorOrders} format={(v) => v.toFixed(0)} />
+            <SummaryBlock label="Conversion" current={currentConversion} prior={priorConversion} format={(v) => `${v.toFixed(2)}%`} />
+            <SummaryBlock label="AOV" current={currentAov} prior={priorAov} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} format={(v) => `$${v.toFixed(2)}`} />
+            <SummaryBlock label="MER" current={currentMer} prior={priorMer} format={(v) => v.toFixed(2)} />
+          </div>
+          {!priorComparable ? <div className="state-message">Prior period incomplete; comparison may be distorted.</div> : null}
+        </>
+      ) : (
+        <Card title="Performance Summary"><div className="state-message">No KPI rows returned.</div></Card>
+      )}
       <Card title="Revenue + Sessions Trend">
         {loading ? <div className="state-message">Loading live KPI trend…</div> : null}
         {error ? <div className="state-message error">{error}</div> : null}
@@ -124,7 +140,7 @@ export function CommercialPerformance() {
       </Card>
       <div className="two-col two-col-equal">
         <Card title="Orders Trend">
-          {!loading && !error && currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]} height={220} /> : <div className="state-message">No order rows returned.</div>}
+          {loading ? <div className="state-message">Loading live orders trend…</div> : error ? <div className="state-message error">{error}</div> : currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]} height={220} /> : <div className="state-message">No order rows returned.</div>}
         </Card>
         <Card title="Revenue Delta Decomposition">
           <div className="stack-list">
@@ -157,13 +173,13 @@ export function CommercialPerformance() {
                 {currentRows.map((row) => (
                   <tr key={row.business_date}>
                     <td>{row.business_date}</td>
-                    <td>${row.revenue.toFixed(2)}</td>
+                    <td>{formatNumber(row.revenue, 2, '$')}</td>
                     <td>{row.orders}</td>
-                    <td>${row.average_order_value.toFixed(2)}</td>
-                    <td>{row.sessions.toFixed(0)}</td>
-                    <td>{row.conversion_rate.toFixed(2)}%</td>
-                    <td>${row.ad_spend.toFixed(2)}</td>
-                    <td>{row.mer.toFixed(2)}</td>
+                    <td>{formatNumber(row.average_order_value, 2, '$')}</td>
+                    <td>{formatNumber(row.sessions, 0)}</td>
+                    <td>{formatNumber(row.conversion_rate, 2, '', '%')}</td>
+                    <td>{formatNumber(row.ad_spend, 2, '$')}</td>
+                    <td>{formatNumber(row.mer, 2)}</td>
                   </tr>
                 ))}
               </tbody>

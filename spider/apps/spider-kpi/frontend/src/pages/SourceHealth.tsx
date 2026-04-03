@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
+import { ACTIVE_CONNECTORS, isLiveConnector, isScaffolded, isTruthfullyHealthy } from '../lib/sourceHealth'
 import { SourceHealthItem } from '../lib/types'
-
-const SCAFFOLDED = new Set(['discord', 'facebook', 'google_reviews', 'reddit', 'reviews'])
-const ACTIVE_CONNECTORS = new Set(['shopify', 'triplewhale', 'freshdesk'])
-
-function isTruthfullyHealthy(row: SourceHealthItem) {
-  return row.latest_run_status === 'success' && row.latest_records_processed > 0 && Boolean(row.last_success_at)
-}
 
 function statusTone(status: string) {
   switch (status) {
@@ -28,8 +22,8 @@ function statusTone(status: string) {
 }
 
 function SourceCard({ row }: { row: SourceHealthItem }) {
-  const scaffolded = SCAFFOLDED.has(row.source)
-  const liveConnector = ACTIVE_CONNECTORS.has(row.source)
+  const scaffolded = isScaffolded(row)
+  const liveConnector = isLiveConnector(row)
   const internalCompute = row.source_type === 'compute'
   const truthfulHealthy = liveConnector && isTruthfullyHealthy(row)
   const displayStatus = truthfulHealthy ? 'healthy' : row.derived_status
@@ -67,27 +61,27 @@ export function SourceHealthPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
     async function load() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.sourceHealth()
-        if (!cancelled) setRows(payload)
+        const payload = await api.sourceHealth(controller.signal)
+        setRows(payload)
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load source health')
+        if (!controller.signal.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load source health')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!controller.signal.aborted) setLoading(false)
       }
     }
-    load()
+    void load()
     return () => {
-      cancelled = true
+      controller.abort()
     }
   }, [])
 
-  const liveConnectors = useMemo(() => rows.filter((row) => ACTIVE_CONNECTORS.has(row.source)), [rows])
-  const scaffoldedRows = useMemo(() => rows.filter((row) => SCAFFOLDED.has(row.source)), [rows])
+  const liveConnectors = useMemo(() => rows.filter((row) => isLiveConnector(row)), [rows])
+  const scaffoldedRows = useMemo(() => rows.filter((row) => isScaffolded(row)), [rows])
   const computeRows = useMemo(() => rows.filter((row) => row.source_type === 'compute'), [rows])
 
   return (
@@ -146,7 +140,7 @@ export function SourceHealthPage() {
                         <td>{String(row.configured)}</td>
                         <td>{String(row.enabled)}</td>
                         <td>{row.latest_run_status}</td>
-                        <td>{ACTIVE_CONNECTORS.has(row.source) && isTruthfullyHealthy(row) ? 'healthy' : row.derived_status}</td>
+                        <td>{isLiveConnector(row) && isTruthfullyHealthy(row) ? 'healthy' : row.derived_status}</td>
                         <td>{String(row.blocks_connector_health ?? true)}</td>
                         <td>{row.last_success_at || '—'}</td>
                         <td>{row.latest_records_processed}</td>

@@ -5,10 +5,8 @@ import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
-import { DataQualityResponse, IntradayStatus, KPIIntraday, KPIDaily, KpiDisplayMode, OverviewResponse, SourceHealthItem } from '../lib/types'
-
-const ACTIVE_CONNECTORS = new Set(['shopify', 'triplewhale', 'freshdesk'])
-const SCAFFOLDED = new Set(['discord', 'facebook', 'google_reviews', 'reddit', 'reviews'])
+import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
+import { DataQualityResponse, IntradayStatus, KPIIntraday, KPIDaily, KpiDisplayMode, KpiDisplayRow, OverviewResponse, SourceHealthItem } from '../lib/types'
 
 function truthyConnectorRows(rows: SourceHealthItem[]) {
   return rows.filter((row) => ACTIVE_CONNECTORS.has(row.source))
@@ -45,6 +43,11 @@ function localDateKey(value: string) {
   return `${year}-${month}-${day}`
 }
 
+function isIncompleteLatestDay(row?: KPIDaily) {
+  if (!row) return false
+  return (row.sessions === 0 || row.sessions == null) && ((row.orders || 0) > 0 || (row.revenue || 0) > 0)
+}
+
 export function ExecutiveOverview() {
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [intraday, setIntraday] = useState<KPIIntraday | null>(null)
@@ -52,32 +55,63 @@ export function ExecutiveOverview() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dataQuality, setDataQuality] = useState<DataQualityResponse | null>(null)
+  const [intradayError, setIntradayError] = useState<string | null>(null)
+  const [dataQualityError, setDataQualityError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
+  async function load(signal?: AbortSignal) {
       setLoading(true)
       setError(null)
-      try {
-        const [overviewPayload, intradayPayload, intradaySeriesPayload, dataQualityPayload] = await Promise.all([api.overview(), api.currentKpi(), api.intradaySeries(), api.dataQuality()])
-        if (!cancelled) {
-          const orderedSeries = [...(overviewPayload.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
-          setData({ ...overviewPayload, daily_series: orderedSeries })
-          setIntraday(intradayPayload)
-          setIntradaySeries(intradaySeriesPayload.rows || [])
-          setDataQuality(dataQualityPayload)
+      setIntradayError(null)
+      setDataQualityError(null)
+      const [overviewPayload, intradayPayload, intradaySeriesPayload, dataQualityPayload] = await Promise.allSettled([
+        api.overview(signal),
+        api.currentKpi(signal),
+        api.intradaySeries(signal),
+        api.dataQuality(signal),
+      ])
+
+      if (overviewPayload.status === 'fulfilled') {
+          const orderedSeries = [...(overviewPayload.value.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
+          setData({ ...overviewPayload.value, daily_series: orderedSeries })
           setRange(buildPresetRange('7d', orderedSeries))
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load overview')
-      } finally {
-        if (!cancelled) setLoading(false)
+      } else {
+        setData(null)
+        setError(overviewPayload.reason instanceof ApiError ? overviewPayload.reason.message : 'Failed to load overview')
       }
-    }
-    load()
+
+      if (intradayPayload.status === 'fulfilled') {
+        setIntraday(intradayPayload.value)
+      } else {
+        setIntraday(null)
+        setIntradayError(intradayPayload.reason instanceof ApiError ? intradayPayload.reason.message : 'Failed to load intraday KPI')
+      }
+
+      if (intradaySeriesPayload.status === 'fulfilled') {
+        setIntradaySeries(intradaySeriesPayload.value.rows || [])
+      } else {
+        setIntradaySeries([])
+        setIntradayError((current) => current || (intradaySeriesPayload.reason instanceof ApiError ? intradaySeriesPayload.reason.message : 'Failed to load intraday series'))
+      }
+
+      if (dataQualityPayload.status === 'fulfilled') {
+        setDataQuality(dataQualityPayload.value)
+      } else {
+        setDataQuality(null)
+        setDataQualityError(dataQualityPayload.reason instanceof ApiError ? dataQualityPayload.reason.message : 'Failed to load data quality')
+      }
+
+      setLoading(false)
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    load(controller.signal).catch((err) => {
+      setLoading(false)
+      setError(err instanceof ApiError ? err.message : 'Failed to load overview')
+    })
     return () => {
-      cancelled = true
+      controller.abort()
     }
   }, [])
 
@@ -100,33 +134,36 @@ export function ExecutiveOverview() {
       sessions,
       conversion_rate: sessions ? (orders / sessions) * 100 : 0,
       revenue_per_session: sessions ? revenue / sessions : 0,
-      add_to_cart_rate: 0,
-      bounce_rate: 0,
+      add_to_cart_rate: null,
+      bounce_rate: null,
       purchases: orders,
-      ad_spend: 0,
-      mer: 0,
-      cost_per_purchase: 0,
-      tickets_created: 0,
-      tickets_resolved: 0,
-      open_backlog: 0,
-      first_response_time: 0,
-      resolution_time: 0,
-      sla_breach_rate: 0,
-      csat: 0,
-      reopen_rate: 0,
-      tickets_per_100_orders: 0,
-    } as KPIDaily
+      ad_spend: null,
+      mer: null,
+      cost_per_purchase: null,
+      tickets_created: null,
+      tickets_resolved: null,
+      open_backlog: null,
+      first_response_time: null,
+      resolution_time: null,
+      sla_breach_rate: null,
+      csat: null,
+      reopen_rate: null,
+      tickets_per_100_orders: null,
+    } as KpiDisplayRow
   }, [todaysIntradaySeries, range.endDate])
   const latestCompleteDay = useMemo(() => {
+    if (data?.latest_kpi) return data.latest_kpi
     const rows = data?.daily_series || []
-    return rows.length > 0 ? rows[rows.length - 1] : undefined
+    return [...rows].reverse().find((row) => !isIncompleteLatestDay(row))
   }, [data])
   const sourceHealth = data?.source_health || []
   const liveConnectors = truthyConnectorRows(sourceHealth)
-  const scaffoldedCount = sourceHealth.filter((row) => SCAFFOLDED.has(row.source)).length
+  const scaffoldedCount = sourceHealth.filter((row) => isScaffolded(row)).length
 
   const displayMode: KpiDisplayMode = range.preset === 'today' ? 'today_intraday' : rangeSummary ? 'selected_range_summary' : latestCompleteDay ? 'latest_complete_day' : 'today_intraday'
-  const displayKpi = range.preset === 'today' ? todaySeriesSummary : rangeSummary || latestCompleteDay
+  const displayKpi: KpiDisplayRow | undefined = range.preset === 'today'
+    ? todaySeriesSummary
+    : (rangeSummary || latestCompleteDay)
   const displayIntraday = range.preset === 'today'
     ? (todaySeriesSummary
         ? {
@@ -138,7 +175,10 @@ export function ExecutiveOverview() {
           }
         : null)
     : intraday
-  const intradayState = getIntradayStatus(displayIntraday, latestCompleteDay)
+  const computedIntradayState = getIntradayStatus(displayIntraday, latestCompleteDay)
+  const intradayState = range.preset === 'today' && intradayError
+    ? { status: 'unavailable' as IntradayStatus, message: `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` }
+    : computedIntradayState
   const scopeLabel = summarizeRangeLabel(range)
 
   return (
@@ -152,11 +192,11 @@ export function ExecutiveOverview() {
       <RangeToolbar rows={data?.daily_series || []} range={range} onChange={setRange} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
-      {error ? <Card title="Overview Error"><div className="state-message error">{error}</div></Card> : null}
+      {error ? <Card title="Overview Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
 
-      {!loading && !error ? (
+      {!loading && !error && data ? (
         <>
-          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} />
+          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} />
           <div className="two-col two-col-equal">
             <Card title="Revenue + Sessions Trend">
               {range.preset === 'today' ? (
@@ -212,7 +252,7 @@ export function ExecutiveOverview() {
             <Card title="Source Health Snapshot">
               <div className="stack-list">
                 {liveConnectors.map((item) => {
-                  const truthfulHealthy = item.latest_run_status === 'success' && item.latest_records_processed > 0 && item.last_success_at
+                  const truthfulHealthy = isTruthfullyHealthy(item)
                   return (
                     <div className={`list-item ${truthfulHealthy ? 'status-good' : ''}`} key={item.source}>
                       <div className="item-head">
@@ -251,6 +291,13 @@ export function ExecutiveOverview() {
             </Card>
             <Card title="Data Quality Visibility">
               <div className="stack-list">
+                {dataQualityError ? (
+                  <div className="list-item status-warn">
+                    <strong>Data quality feed unavailable</strong>
+                    <p>{dataQualityError}</p>
+                    <button className="button" onClick={() => void load()}>Retry</button>
+                  </div>
+                ) : null}
                 {(dataQuality?.missing_data || []).map((item, index) => (
                   <div className={`list-item status-${dataQualitySeverity(item)}`} key={`missing-${index}`}>
                     <strong>Missing data</strong>

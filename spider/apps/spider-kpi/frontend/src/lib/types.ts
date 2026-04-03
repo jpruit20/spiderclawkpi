@@ -148,6 +148,12 @@ export interface OverviewResponse {
   source_health: SourceHealthItem[]
 }
 
+export type KpiDisplayRow = {
+  business_date: string
+} & {
+  [K in Exclude<keyof KPIDaily, 'business_date'>]: KPIDaily[K] | null
+}
+
 export interface FreshdeskAgentDailyItem {
   business_date: string
   agent_id: string
