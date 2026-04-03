@@ -205,8 +205,11 @@ Context files:
 
 
 def call_model(prompt: str) -> str:
+    started = time.time()
+    print(f"[sidecar] calling model={MODEL}")
     response = client.responses.create(model=MODEL, input=prompt)
     text = getattr(response, "output_text", "").strip()
+    print(f"[sidecar] model call finished in {time.time() - started:.2f}s")
     return text or "No feedback returned."
 
 
@@ -269,6 +272,7 @@ def process_inbox() -> None:
     for path in requests:
         try:
             message_text, context_files = parse_inbox_request(path)
+            print(f"[sidecar] processing inbox file {path.name}")
             if not message_text:
                 reply = "Inbox request was empty."
             else:
