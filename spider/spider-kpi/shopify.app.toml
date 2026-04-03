@@ -19,6 +19,3 @@ redirect_urls = [
   "https://kpi.spidergrills.com/auth/callback",
   "https://kpi.spidergrills.com/api/auth/callback"
 ]
-
-[pos]
-embedded = false

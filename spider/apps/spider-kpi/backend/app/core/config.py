@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
 
     shopify_store_url: Optional[str] = None
+    shopify_admin_access_token: Optional[str] = None
     shopify_api_key: Optional[str] = None
     shopify_webhook_secret: Optional[str] = None
 

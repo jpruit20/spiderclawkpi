@@ -34,12 +34,13 @@ def verify_shopify_hmac(raw_body: bytes, hmac_header: str | None) -> bool:
 
 
 def build_session() -> requests.Session:
-    if not settings.shopify_api_key:
-        raise RuntimeError("SHOPIFY_API_KEY is not configured")
+    access_token = settings.shopify_admin_access_token or settings.shopify_api_key
+    if not access_token:
+        raise RuntimeError("SHOPIFY_ADMIN_ACCESS_TOKEN is not configured")
     session = requests.Session()
     session.headers.update(
         {
-            "X-Shopify-Access-Token": settings.shopify_api_key,
+            "X-Shopify-Access-Token": access_token,
             "Accept": "application/json",
         }
     )
