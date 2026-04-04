@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 from requests.utils import parse_header_links
@@ -23,6 +24,7 @@ API_VERSION = settings.shopify_api_version
 MAX_RETRIES = 5
 TIMEOUT_SECONDS = 30
 TOKEN_REFRESH_SKEW_SECONDS = 60
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 
 _token_cache: dict[str, Any] = {
@@ -270,7 +272,12 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         session = build_session()
         shop_domain = _normalize_shop_domain(settings.shopify_store_url)
         endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders.json"
-        created_at_min = (datetime.now(timezone.utc) - timedelta(hours=hours)).replace(microsecond=0).isoformat()
+        window_start_utc = (datetime.now(timezone.utc) - timedelta(hours=hours)).replace(microsecond=0)
+        if hours >= 24:
+            business_window_start = window_start_utc.astimezone(BUSINESS_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+            created_at_min = business_window_start.astimezone(timezone.utc).isoformat()
+        else:
+            created_at_min = window_start_utc.isoformat()
         params = {
             "status": "any",
             "limit": "250",

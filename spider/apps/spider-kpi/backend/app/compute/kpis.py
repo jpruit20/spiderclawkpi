@@ -16,6 +16,7 @@ from app.models import (
     ShopifyOrderDaily,
     SourceSyncRun,
     TWSummaryDaily,
+    TWSummaryIntraday,
 )
 from app.services.issue_radar import build_issue_radar
 from app.services.source_health import refresh_source_health_alerts, start_sync_run, finish_sync_run, upsert_source_config
@@ -100,27 +101,36 @@ def recompute_daily_kpis(db: Session) -> int:
     db.commit()
 
     shopify_rows = db.execute(select(ShopifyOrderDaily)).scalars().all()
+    shopify_map = {row.business_date: row for row in shopify_rows}
     tw_map = {row.business_date: row for row in db.execute(select(TWSummaryDaily)).scalars().all()}
     shopify_analytics_map = {row.business_date: row for row in db.execute(select(ShopifyAnalyticsDaily)).scalars().all()}
     support_map = {row.business_date: row for row in db.execute(select(FreshdeskTicketsDaily)).scalars().all()}
+
+    business_dates = sorted(
+        set(shopify_map.keys())
+        | set(tw_map.keys())
+        | set(shopify_analytics_map.keys())
+        | set(support_map.keys())
+    )
 
     processed = 0
     validation_messages: list[dict] = []
     reconciliation_messages: list[dict] = []
     missing_data_messages: list[dict] = []
 
-    for shopify in shopify_rows:
-        tw = tw_map.get(shopify.business_date)
-        shopify_analytics = shopify_analytics_map.get(shopify.business_date)
-        support = support_map.get(shopify.business_date)
+    for business_date in business_dates:
+        shopify = shopify_map.get(business_date)
+        tw = tw_map.get(business_date)
+        shopify_analytics = shopify_analytics_map.get(business_date)
+        support = support_map.get(business_date)
 
-        revenue = shopify.revenue
-        orders = shopify.orders
+        revenue = shopify.revenue if shopify else (tw.revenue if tw else 0.0)
+        orders = shopify.orders if shopify else 0
         sessions = shopify_analytics.sessions if shopify_analytics else 0.0
         if sessions == 0 and tw:
             sessions = tw.sessions
             missing_data_messages.append({
-                "business_date": str(shopify.business_date),
+                "business_date": str(business_date),
                 "type": "shopify_sessions_missing",
                 "message": "Shopify sessions missing; falling back to Triple Whale sessions.",
             })
@@ -131,10 +141,10 @@ def recompute_daily_kpis(db: Session) -> int:
         expected_aov = _safe_div(revenue, float(orders))
 
         record = db.execute(
-            select(KPIDaily).where(KPIDaily.business_date == shopify.business_date)
+            select(KPIDaily).where(KPIDaily.business_date == business_date)
         ).scalars().first()
         if record is None:
-            record = KPIDaily(business_date=shopify.business_date)
+            record = KPIDaily(business_date=business_date)
             db.add(record)
 
         record.revenue = revenue
@@ -163,8 +173,8 @@ def recompute_daily_kpis(db: Session) -> int:
 
         validation = _validation_warnings(record, expected_conversion, expected_rps, expected_aov)
         if validation:
-            logger.warning("kpi validation mismatch", extra={"business_date": str(shopify.business_date), "warnings": validation})
-            validation_messages.append({"business_date": str(shopify.business_date), "warnings": validation})
+            logger.warning("kpi validation mismatch", extra={"business_date": str(business_date), "warnings": validation})
+            validation_messages.append({"business_date": str(business_date), "warnings": validation})
 
         if tw:
             purchase_drift = _relative_diff(float(orders), purchases) * 100.0
@@ -172,7 +182,7 @@ def recompute_daily_kpis(db: Session) -> int:
             if shopify_analytics and shopify_analytics.sessions:
                 sessions_drift = _relative_diff(shopify_analytics.sessions, tw.sessions) * 100.0
             reconciliation = {
-                "business_date": str(shopify.business_date),
+                "business_date": str(business_date),
                 "orders_vs_purchases_pct_diff": round(purchase_drift, 2),
                 "shopify_orders": orders,
                 "tw_purchases": purchases,
@@ -185,17 +195,24 @@ def recompute_daily_kpis(db: Session) -> int:
 
     intraday_bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     shopify_intraday = db.execute(select(ShopifyAnalyticsIntraday).where(ShopifyAnalyticsIntraday.bucket_start == intraday_bucket)).scalars().first()
-    if shopify_intraday is not None:
+    tw_intraday = db.execute(select(TWSummaryIntraday).where(TWSummaryIntraday.bucket_start == intraday_bucket)).scalars().first()
+    if shopify_intraday is not None or tw_intraday is not None:
         intraday = db.execute(select(KPIIntraday).where(KPIIntraday.bucket_start == intraday_bucket)).scalars().first()
         if intraday is None:
             intraday = KPIIntraday(bucket_start=intraday_bucket)
             db.add(intraday)
 
-        intraday_revenue = float(shopify_intraday.revenue or 0.0)
-        intraday_sessions = float(shopify_intraday.sessions or 0.0)
-        intraday_orders = 0
-        intraday_aov = 0.0
-        intraday_conversion = 0.0
+        intraday_revenue = float((shopify_intraday.revenue if shopify_intraday else 0.0) or 0.0)
+        if intraday_revenue == 0.0 and tw_intraday is not None:
+            intraday_revenue = float(tw_intraday.revenue or 0.0)
+        intraday_sessions = float((shopify_intraday.sessions if shopify_intraday else 0.0) or 0.0)
+        if intraday_sessions == 0.0 and tw_intraday is not None:
+            intraday_sessions = float(tw_intraday.sessions or 0.0)
+
+        today_daily = next((row for row in reversed(shopify_rows) if row.business_date == intraday_bucket.date()), None)
+        intraday_orders = int(today_daily.orders) if today_daily is not None else 0
+        intraday_aov = (intraday_revenue / intraday_orders) if intraday_orders else 0.0
+        intraday_conversion = (intraday_orders / intraday_sessions * 100.0) if intraday_sessions else 0.0
 
         intraday.revenue = intraday_revenue
         intraday.sessions = intraday_sessions

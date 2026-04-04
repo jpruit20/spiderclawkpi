@@ -31,6 +31,8 @@
 - Added `spider-kpi/shopify.app.toml` with embedded=true, production application URL `https://kpi.spidergrills.com`, and required KPI scopes.
 - Added a minimal embedded homepage that checks session-backed backend auth, token exchange, and an Admin API read.
 - Updated the KPI backend Shopify connector to stop using the app API key as an `X-Shopify-Access-Token` directly; it now supports Shopify client-credentials token exchange with 24-hour caching/refresh and API-version config.
+- Fixed same-day KPI surfacing by including current-day Triple Whale data, unioning KPI daily recompute across available source dates instead of anchoring only on Shopify daily rows, and falling back intraday sessions/revenue from Triple Whale when Shopify intraday is unavailable.
+- Confirmed live API/dashboard state now reaches 2026-04-04 for `latest_kpi`; Shopify remains blocked until `SHOPIFY_API_SECRET` is provided, so commerce truth is still incomplete.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

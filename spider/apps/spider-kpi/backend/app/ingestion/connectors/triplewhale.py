@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import time
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy import select
@@ -16,6 +17,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 SUMMARY_URL = "https://api.triplewhale.com/api/v2/summary-page/get-data"
 TIMEOUT_SECONDS = 45
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 
 def _coerce_number(value: Any) -> Optional[float]:
@@ -172,8 +174,11 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
     processed = 0
     last_payload: dict[str, Any] | None = None
     try:
+        business_today = datetime.now(BUSINESS_TZ).date()
+        current_hour_bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
         for day_offset in range(days):
-            target_date = (datetime.now(timezone.utc) - timedelta(days=day_offset + 1)).date()
+            target_date = business_today - timedelta(days=day_offset)
             payload = _build_payload(
                 settings.shopify_store_url,
                 target_date.isoformat(),
@@ -218,7 +223,7 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
             record.revenue = normalized["revenue"]
             record.ad_spend = normalized["ad_spend"]
 
-            bucket = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
+            bucket = current_hour_bucket if target_date == business_today else datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
             intraday = db.execute(
                 select(TWSummaryIntraday).where(TWSummaryIntraday.bucket_start == bucket)
             ).scalars().first()
