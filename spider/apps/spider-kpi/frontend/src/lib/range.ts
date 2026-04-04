@@ -85,6 +85,11 @@ export function summarizeKpis(rows: KPIDaily[]): KPIDaily | undefined {
   const ticketsResolved = rows.reduce((sum, row) => sum + row.tickets_resolved, 0)
   const openBacklog = rows[rows.length - 1]?.open_backlog || 0
   const avg = (key: keyof KPIDaily) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0) / rows.length
+  const revenueSources = Array.from(new Set(rows.map((row) => row.revenue_source).filter(Boolean)))
+  const sessionsSources = Array.from(new Set(rows.map((row) => row.sessions_source).filter(Boolean)))
+  const ordersSources = Array.from(new Set(rows.map((row) => row.orders_source).filter(Boolean)))
+  const hasPartial = rows.some((row) => Boolean(row.is_partial_day))
+  const hasFallback = rows.some((row) => Boolean(row.is_fallback_day))
   return {
     business_date: `${rows[0].business_date} → ${rows[rows.length - 1].business_date}`,
     revenue,
@@ -108,5 +113,10 @@ export function summarizeKpis(rows: KPIDaily[]): KPIDaily | undefined {
     csat: avg('csat'),
     reopen_rate: avg('reopen_rate'),
     tickets_per_100_orders: orders ? (ticketsCreated / orders) * 100 : 0,
+    revenue_source: revenueSources.length === 1 ? revenueSources[0] : revenueSources.length ? 'mixed' : null,
+    sessions_source: sessionsSources.length === 1 ? sessionsSources[0] : sessionsSources.length ? 'mixed' : null,
+    orders_source: ordersSources.length === 1 ? ordersSources[0] : ordersSources.length ? 'mixed' : null,
+    is_partial_day: hasPartial,
+    is_fallback_day: hasFallback,
   }
 }

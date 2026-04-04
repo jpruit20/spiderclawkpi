@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_auth
 from app.compute.kpis import get_data_quality
-from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation
+from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
 from app.schemas.overview import AlertOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut
 from app.services.issue_radar import build_issue_radar
-from app.services.overview import build_overview
+from app.services.overview import build_kpi_payload, build_overview
 from app.services.source_health import get_source_health
 
 router = APIRouter(prefix="/api", tags=["overview"], dependencies=[Depends(require_auth)])
@@ -25,7 +25,10 @@ def get_overview(db: Session = Depends(db_session)) -> OverviewResponse:
 @router.get("/kpis/daily", response_model=list[KPIDailyOut])
 def get_kpis_daily(db: Session = Depends(db_session)):
     rows = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    return rows or []
+    shopify_map = {row.business_date: row for row in db.execute(select(ShopifyOrderDaily)).scalars().all()}
+    shopify_analytics_map = {row.business_date: row for row in db.execute(select(ShopifyAnalyticsDaily)).scalars().all()}
+    tw_map = {row.business_date: row for row in db.execute(select(TWSummaryDaily)).scalars().all()}
+    return [build_kpi_payload(row, shopify_map, shopify_analytics_map, tw_map) for row in rows] if rows else []
 
 
 @router.get("/kpis/intraday")

@@ -37,7 +37,8 @@
 - Fixed a null-safety bug in Shopify intraday updates (`max(None, float)` on legacy rows) discovered during the live sync run.
 - Removed fabricated Shopify analytics from the active KPI truth path, added business-timezone date attribution in Shopify/Freshdesk ingestion, shifted Freshdesk daily attribution closer to created-vs-resolved-vs-backlog semantics, corrected admin/scheduler base paths, and exposed KPI provenance/fallback flags through the overview API + frontend.
 - Normalized today-mode frontend KPI summary to latest intraday snapshot semantics instead of summing cumulative rows; source health labeling is now less misleading and provenance is visible in the KPI banner.
-- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; follow-up sidecar review passes are in progress for final schema/design/code validation.
+- Follow-up cleanup completed after sidecar review: `/api/kpis/daily` now returns the same enriched source-aware KPI shape as overview, range summaries preserve provenance/fallback state, and `TrendChart` now matches the props used across overview/commercial/support pages.
+- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; remaining truth risks are now concentrated in intraday order semantics, Shopify financial-state reconciliation, and Freshdesk lookback-limited backlog/history modeling.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.
