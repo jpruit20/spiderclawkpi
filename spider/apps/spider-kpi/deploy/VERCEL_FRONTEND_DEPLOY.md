@@ -53,6 +53,10 @@ Examples:
 - `VITE_API_BASE=https://api-kpi.spidergrills.com`
 - or `VITE_API_BASE=https://kpi-api.spidergrills.com`
 
+For the current Spider KPI deployment, prefer:
+
+- `VITE_API_BASE=https://api-kpi.spidergrills.com`
+
 If backend auth is disabled, `VITE_APP_PASSWORD` can be omitted.
 
 ## Backend requirements for the Vercel frontend
