@@ -135,6 +135,29 @@ def _to_decimal(value: Any) -> Decimal:
         return Decimal("0.00")
 
 
+def _extract_financials(order: dict[str, Any]) -> dict[str, Any]:
+    total_price = _to_decimal(order.get("total_price"))
+    current_total_price = _to_decimal(order.get("current_total_price") or order.get("total_price"))
+    cancelled_at = order.get("cancelled_at")
+    financial_status = str(order.get("financial_status") or "").lower() or None
+    refunds = total_price - current_total_price
+    if refunds < Decimal("0.00"):
+        refunds = Decimal("0.00")
+
+    recognized_statuses = {"paid", "partially_paid", "partially_refunded", "refunded", "authorized"}
+    order_counts = cancelled_at is None and (financial_status in recognized_statuses if financial_status else True)
+    recognized_revenue = Decimal("0.00") if cancelled_at else current_total_price
+
+    return {
+        "financial_status": financial_status,
+        "cancelled_at": cancelled_at,
+        "gross_revenue": float(total_price),
+        "recognized_revenue": float(recognized_revenue),
+        "refunds": float(refunds),
+        "counts_as_order": order_counts,
+    }
+
+
 def _get_retry_delay(response: Optional[requests.Response], attempt: int) -> int:
     if response is not None:
         retry_after = response.headers.get("Retry-After")
@@ -266,7 +289,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             "limit": "250",
             "order": "created_at asc",
             "created_at_min": created_at_min,
-            "fields": "id,created_at,updated_at,total_price,customer.id",
+            "fields": "id,created_at,updated_at,total_price,current_total_price,financial_status,cancelled_at,customer.id",
         }
 
         all_orders: list[dict[str, Any]] = []
@@ -299,9 +322,14 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             latest_order_timestamp = max(latest_order_timestamp, order_dt) if latest_order_timestamp else order_dt
             business_date = _business_date_from_dt(order_dt)
             if business_date not in daily:
-                daily[business_date] = {"orders": 0, "revenue": 0.0}
-            daily[business_date]["orders"] += 1
-            daily[business_date]["revenue"] += float(_to_decimal(order.get("total_price")))
+                daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0, "gross_revenue": 0.0}
+
+            financials = _extract_financials(order)
+            if financials["counts_as_order"]:
+                daily[business_date]["orders"] += 1
+            daily[business_date]["revenue"] += float(financials["recognized_revenue"])
+            daily[business_date]["refunds"] += float(financials["refunds"])
+            daily[business_date]["gross_revenue"] += float(financials["gross_revenue"])
 
             order_id = str(order.get("id"))
             event_record = _latest_event(db, "poll.order_snapshot", order_id)
@@ -311,6 +339,12 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
                 "created_at": order.get("created_at"),
                 "updated_at": order.get("updated_at"),
                 "total_price": order.get("total_price"),
+                "current_total_price": order.get("current_total_price"),
+                "financial_status": order.get("financial_status"),
+                "cancelled_at": order.get("cancelled_at"),
+                "recognized_revenue": financials["recognized_revenue"],
+                "refunds": financials["refunds"],
+                "counts_as_order": financials["counts_as_order"],
                 "customer_id": ((order.get("customer") or {}).get("id")),
             }
             if event_record is None:
@@ -341,6 +375,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
                 db.add(record)
             record.orders = int(values["orders"])
             record.revenue = float(values["revenue"])
+            record.refunds = float(values.get("refunds") or 0.0)
             record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
             record.source_run_id = run.id
 

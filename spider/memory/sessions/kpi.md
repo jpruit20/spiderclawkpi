@@ -38,7 +38,11 @@
 - Removed fabricated Shopify analytics from the active KPI truth path, added business-timezone date attribution in Shopify/Freshdesk ingestion, shifted Freshdesk daily attribution closer to created-vs-resolved-vs-backlog semantics, corrected admin/scheduler base paths, and exposed KPI provenance/fallback flags through the overview API + frontend.
 - Normalized today-mode frontend KPI summary to latest intraday snapshot semantics instead of summing cumulative rows; source health labeling is now less misleading and provenance is visible in the KPI banner.
 - Follow-up cleanup completed after sidecar review: `/api/kpis/daily` now returns the same enriched source-aware KPI shape as overview, range summaries preserve provenance/fallback state, and `TrendChart` now matches the props used across overview/commercial/support pages.
-- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; remaining truth risks are now concentrated in intraday order semantics, Shopify financial-state reconciliation, and Freshdesk lookback-limited backlog/history modeling.
+- Completed three more sidecar-driven truthfulness cycles:
+  1. replaced full-day Shopify order fallback in intraday KPI rows with bucket-aligned cumulative Shopify order/revenue snapshots and a guaranteed current-hour snapshot row,
+  2. changed Shopify daily rollups to use financially safer recognized revenue / valid-order rules and populate refunds,
+  3. changed Freshdesk daily marts to rebuild from the canonical local `FreshdeskTicket` table across the affected date range instead of overwriting from only the latest API `updated_since` slice.
+- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; the highest-risk truth defects are materially reduced and now skew toward deeper accounting/event-model refinement rather than basic linkage failures.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

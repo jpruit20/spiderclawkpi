@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ from app.models import (
     Recommendation,
     ShopifyAnalyticsDaily,
     ShopifyAnalyticsIntraday,
+    ShopifyOrderEvent,
     ShopifyOrderDaily,
     SourceSyncRun,
     TWSummaryDaily,
@@ -23,6 +25,7 @@ from app.services.source_health import refresh_source_health_alerts, start_sync_
 
 logger = logging.getLogger(__name__)
 VALIDATION_TOLERANCE = 0.01
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 
 def _derive_day_flags(
@@ -93,6 +96,19 @@ def _data_quality_payload(metadata: dict | None) -> dict:
         "source_drift": metadata.get("reconciliation_messages", []),
         "missing_data": metadata.get("missing_data_messages", []),
     }
+
+
+def _parse_event_created_at(event: ShopifyOrderEvent) -> datetime | None:
+    value = (event.normalized_payload or {}).get("created_at")
+    if not value:
+        return event.event_timestamp
+    clean = str(value).strip()
+    if clean.endswith("Z"):
+        clean = clean[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(clean)
+    except ValueError:
+        return event.event_timestamp
 
 
 def recompute_daily_kpis(db: Session) -> int:
@@ -210,31 +226,81 @@ def recompute_daily_kpis(db: Session) -> int:
             logger.info("source reconciliation", extra=reconciliation)
 
     intraday_bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    intraday_business_date = intraday_bucket.astimezone(BUSINESS_TZ).date()
     shopify_intraday = db.execute(select(ShopifyAnalyticsIntraday).where(ShopifyAnalyticsIntraday.bucket_start == intraday_bucket)).scalars().first()
     tw_intraday = db.execute(select(TWSummaryIntraday).where(TWSummaryIntraday.bucket_start == intraday_bucket)).scalars().first()
-    if shopify_intraday is not None or tw_intraday is not None:
-        intraday = db.execute(select(KPIIntraday).where(KPIIntraday.bucket_start == intraday_bucket)).scalars().first()
+    intraday_events = db.execute(
+        select(ShopifyOrderEvent)
+        .where(
+            ShopifyOrderEvent.event_type == "poll.order_snapshot",
+            ShopifyOrderEvent.business_date == intraday_business_date,
+        )
+        .order_by(ShopifyOrderEvent.event_timestamp.asc().nullslast(), ShopifyOrderEvent.id.asc())
+    ).scalars().all()
+
+    latest_events_by_order: dict[str, ShopifyOrderEvent] = {}
+    for event in intraday_events:
+        if event.order_id:
+            latest_events_by_order[event.order_id] = event
+
+    cumulative_by_bucket: dict[datetime, dict[str, float]] = {}
+    for event in latest_events_by_order.values():
+        created_at = _parse_event_created_at(event)
+        if created_at is None:
+            continue
+        created_at = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        if created_at.astimezone(BUSINESS_TZ).date() != intraday_business_date:
+            continue
+        bucket = created_at.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        row = cumulative_by_bucket.setdefault(bucket, {"orders": 0, "revenue": 0.0})
+        row["orders"] += 1
+        try:
+            row["revenue"] += float((event.normalized_payload or {}).get("total_price") or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    running_orders = 0
+    running_revenue = 0.0
+    for bucket in sorted(cumulative_by_bucket):
+        running_orders += int(cumulative_by_bucket[bucket]["orders"])
+        running_revenue += float(cumulative_by_bucket[bucket]["revenue"])
+        intraday = db.execute(select(KPIIntraday).where(KPIIntraday.bucket_start == bucket)).scalars().first()
         if intraday is None:
-            intraday = KPIIntraday(bucket_start=intraday_bucket)
+            intraday = KPIIntraday(bucket_start=bucket)
             db.add(intraday)
 
-        if tw_intraday is not None:
-            intraday_revenue = float(tw_intraday.revenue or 0.0)
-            intraday_sessions = float(tw_intraday.sessions or 0.0)
-        else:
-            intraday_revenue = float((shopify_intraday.revenue if shopify_intraday else 0.0) or 0.0)
-            intraday_sessions = float((shopify_intraday.sessions if shopify_intraday else 0.0) or 0.0)
+        sessions_value = 0.0
+        revenue_value = running_revenue
+        if bucket == intraday_bucket:
+            if tw_intraday is not None:
+                sessions_value = float(tw_intraday.sessions or 0.0)
+            elif shopify_intraday is not None:
+                sessions_value = float(shopify_intraday.sessions or 0.0)
+            if shopify_intraday is not None and float(shopify_intraday.revenue or 0.0) > running_revenue:
+                revenue_value = float(shopify_intraday.revenue or 0.0)
 
-        today_daily = next((row for row in reversed(shopify_rows) if row.business_date == intraday_bucket.date()), None)
-        intraday_orders = int(today_daily.orders) if today_daily is not None else 0
-        intraday_aov = (intraday_revenue / intraday_orders) if intraday_orders else 0.0
-        intraday_conversion = (intraday_orders / intraday_sessions * 100.0) if intraday_sessions else 0.0
+        intraday.revenue = revenue_value
+        intraday.sessions = sessions_value
+        intraday.orders = running_orders
+        intraday.average_order_value = (revenue_value / running_orders) if running_orders else 0.0
+        intraday.conversion_rate = (running_orders / sessions_value * 100.0) if sessions_value else 0.0
 
-        intraday.revenue = intraday_revenue
-        intraday.sessions = intraday_sessions
-        intraday.orders = intraday_orders
-        intraday.average_order_value = intraday_aov
-        intraday.conversion_rate = intraday_conversion
+    if shopify_intraday is not None or tw_intraday is not None or cumulative_by_bucket:
+        current_snapshot = db.execute(select(KPIIntraday).where(KPIIntraday.bucket_start == intraday_bucket)).scalars().first()
+        if current_snapshot is None:
+            current_snapshot = KPIIntraday(bucket_start=intraday_bucket)
+            db.add(current_snapshot)
+
+        current_sessions = float(tw_intraday.sessions or 0.0) if tw_intraday is not None else float((shopify_intraday.sessions if shopify_intraday else 0.0) or 0.0)
+        current_revenue = running_revenue
+        if shopify_intraday is not None and float(shopify_intraday.revenue or 0.0) > current_revenue:
+            current_revenue = float(shopify_intraday.revenue or 0.0)
+
+        current_snapshot.revenue = current_revenue
+        current_snapshot.sessions = current_sessions
+        current_snapshot.orders = running_orders
+        current_snapshot.average_order_value = (current_revenue / running_orders) if running_orders else 0.0
+        current_snapshot.conversion_rate = (running_orders / current_sessions * 100.0) if current_sessions else 0.0
 
     compute_run.metadata_json = {
         "processed": processed,
