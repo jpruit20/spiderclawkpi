@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 User=jpruit20
-WorkingDirectory=/home/jpruit20/.openclaw/workspace/spider-kpi
+WorkingDirectory=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider-kpi/.env
-ExecStart=/home/jpruit20/.openclaw/workspace/spider-kpi/.venv/bin/python /home/jpruit20/.openclaw/workspace/spider-kpi/scripts/refresh_all.py
+EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.env
+ExecStart=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.venv/bin/python /home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/scripts/refresh_all.py

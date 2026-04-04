@@ -27,6 +27,10 @@ def _already_running(db: Session, source: str) -> bool:
     ).scalars().first() is not None
 
 
+def _successful_result(result: dict) -> bool:
+    return bool(result.get("ok")) and not bool(result.get("skipped"))
+
+
 @router.post("/run-sync/{source}")
 def run_sync(source: str, db: Session = Depends(db_session)):
     if _already_running(db, source):
@@ -41,7 +45,7 @@ def run_sync(source: str, db: Session = Depends(db_session)):
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
-    if not _already_running(db, "decision-engine"):
+    if _successful_result(result) and not _already_running(db, "decision-engine"):
         recompute_daily_kpis(db)
         recompute_diagnostics(db)
     return result
@@ -61,7 +65,7 @@ def backfill_source(source: str, db: Session = Depends(db_session)):
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
-    if not _already_running(db, "decision-engine"):
+    if _successful_result(result) and not _already_running(db, "decision-engine"):
         recompute_daily_kpis(db)
         recompute_diagnostics(db)
     return result

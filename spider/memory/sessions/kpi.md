@@ -42,7 +42,11 @@
   1. replaced full-day Shopify order fallback in intraday KPI rows with bucket-aligned cumulative Shopify order/revenue snapshots and a guaranteed current-hour snapshot row,
   2. changed Shopify daily rollups to use financially safer recognized revenue / valid-order rules and populate refunds,
   3. changed Freshdesk daily marts to rebuild from the canonical local `FreshdeskTicket` table across the affected date range instead of overwriting from only the latest API `updated_since` slice.
-- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; the highest-risk truth defects are materially reduced and now skew toward deeper accounting/event-model refinement rather than basic linkage failures.
+- Follow-up hardening after those cycles:
+  - decision-engine recompute now runs only when at least one upstream source sync actually succeeds,
+  - deploy/runtime files now point at the recovered FastAPI repo path instead of the obsolete pre-recovery path,
+  - `scripts/refresh_all.py` now executes the current connector + compute stack directly and was validated live.
+- Final sidecar assessment: the system is good enough to stop for now; main remaining caveat is that older-order Shopify refunds/cancellations/edits outside the recent `created_at` poll window are not yet folded back into `ShopifyOrderDaily` automatically via webhook-driven daily-mart updates.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

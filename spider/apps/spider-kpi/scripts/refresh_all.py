@@ -1,42 +1,48 @@
 #!/usr/bin/env python3
-import subprocess
+from __future__ import annotations
+
+import json
 import sys
 from pathlib import Path
 
 
-BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider-kpi")
-SCRIPTS_DIR = BASE_DIR / "scripts"
+BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi")
+BACKEND_DIR = BASE_DIR / "backend"
+sys.path.insert(0, str(BACKEND_DIR))
 
-
-def run_step(name: str, script_name: str) -> None:
-    script_path = SCRIPTS_DIR / script_name
-    if not script_path.exists():
-        print(f"[skip] {name}: missing {script_name}")
-        return
-
-    print(f"[run] {name}: {script_name}")
-    result = subprocess.run(
-        [sys.executable, str(script_path)],
-        cwd=str(BASE_DIR),
-        text=True,
-        capture_output=True,
-    )
-
-    if result.stdout:
-        print(result.stdout.strip())
-    if result.stderr:
-        print(result.stderr.strip(), file=sys.stderr)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Step failed: {name}")
+from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics  # noqa: E402
+from app.db.session import SessionLocal  # noqa: E402
+from app.ingestion.connectors.freshdesk import sync_freshdesk  # noqa: E402
+from app.ingestion.connectors.shopify import sync_shopify_orders  # noqa: E402
+from app.ingestion.connectors.triplewhale import sync_triplewhale  # noqa: E402
 
 
 def main() -> int:
-    run_step("Shopify ingest", "shopify_ingest_clean.py")
-    run_step("Triple Whale ingest", "triplewhale_ingest.py")
-    run_step("KPI compute", "kpi_compute.py")
-    print("[ok] refresh complete")
-    return 0
+    db = SessionLocal()
+    try:
+        results = {
+            "shopify": sync_shopify_orders(db),
+            "triplewhale": sync_triplewhale(db, backfill_days=1),
+            "freshdesk": sync_freshdesk(db, days=7),
+        }
+
+        if any(result.get("ok") and not result.get("skipped") for result in results.values()):
+            results["decision_engine"] = {
+                "ok": True,
+                "processed": recompute_daily_kpis(db),
+            }
+            recompute_diagnostics(db)
+        else:
+            results["decision_engine"] = {
+                "ok": False,
+                "skipped": True,
+                "message": "No successful source syncs; compute skipped.",
+            }
+
+        print(json.dumps(results, default=str))
+        return 0
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

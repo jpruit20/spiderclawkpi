@@ -1,14 +1,14 @@
 [Unit]
-Description=Spider KPI Flask App
+Description=Spider KPI FastAPI Backend
 After=network.target
 
 [Service]
 Type=simple
 User=jpruit20
-WorkingDirectory=/home/jpruit20/.openclaw/workspace/spider-kpi
+WorkingDirectory=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider-kpi/.env
-ExecStart=/home/jpruit20/.openclaw/workspace/spider-kpi/.venv/bin/python /home/jpruit20/.openclaw/workspace/spider-kpi/app.py
+EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.env
+ExecStart=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.venv/bin/python -m uvicorn app.main:app --app-dir /home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/backend --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 

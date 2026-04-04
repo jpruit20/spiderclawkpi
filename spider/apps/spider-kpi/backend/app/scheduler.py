@@ -26,6 +26,12 @@ def _already_running(db, source_name: str) -> bool:
     ).scalars().first() is not None
 
 
+def _successful_result(result: dict | None) -> bool:
+    if not result:
+        return False
+    return bool(result.get("ok")) and not bool(result.get("skipped"))
+
+
 def run_seed() -> None:
     db = SessionLocal()
     try:
@@ -40,13 +46,14 @@ def run_seed() -> None:
 def run_syncs() -> None:
     db = SessionLocal()
     try:
+        any_success = False
         if not _already_running(db, "shopify"):
-            sync_shopify_orders(db)
+            any_success = _successful_result(sync_shopify_orders(db)) or any_success
         if not _already_running(db, "triplewhale"):
-            sync_triplewhale(db, backfill_days=1)
+            any_success = _successful_result(sync_triplewhale(db, backfill_days=1)) or any_success
         if not _already_running(db, "freshdesk"):
-            sync_freshdesk(db, days=7)
-        if not _already_running(db, "decision-engine"):
+            any_success = _successful_result(sync_freshdesk(db, days=7)) or any_success
+        if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)
     finally:
