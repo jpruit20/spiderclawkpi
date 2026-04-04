@@ -14,7 +14,7 @@ from sqlalchemy import desc, select
 
 
 settings = get_settings()
-BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider-kpi")
+BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi")
 
 
 def _already_running(db, source_name: str) -> bool:

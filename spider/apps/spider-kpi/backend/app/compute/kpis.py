@@ -25,6 +25,23 @@ logger = logging.getLogger(__name__)
 VALIDATION_TOLERANCE = 0.01
 
 
+def _derive_day_flags(
+    shopify: ShopifyOrderDaily | None,
+    shopify_analytics: ShopifyAnalyticsDaily | None,
+    tw: TWSummaryDaily | None,
+) -> tuple[str | None, str | None, bool, bool]:
+    revenue_source = "shopify" if shopify else ("triplewhale" if tw else None)
+    if tw and (tw.sessions or 0) > 0:
+        sessions_source = "triplewhale"
+    elif shopify_analytics and (shopify_analytics.sessions or 0) > 0:
+        sessions_source = None
+    else:
+        sessions_source = None
+    is_partial = shopify is None or revenue_source != "shopify" or sessions_source != "shopify"
+    is_fallback = revenue_source == "triplewhale" or sessions_source == "triplewhale"
+    return revenue_source, sessions_source, is_partial, is_fallback
+
+
 def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
@@ -126,13 +143,12 @@ def recompute_daily_kpis(db: Session) -> int:
 
         revenue = shopify.revenue if shopify else (tw.revenue if tw else 0.0)
         orders = shopify.orders if shopify else 0
-        sessions = shopify_analytics.sessions if shopify_analytics else 0.0
-        if sessions == 0 and tw:
-            sessions = tw.sessions
+        sessions = tw.sessions if tw else 0.0
+        if sessions == 0 and shopify_analytics and (shopify_analytics.sessions or 0) > 0:
             missing_data_messages.append({
                 "business_date": str(business_date),
-                "type": "shopify_sessions_missing",
-                "message": "Shopify sessions missing; falling back to Triple Whale sessions.",
+                "type": "shopify_analytics_ignored",
+                "message": "Shopify analytics exists but is not trusted; keeping sessions unavailable until a real analytics source is integrated.",
             })
         ad_spend = tw.ad_spend if tw else 0.0
         purchases = tw.purchases if tw else float(orders)
@@ -202,12 +218,12 @@ def recompute_daily_kpis(db: Session) -> int:
             intraday = KPIIntraday(bucket_start=intraday_bucket)
             db.add(intraday)
 
-        intraday_revenue = float((shopify_intraday.revenue if shopify_intraday else 0.0) or 0.0)
-        if intraday_revenue == 0.0 and tw_intraday is not None:
+        if tw_intraday is not None:
             intraday_revenue = float(tw_intraday.revenue or 0.0)
-        intraday_sessions = float((shopify_intraday.sessions if shopify_intraday else 0.0) or 0.0)
-        if intraday_sessions == 0.0 and tw_intraday is not None:
             intraday_sessions = float(tw_intraday.sessions or 0.0)
+        else:
+            intraday_revenue = float((shopify_intraday.revenue if shopify_intraday else 0.0) or 0.0)
+            intraday_sessions = float((shopify_intraday.sessions if shopify_intraday else 0.0) or 0.0)
 
         today_daily = next((row for row in reversed(shopify_rows) if row.business_date == intraday_bucket.date()), None)
         intraday_orders = int(today_daily.orders) if today_daily is not None else 0

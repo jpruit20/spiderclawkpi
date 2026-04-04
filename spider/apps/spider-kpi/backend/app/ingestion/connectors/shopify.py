@@ -113,6 +113,11 @@ def _parse_datetime(value: str) -> datetime:
     return datetime.fromisoformat(clean)
 
 
+def _business_date_from_dt(value: datetime) -> datetime.date:
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(BUSINESS_TZ).date()
+
+
 def _extract_next_link(link_header: str | None) -> str | None:
     if not link_header:
         return None
@@ -175,28 +180,6 @@ def _latest_event(db: Session, event_type: str, order_id: str) -> ShopifyOrderEv
     ).scalars().first()
 
 
-def _derive_shopify_analytics(daily_orders: dict[datetime.date, dict[str, float]]) -> dict[datetime.date, dict[str, float]]:
-    analytics: dict[datetime.date, dict[str, float]] = {}
-    for business_date, values in daily_orders.items():
-        orders = values["orders"]
-        revenue = values["revenue"]
-        sessions = max(float(orders) * 55.0, 1.0)
-        users = max(sessions * 0.82, 1.0)
-        conversion_rate = (orders / sessions) * 100.0 if sessions else 0.0
-        page_views = sessions * 2.65
-        add_to_cart_rate = min(100.0, conversion_rate * 3.25)
-        bounce_rate = max(15.0, min(85.0, 58.0 - min(18.0, revenue / 2500.0)))
-        analytics[business_date] = {
-            "sessions": round(sessions, 2),
-            "users": round(users, 2),
-            "conversion_rate": round(conversion_rate, 6),
-            "add_to_cart_rate": round(add_to_cart_rate, 6),
-            "page_views": round(page_views, 2),
-            "bounce_rate": round(bounce_rate, 6),
-        }
-    return analytics
-
-
 def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> ShopifyOrderEvent:
     order_id = str(payload.get("id")) if payload.get("id") is not None else None
     created_at = payload.get("created_at") or payload.get("updated_at")
@@ -220,7 +203,7 @@ def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> Sho
         event_type=topic,
         order_id=order_id,
         event_timestamp=event_ts,
-        business_date=event_ts.date() if event_ts else None,
+        business_date=_business_date_from_dt(event_ts) if event_ts else None,
         raw_payload=payload,
         normalized_payload={
             "id": payload.get("id"),
@@ -314,7 +297,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
                 continue
             order_dt = _parse_datetime(str(created_at))
             latest_order_timestamp = max(latest_order_timestamp, order_dt) if latest_order_timestamp else order_dt
-            business_date = order_dt.date()
+            business_date = _business_date_from_dt(order_dt)
             if business_date not in daily:
                 daily[business_date] = {"orders": 0, "revenue": 0.0}
             daily[business_date]["orders"] += 1
@@ -349,8 +332,6 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
                 event_record.normalized_payload = normalized_payload
                 stats["records_updated"] += 1
 
-        analytics_daily = _derive_shopify_analytics(daily)
-
         for business_date, values in daily.items():
             record = db.execute(
                 select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date == business_date)
@@ -363,20 +344,6 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
             record.source_run_id = run.id
 
-            analytics = db.execute(
-                select(ShopifyAnalyticsDaily).where(ShopifyAnalyticsDaily.business_date == business_date)
-            ).scalars().first()
-            if analytics is None:
-                analytics = ShopifyAnalyticsDaily(business_date=business_date)
-                db.add(analytics)
-            derived = analytics_daily[business_date]
-            analytics.sessions = derived["sessions"]
-            analytics.users = derived["users"]
-            analytics.conversion_rate = derived["conversion_rate"]
-            analytics.add_to_cart_rate = derived["add_to_cart_rate"]
-            analytics.page_views = derived["page_views"]
-            analytics.bounce_rate = derived["bounce_rate"]
-
         if latest_order_timestamp is None:
             latest_order_timestamp = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         bucket_start = latest_order_timestamp.replace(minute=0, second=0, microsecond=0)
@@ -386,13 +353,11 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         if intraday is None:
             intraday = ShopifyAnalyticsIntraday(bucket_start=bucket_start)
             db.add(intraday)
-        latest_day = latest_order_timestamp.date()
-        latest_analytics = analytics_daily.get(latest_day, {"sessions": 0.0, "users": 0.0, "conversion_rate": 0.0})
+        latest_day = _business_date_from_dt(latest_order_timestamp)
         latest_revenue = daily.get(latest_day, {"revenue": 0.0})["revenue"]
-        latest_orders = daily.get(latest_day, {"orders": 0})["orders"]
-        intraday.sessions = max(float(intraday.sessions or 0.0), float(latest_analytics["sessions"] or 0.0))
-        intraday.users = max(float(intraday.users or 0.0), float(latest_analytics["users"] or 0.0))
-        intraday.conversion_rate = max(float(intraday.conversion_rate or 0.0), float(latest_analytics["conversion_rate"] or 0.0))
+        intraday.sessions = max(float(intraday.sessions or 0.0), 0.0)
+        intraday.users = max(float(intraday.users or 0.0), 0.0)
+        intraday.conversion_rate = max(float(intraday.conversion_rate or 0.0), 0.0)
         intraday.revenue = max(float(intraday.revenue or 0.0), float(latest_revenue or 0.0))
 
         duration_ms = int((time.monotonic() - started) * 1000)

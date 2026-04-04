@@ -21,6 +21,11 @@ export interface KPIDaily {
   csat: number
   reopen_rate: number
   tickets_per_100_orders: number
+  revenue_source?: string | null
+  sessions_source?: string | null
+  orders_source?: string | null
+  is_partial_day?: boolean
+  is_fallback_day?: boolean
 }
 
 export interface KPIIntraday {

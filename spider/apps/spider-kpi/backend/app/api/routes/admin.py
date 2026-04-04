@@ -15,7 +15,7 @@ from app.services.seed import seed_from_prototype_files
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_auth)])
 settings = get_settings()
-BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider-kpi")
+BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi")
 
 
 def _already_running(db: Session, source: str) -> bool:

@@ -35,7 +35,9 @@
 - Activated Shopify client-credentials auth after `SHOPIFY_API_SECRET` was added to `apps/spider-kpi/.env`; verified live Shopify sync and backfill are now succeeding.
 - Ran Shopify historical backfill successfully: 1,075 records processed across 61 business dates, extending Shopify daily coverage to 2026-02-03 through 2026-04-04.
 - Fixed a null-safety bug in Shopify intraday updates (`max(None, float)` on legacy rows) discovered during the live sync run.
-- Confirmed live API/dashboard state now reaches 2026-04-04 for `latest_kpi` with healthy Shopify source health; remaining truth issues are mostly intraday semantics, fabricated Shopify analytics, and timezone/provenance cleanup.
+- Removed fabricated Shopify analytics from the active KPI truth path, added business-timezone date attribution in Shopify/Freshdesk ingestion, shifted Freshdesk daily attribution closer to created-vs-resolved-vs-backlog semantics, corrected admin/scheduler base paths, and exposed KPI provenance/fallback flags through the overview API + frontend.
+- Normalized today-mode frontend KPI summary to latest intraday snapshot semantics instead of summing cumulative rows; source health labeling is now less misleading and provenance is visible in the KPI banner.
+- Confirmed live API/dashboard state now reaches 2026-04-04 with healthy Shopify, Triple Whale, Freshdesk, and decision-engine source health; follow-up sidecar review passes are in progress for final schema/design/code validation.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

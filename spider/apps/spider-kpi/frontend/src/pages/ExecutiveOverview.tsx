@@ -132,9 +132,10 @@ export function ExecutiveOverview() {
   }, [intradaySeries, range, todayDate])
   const todaySeriesSummary = useMemo(() => {
     if (!todaysIntradaySeries.length) return undefined
-    const revenue = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
-    const sessions = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.sessions || 0), 0)
-    const orders = todaysIntradaySeries.reduce((sum, row) => sum + Number(row.orders || 0), 0)
+    const latestRow = todaysIntradaySeries[todaysIntradaySeries.length - 1]
+    const revenue = Number(latestRow.revenue || 0)
+    const sessions = Number(latestRow.sessions || 0)
+    const orders = Number(latestRow.orders || 0)
     return {
       business_date: todayDate,
       revenue,
@@ -158,6 +159,11 @@ export function ExecutiveOverview() {
       csat: null,
       reopen_rate: null,
       tickets_per_100_orders: null,
+      revenue_source: 'intraday_snapshot',
+      sessions_source: 'intraday_snapshot',
+      orders_source: 'shopify',
+      is_partial_day: true,
+      is_fallback_day: false,
     } as KpiDisplayRow
   }, [todaysIntradaySeries, todayDate])
   const latestCompleteDay = useMemo(() => {
@@ -269,7 +275,7 @@ export function ExecutiveOverview() {
                       <div className="item-head">
                         <strong>{item.source}</strong>
                         <div className="inline-badges">
-                          <span className="badge badge-good">Live</span>
+                          <span className={`badge ${item.configured && item.latest_run_status === 'success' ? 'badge-good' : 'badge-neutral'}`}>{item.configured && item.latest_run_status === 'success' ? 'Live' : 'Configured'}</span>
                           <span className={`badge ${truthfulHealthy ? 'badge-good' : 'badge-neutral'}`}>{truthfulHealthy ? 'healthy' : item.derived_status}</span>
                         </div>
                       </div>

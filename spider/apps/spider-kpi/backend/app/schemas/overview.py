@@ -94,6 +94,11 @@ class KPIDailyOut(BaseModel):
     csat: float
     reopen_rate: float
     tickets_per_100_orders: float
+    revenue_source: Optional[str] = None
+    sessions_source: Optional[str] = None
+    orders_source: Optional[str] = None
+    is_partial_day: bool = False
+    is_fallback_day: bool = False
 
     class Config:
         from_attributes = True

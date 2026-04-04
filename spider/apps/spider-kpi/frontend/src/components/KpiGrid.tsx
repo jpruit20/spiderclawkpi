@@ -48,6 +48,13 @@ function metricValue(value: string, unavailable: boolean) {
   return unavailable && value !== '—' ? 'partial / unavailable' : value
 }
 
+function provenanceLabel(latest?: KpiDisplayRow) {
+  if (!latest) return null
+  if (latest.is_fallback_day) return `Fallback day · revenue: ${latest.revenue_source || 'n/a'} · sessions: ${latest.sessions_source || 'n/a'}`
+  if (latest.is_partial_day) return `Partial day · revenue: ${latest.revenue_source || 'n/a'} · sessions: ${latest.sessions_source || 'n/a'}`
+  return `Primary sources · revenue: ${latest.revenue_source || 'shopify'} · sessions: ${latest.sessions_source || 'shopify'}`
+}
+
 export function KpiGrid({
   latest,
   intraday,
@@ -65,7 +72,8 @@ export function KpiGrid({
   intradayMessage: string
   noDataMessage?: string
 }) {
-  const intradayUnavailable = intradayStatus !== 'live'
+  const intradayUnavailable = intradayStatus === 'unavailable'
+  const provenance = provenanceLabel(latest)
 
   const items = latest
     ? [
@@ -90,6 +98,7 @@ export function KpiGrid({
         <div>
           <strong>Showing: {scopeLabel}</strong>
           <span>{modeLabel(displayMode)}</span>
+          {provenance ? <small>{provenance}</small> : null}
         </div>
         <div className="intraday-banner">
           <span className={`badge ${intradayStatusTone(intradayStatus)}`}>{intradayStatus}</span>

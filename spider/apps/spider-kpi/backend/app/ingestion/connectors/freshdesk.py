@@ -4,6 +4,7 @@ import logging
 import time
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy import select
@@ -23,6 +24,14 @@ if not logger.handlers:
     stream_handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s:%(message)s'))
     logger.addHandler(stream_handler)
 TIMEOUT_SECONDS = 45
+BUSINESS_TZ = ZoneInfo("America/New_York")
+
+
+def _business_date(value: datetime | None):
+    if value is None:
+        return None
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(BUSINESS_TZ).date()
 
 
 def normalize_freshdesk_base_url(raw_value: Any) -> str:
@@ -76,9 +85,11 @@ def _configured() -> bool:
 
 
 def _auth() -> tuple[str, str]:
-    user = settings.freshdesk_api_key or ""
-    password = settings.freshdesk_api_user or "X"
-    return user, password
+    # Freshdesk API key auth uses the API key as the username and a dummy
+    # password (commonly "X"). The prior implementation used
+    # FRESHDESK_API_USER as the password, which can cause 401s when that
+    # env var stores a display label/name rather than an actual password.
+    return settings.freshdesk_api_key or "", "X"
 
 
 def _base_url() -> str:
@@ -218,7 +229,9 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             if ticket.get("resolved_at"):
                 resolved_at = datetime.fromisoformat(ticket["resolved_at"].replace("Z", "+00:00"))
 
-            business_date = created_at.date()
+            created_business_date = _business_date(created_at)
+            resolved_business_date = _business_date(resolved_at) if resolved_at else None
+            snapshot_business_date = _business_date(updated_at)
             status = str(ticket.get("status_name") or ticket.get("status") or "unknown")
             priority = str(ticket.get("priority") or "unknown")
             channel = str(ticket.get("source") or "unknown")
@@ -230,33 +243,39 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             reopened = 1 if str(ticket.get("status")).lower() in {"reopened", "4"} else 0
             sla_breach = 1 if ticket.get("fr_escalated") or ticket.get("is_escalated") else 0
 
-            grouped_daily[business_date]["tickets_created"] += 1
-            grouped_daily[business_date]["tickets_resolved"] += 1 if resolved_at else 0
-            grouped_daily[business_date]["unresolved_tickets"] += 0 if resolved_at else 1
-            grouped_daily[business_date]["reopened_tickets"] += reopened
-            grouped_daily[business_date]["sla_breaches"] += sla_breach
+            grouped_daily[created_business_date]["tickets_created"] += 1
+            grouped_daily[created_business_date]["reopened_tickets"] += reopened
+            grouped_daily[created_business_date]["sla_breaches"] += sla_breach
             if fr_hours > 0:
-                grouped_daily[business_date]["first_response_hours_total"] += fr_hours
-                grouped_daily[business_date]["first_response_count"] += 1
-            if res_hours > 0:
-                grouped_daily[business_date]["resolution_hours_total"] += res_hours
-                grouped_daily[business_date]["resolution_count"] += 1
+                grouped_daily[created_business_date]["first_response_hours_total"] += fr_hours
+                grouped_daily[created_business_date]["first_response_count"] += 1
+            if resolved_business_date is not None:
+                grouped_daily[resolved_business_date]["tickets_resolved"] += 1
+                if res_hours > 0:
+                    grouped_daily[resolved_business_date]["resolution_hours_total"] += res_hours
+                    grouped_daily[resolved_business_date]["resolution_count"] += 1
             if csat > 0:
-                grouped_daily[business_date]["csat_total"] += csat
-                grouped_daily[business_date]["csat_count"] += 1
+                grouped_daily[created_business_date]["csat_total"] += csat
+                grouped_daily[created_business_date]["csat_count"] += 1
 
-            grouped_agent[(business_date, agent_id)]["tickets_resolved"] += 1 if resolved_at else 0
-            grouped_agent[(business_date, agent_id)]["agent_name"] = str(ticket.get("responder_name") or agent_id)
+            if resolved_at is None and snapshot_business_date is not None:
+                grouped_daily[snapshot_business_date]["unresolved_tickets"] = grouped_daily[snapshot_business_date].get("unresolved_tickets", 0) + 1
+
+            agent_business_date = resolved_business_date or created_business_date
+            grouped_agent[(agent_business_date, agent_id)]["tickets_resolved"] += 1 if resolved_at else 0
+            grouped_agent[(agent_business_date, agent_id)]["agent_name"] = str(ticket.get("responder_name") or agent_id)
             if fr_hours > 0:
-                grouped_agent[(business_date, agent_id)]["first_response_hours_total"] += fr_hours
-                grouped_agent[(business_date, agent_id)]["first_response_count"] += 1
-            if res_hours > 0:
-                grouped_agent[(business_date, agent_id)]["resolution_hours_total"] += res_hours
-                grouped_agent[(business_date, agent_id)]["resolution_count"] += 1
+                grouped_agent[(created_business_date, agent_id)]["first_response_hours_total"] += fr_hours
+                grouped_agent[(created_business_date, agent_id)]["first_response_count"] += 1
+            if res_hours > 0 and resolved_business_date is not None:
+                grouped_agent[(resolved_business_date, agent_id)]["resolution_hours_total"] += res_hours
+                grouped_agent[(resolved_business_date, agent_id)]["resolution_count"] += 1
 
-            grouped_group[(business_date, group_name)]["tickets_created"] += 1
-            grouped_group[(business_date, group_name)]["tickets_resolved"] += 1 if resolved_at else 0
-            grouped_group[(business_date, group_name)]["unresolved_tickets"] += 0 if resolved_at else 1
+            grouped_group[(created_business_date, group_name)]["tickets_created"] += 1
+            if resolved_business_date is not None:
+                grouped_group[(resolved_business_date, group_name)]["tickets_resolved"] += 1
+            elif snapshot_business_date is not None:
+                grouped_group[(snapshot_business_date, group_name)]["unresolved_tickets"] += 1
 
             record = db.execute(select(FreshdeskTicket).where(FreshdeskTicket.ticket_id == ticket_id)).scalars().first()
             if record is None:
