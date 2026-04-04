@@ -19,9 +19,16 @@ from app.services.source_health import finish_sync_run, start_sync_run, upsert_s
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-API_VERSION = "2024-10"
+API_VERSION = settings.shopify_api_version
 MAX_RETRIES = 5
 TIMEOUT_SECONDS = 30
+TOKEN_REFRESH_SKEW_SECONDS = 60
+
+
+_token_cache: dict[str, Any] = {
+    "access_token": None,
+    "expires_at": 0,
+}
 
 
 def verify_shopify_hmac(raw_body: bytes, hmac_header: str | None) -> bool:
@@ -33,10 +40,60 @@ def verify_shopify_hmac(raw_body: bytes, hmac_header: str | None) -> bool:
     return hmac.compare_digest(encoded, hmac_header)
 
 
-def build_session() -> requests.Session:
-    access_token = settings.shopify_admin_access_token or settings.shopify_api_key
+def _normalize_shop_domain(raw_value: str | None) -> str:
+    if not raw_value:
+        raise RuntimeError("SHOPIFY_STORE_URL is not configured")
+    cleaned = str(raw_value).strip()
+    cleaned = cleaned.removeprefix("https://").removeprefix("http://")
+    return cleaned.strip("/")
+
+
+def _request_access_token() -> str:
+    if settings.shopify_admin_access_token:
+        return settings.shopify_admin_access_token
+
+    client_id = settings.shopify_api_key
+    client_secret = settings.shopify_api_secret
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "Set SHOPIFY_ADMIN_ACCESS_TOKEN or both SHOPIFY_API_KEY and SHOPIFY_API_SECRET"
+        )
+
+    now = int(time.time())
+    cached_token = _token_cache.get("access_token")
+    cached_expires_at = int(_token_cache.get("expires_at") or 0)
+    if cached_token and now < (cached_expires_at - TOKEN_REFRESH_SKEW_SECONDS):
+        return str(cached_token)
+
+    shop_domain = _normalize_shop_domain(settings.shopify_store_url)
+    response = requests.post(
+        f"https://{shop_domain}/admin/oauth/access_token",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    access_token = payload.get("access_token")
+    expires_in = int(payload.get("expires_in") or 86399)
     if not access_token:
-        raise RuntimeError("SHOPIFY_ADMIN_ACCESS_TOKEN is not configured")
+        raise RuntimeError("Shopify token response did not include access_token")
+
+    _token_cache["access_token"] = access_token
+    _token_cache["expires_at"] = now + expires_in
+    return str(access_token)
+
+
+def build_session() -> requests.Session:
+    access_token = _request_access_token()
     session = requests.Session()
     session.headers.update(
         {
@@ -180,7 +237,13 @@ def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> Sho
 
 def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
     started = time.monotonic()
-    configured = bool(settings.shopify_store_url and settings.shopify_api_key)
+    configured = bool(
+        settings.shopify_store_url
+        and (
+            settings.shopify_admin_access_token
+            or (settings.shopify_api_key and settings.shopify_api_secret)
+        )
+    )
     upsert_source_config(
         db,
         "shopify",
@@ -205,7 +268,8 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
 
     try:
         session = build_session()
-        endpoint = f"https://{settings.shopify_store_url}/admin/api/{API_VERSION}/orders.json"
+        shop_domain = _normalize_shop_domain(settings.shopify_store_url)
+        endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders.json"
         created_at_min = (datetime.now(timezone.utc) - timedelta(hours=hours)).replace(microsecond=0).isoformat()
         params = {
             "status": "any",

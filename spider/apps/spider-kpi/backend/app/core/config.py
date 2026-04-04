@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     shopify_store_url: Optional[str] = None
     shopify_admin_access_token: Optional[str] = None
     shopify_api_key: Optional[str] = None
+    shopify_api_secret: Optional[str] = None
+    shopify_api_version: str = "2026-01"
     shopify_webhook_secret: Optional[str] = None
 
     triplewhale_api_key: Optional[str] = None
