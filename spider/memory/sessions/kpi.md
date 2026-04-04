@@ -32,7 +32,10 @@
 - Added a minimal embedded homepage that checks session-backed backend auth, token exchange, and an Admin API read.
 - Updated the KPI backend Shopify connector to stop using the app API key as an `X-Shopify-Access-Token` directly; it now supports Shopify client-credentials token exchange with 24-hour caching/refresh and API-version config.
 - Fixed same-day KPI surfacing by including current-day Triple Whale data, unioning KPI daily recompute across available source dates instead of anchoring only on Shopify daily rows, and falling back intraday sessions/revenue from Triple Whale when Shopify intraday is unavailable.
-- Confirmed live API/dashboard state now reaches 2026-04-04 for `latest_kpi`; Shopify remains blocked until `SHOPIFY_API_SECRET` is provided, so commerce truth is still incomplete.
+- Activated Shopify client-credentials auth after `SHOPIFY_API_SECRET` was added to `apps/spider-kpi/.env`; verified live Shopify sync and backfill are now succeeding.
+- Ran Shopify historical backfill successfully: 1,075 records processed across 61 business dates, extending Shopify daily coverage to 2026-02-03 through 2026-04-04.
+- Fixed a null-safety bug in Shopify intraday updates (`max(None, float)` on legacy rows) discovered during the live sync run.
+- Confirmed live API/dashboard state now reaches 2026-04-04 for `latest_kpi` with healthy Shopify source health; remaining truth issues are mostly intraday semantics, fabricated Shopify analytics, and timezone/provenance cleanup.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

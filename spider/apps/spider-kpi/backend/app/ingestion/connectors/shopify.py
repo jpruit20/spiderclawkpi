@@ -390,10 +390,10 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         latest_analytics = analytics_daily.get(latest_day, {"sessions": 0.0, "users": 0.0, "conversion_rate": 0.0})
         latest_revenue = daily.get(latest_day, {"revenue": 0.0})["revenue"]
         latest_orders = daily.get(latest_day, {"orders": 0})["orders"]
-        intraday.sessions = max(intraday.sessions, float(latest_analytics["sessions"]))
-        intraday.users = max(intraday.users, float(latest_analytics["users"]))
-        intraday.conversion_rate = max(intraday.conversion_rate, float(latest_analytics["conversion_rate"]))
-        intraday.revenue = max(intraday.revenue, float(latest_revenue))
+        intraday.sessions = max(float(intraday.sessions or 0.0), float(latest_analytics["sessions"] or 0.0))
+        intraday.users = max(float(intraday.users or 0.0), float(latest_analytics["users"] or 0.0))
+        intraday.conversion_rate = max(float(intraday.conversion_rate or 0.0), float(latest_analytics["conversion_rate"] or 0.0))
+        intraday.revenue = max(float(intraday.revenue or 0.0), float(latest_revenue or 0.0))
 
         duration_ms = int((time.monotonic() - started) * 1000)
         run.metadata_json = {**run.metadata_json, **stats, "duration_ms": duration_ms}
