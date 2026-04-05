@@ -280,7 +280,11 @@ def _event_timestamp_from_payload(payload: dict[str, Any]) -> datetime | None:
     return None
 
 
-def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.date]) -> int:
+def rebuild_shopify_daily_from_events(
+    db: Session,
+    business_dates: set[datetime.date],
+    source_run_id: int | None = None,
+) -> int:
     if not business_dates:
         return 0
 
@@ -310,7 +314,12 @@ def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.
             daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0}
         if payload.get("counts_as_order"):
             daily[business_date]["orders"] += 1
-        daily[business_date]["revenue"] += float(payload.get("recognized_revenue") or payload.get("current_total_price") or payload.get("total_price") or 0.0)
+        daily[business_date]["revenue"] += float(
+            payload.get("recognized_revenue")
+            or payload.get("current_total_price")
+            or payload.get("total_price")
+            or 0.0
+        )
         daily[business_date]["refunds"] += float(payload.get("refunds") or 0.0)
 
     for business_date in business_dates:
@@ -323,6 +332,8 @@ def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.
         record.revenue = float(values["revenue"])
         record.refunds = float(values["refunds"])
         record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
+        if source_run_id is not None:
+            record.source_run_id = source_run_id
     db.commit()
     return len(business_dates)
 
@@ -453,7 +464,8 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             next_url = _extract_next_link(response.headers.get("Link"))
             next_params = None
 
-        daily: dict[datetime.date, dict[str, float]] = {}
+        touched_dates: set[datetime.date] = set()
+        daily_for_intraday: dict[datetime.date, dict[str, float]] = {}
         latest_order_timestamp: datetime | None = None
         for order in all_orders:
             created_at = order.get("created_at")
@@ -462,15 +474,12 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             order_dt = _parse_datetime(str(created_at))
             latest_order_timestamp = max(latest_order_timestamp, order_dt) if latest_order_timestamp else order_dt
             business_date = _business_date_from_dt(order_dt)
-            if business_date not in daily:
-                daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0, "gross_revenue": 0.0}
+            touched_dates.add(business_date)
+            if business_date not in daily_for_intraday:
+                daily_for_intraday[business_date] = {"revenue": 0.0}
 
             financials = _extract_financials(order)
-            if financials["counts_as_order"]:
-                daily[business_date]["orders"] += 1
-            daily[business_date]["revenue"] += float(financials["recognized_revenue"])
-            daily[business_date]["refunds"] += float(financials["refunds"])
-            daily[business_date]["gross_revenue"] += float(financials["gross_revenue"])
+            daily_for_intraday[business_date]["revenue"] += float(financials["recognized_revenue"])
 
             order_id = str(order.get("id"))
             event_record = _latest_event(db, "poll.order_snapshot", order_id)
@@ -497,18 +506,8 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
                 event_record.normalized_payload = normalized_payload
                 stats["records_updated"] += 1
 
-        for business_date, values in daily.items():
-            record = db.execute(
-                select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date == business_date)
-            ).scalars().first()
-            if record is None:
-                record = ShopifyOrderDaily(business_date=business_date)
-                db.add(record)
-            record.orders = int(values["orders"])
-            record.revenue = float(values["revenue"])
-            record.refunds = float(values.get("refunds") or 0.0)
-            record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
-            record.source_run_id = run.id
+        db.commit()
+        rebuilt_dates = rebuild_shopify_daily_from_events(db, touched_dates, source_run_id=run.id)
 
         if latest_order_timestamp is None:
             latest_order_timestamp = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -520,7 +519,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             intraday = ShopifyAnalyticsIntraday(bucket_start=bucket_start)
             db.add(intraday)
         latest_day = _business_date_from_dt(latest_order_timestamp)
-        latest_revenue = daily.get(latest_day, {"revenue": 0.0})["revenue"]
+        latest_revenue = daily_for_intraday.get(latest_day, {"revenue": 0.0})["revenue"]
         intraday.sessions = max(float(intraday.sessions or 0.0), 0.0)
         intraday.users = max(float(intraday.users or 0.0), 0.0)
         intraday.conversion_rate = max(float(intraday.conversion_rate or 0.0), 0.0)
@@ -534,7 +533,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         return {
             "ok": True,
             "records_processed": len(all_orders),
-            "business_dates": len(daily),
+            "business_dates": rebuilt_dates,
             **stats,
             "duration_ms": duration_ms,
         }
