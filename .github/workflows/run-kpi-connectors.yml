@@ -45,17 +45,17 @@ jobs:
           ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<EOF
           set -euo pipefail
           cd /opt/spiderclawkpi/spider/apps/spider-kpi
-          python3 - <<PY
+          export INPUT_SHOPIFY='${INPUT_SHOPIFY}'
+          export INPUT_TRIPLEWHALE='${INPUT_TRIPLEWHALE}'
+          export INPUT_FRESHDESK='${INPUT_FRESHDESK}'
+          ./.venv/bin/python - <<'PY'
+import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 pw = Path('.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
 base = 'http://127.0.0.1:8000'
-for enabled, source in [
-    (${INPUT_SHOPIFY@Q}.lower() == 'true', 'shopify'),
-    (${INPUT_TRIPLEWHALE@Q}.lower() == 'true', 'triplewhale'),
-    (${INPUT_FRESHDESK@Q}.lower() == 'true', 'freshdesk'),
-]:
-    if not enabled:
+for env_name, source in [('INPUT_SHOPIFY', 'shopify'), ('INPUT_TRIPLEWHALE', 'triplewhale'), ('INPUT_FRESHDESK', 'freshdesk')]:
+    if os.getenv(env_name, 'true').lower() != 'true':
         continue
     req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
     req.add_header('X-App-Password', pw)

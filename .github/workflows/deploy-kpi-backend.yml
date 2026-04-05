@@ -64,10 +64,10 @@ jobs:
           ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
           set -euo pipefail
           cd /opt/spiderclawkpi/spider/apps/spider-kpi
-          APP_PASSWORD=$(grep '^APP_PASSWORD=' .env | cut -d= -f2-)
-          python3 - <<PY
+          ./.venv/bin/python - <<'PY'
+from pathlib import Path
 from urllib.request import Request, urlopen
-pw = ${APP_PASSWORD@Q}
+pw = Path('.env').read_text().split('APP_PASSWORD=', 1)[1].splitlines()[0].strip()
 base = 'http://127.0.0.1:8000'
 for source in ['shopify', 'triplewhale', 'freshdesk']:
     req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
