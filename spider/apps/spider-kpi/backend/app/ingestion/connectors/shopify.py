@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from requests.utils import parse_header_links
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -203,6 +203,90 @@ def _latest_event(db: Session, event_type: str, order_id: str) -> ShopifyOrderEv
     ).scalars().first()
 
 
+def _latest_order_state(db: Session, order_id: str) -> ShopifyOrderEvent | None:
+    return db.execute(
+        select(ShopifyOrderEvent)
+        .where(ShopifyOrderEvent.order_id == order_id)
+        .order_by(ShopifyOrderEvent.event_timestamp.desc().nullslast(), ShopifyOrderEvent.id.desc())
+        .limit(1)
+    ).scalars().first()
+
+
+def _normalized_payload_from_order(order: dict[str, Any], financials: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": order.get("id"),
+        "created_at": order.get("created_at"),
+        "updated_at": order.get("updated_at"),
+        "processed_at": order.get("processed_at"),
+        "total_price": order.get("total_price"),
+        "current_total_price": order.get("current_total_price"),
+        "financial_status": order.get("financial_status"),
+        "cancelled_at": order.get("cancelled_at"),
+        "recognized_revenue": financials["recognized_revenue"],
+        "refunds": financials["refunds"],
+        "counts_as_order": financials["counts_as_order"],
+        "customer_id": ((order.get("customer") or {}).get("id")),
+    }
+
+
+def _fetch_order_by_id(order_id: str) -> dict[str, Any] | None:
+    session = build_session()
+    shop_domain = _normalize_shop_domain(settings.shopify_store_url)
+    endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders/{order_id}.json"
+    response = _request_json(session, endpoint, params={
+        "fields": "id,created_at,updated_at,processed_at,total_price,current_total_price,financial_status,cancelled_at,customer.id"
+    })
+    payload = response.json()
+    return payload.get("order")
+
+
+def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.date]) -> int:
+    if not business_dates:
+        return 0
+
+    order_ids = {
+        row.order_id
+        for row in db.execute(
+            select(ShopifyOrderEvent)
+            .where(ShopifyOrderEvent.business_date.in_(business_dates))
+        ).scalars().all()
+        if row.order_id
+    }
+
+    daily: dict[datetime.date, dict[str, float]] = {d: {"orders": 0, "revenue": 0.0, "refunds": 0.0} for d in business_dates}
+    for order_id in order_ids:
+        latest = _latest_order_state(db, order_id)
+        if latest is None:
+            continue
+        payload = latest.normalized_payload or {}
+        created_at = payload.get("created_at")
+        if not created_at:
+            continue
+        order_dt = _parse_datetime(str(created_at))
+        business_date = _business_date_from_dt(order_dt)
+        if business_date not in business_dates:
+            continue
+        if business_date not in daily:
+            daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0}
+        if payload.get("counts_as_order"):
+            daily[business_date]["orders"] += 1
+        daily[business_date]["revenue"] += float(payload.get("recognized_revenue") or payload.get("current_total_price") or payload.get("total_price") or 0.0)
+        daily[business_date]["refunds"] += float(payload.get("refunds") or 0.0)
+
+    for business_date in business_dates:
+        record = db.execute(select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date == business_date)).scalars().first()
+        values = daily.get(business_date, {"orders": 0, "revenue": 0.0, "refunds": 0.0})
+        if record is None:
+            record = ShopifyOrderDaily(business_date=business_date)
+            db.add(record)
+        record.orders = int(values["orders"])
+        record.revenue = float(values["revenue"])
+        record.refunds = float(values["refunds"])
+        record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
+    db.commit()
+    return len(business_dates)
+
+
 def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> ShopifyOrderEvent:
     order_id = str(payload.get("id")) if payload.get("id") is not None else None
     created_at = payload.get("created_at") or payload.get("updated_at")
@@ -211,31 +295,19 @@ def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> Sho
         existing = _latest_event(db, topic, order_id)
         if existing and existing.event_timestamp == event_ts:
             existing.raw_payload = payload
-            existing.normalized_payload = {
-                "id": payload.get("id"),
-                "created_at": payload.get("created_at"),
-                "updated_at": payload.get("updated_at"),
-                "total_price": payload.get("total_price"),
-                "financial_status": payload.get("financial_status"),
-                "fulfillment_status": payload.get("fulfillment_status"),
-            }
+            financials = _extract_financials(payload)
+            existing.normalized_payload = _normalized_payload_from_order(payload, financials)
             db.commit()
             db.refresh(existing)
             return existing
+    financials = _extract_financials(payload)
     event = ShopifyOrderEvent(
         event_type=topic,
         order_id=order_id,
         event_timestamp=event_ts,
         business_date=_business_date_from_dt(event_ts) if event_ts else None,
         raw_payload=payload,
-        normalized_payload={
-            "id": payload.get("id"),
-            "created_at": payload.get("created_at"),
-            "updated_at": payload.get("updated_at"),
-            "total_price": payload.get("total_price"),
-            "financial_status": payload.get("financial_status"),
-            "fulfillment_status": payload.get("fulfillment_status"),
-        },
+        normalized_payload=_normalized_payload_from_order(payload, financials),
     )
     db.add(event)
     db.commit()
@@ -335,17 +407,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             event_record = _latest_event(db, "poll.order_snapshot", order_id)
             updated_at = _parse_datetime(str(order.get("updated_at") or order.get("created_at")))
             normalized_payload = {
-                "id": order.get("id"),
-                "created_at": order.get("created_at"),
-                "updated_at": order.get("updated_at"),
-                "total_price": order.get("total_price"),
-                "current_total_price": order.get("current_total_price"),
-                "financial_status": order.get("financial_status"),
-                "cancelled_at": order.get("cancelled_at"),
-                "recognized_revenue": financials["recognized_revenue"],
-                "refunds": financials["refunds"],
-                "counts_as_order": financials["counts_as_order"],
-                "customer_id": ((order.get("customer") or {}).get("id")),
+                **_normalized_payload_from_order(order, financials)
             }
             if event_record is None:
                 db.add(
