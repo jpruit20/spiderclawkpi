@@ -17,5 +17,7 @@ def db_session() -> Generator[Session, None, None]:
 def require_auth(x_app_password: str | None = Header(default=None, alias="X-App-Password")) -> None:
     if settings.auth_disabled:
         return
+    if not settings.app_password or settings.app_password == "change-me":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     if x_app_password != settings.app_password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")

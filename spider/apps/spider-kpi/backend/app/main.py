@@ -24,6 +24,11 @@ FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.debug and not settings.auth_disabled:
+        if not settings.app_password or settings.app_password == "change-me":
+            raise RuntimeError("APP_PASSWORD must be set to a non-default value when auth is enabled")
+        if not settings.jwt_secret or settings.jwt_secret == "change-me":
+            raise RuntimeError("JWT_SECRET must be set to a non-default value in production")
     scheduler.start()
     try:
         yield
