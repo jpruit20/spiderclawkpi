@@ -49,17 +49,17 @@ jobs:
           export INPUT_TRIPLEWHALE='${INPUT_TRIPLEWHALE}'
           export INPUT_FRESHDESK='${INPUT_FRESHDESK}'
           ./.venv/bin/python - <<'PY'
-import os
-from pathlib import Path
-from urllib.request import Request, urlopen
-pw = Path('.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
-base = 'http://127.0.0.1:8000'
-for env_name, source in [('INPUT_SHOPIFY', 'shopify'), ('INPUT_TRIPLEWHALE', 'triplewhale'), ('INPUT_FRESHDESK', 'freshdesk')]:
-    if os.getenv(env_name, 'true').lower() != 'true':
-        continue
-    req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
-    req.add_header('X-App-Password', pw)
-    print(source, urlopen(req).read().decode())
-PY
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          pw = Path('.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
+          base = 'http://127.0.0.1:8000'
+          for env_name, source in [('INPUT_SHOPIFY', 'shopify'), ('INPUT_TRIPLEWHALE', 'triplewhale'), ('INPUT_FRESHDESK', 'freshdesk')]:
+              if os.getenv(env_name, 'true').lower() != 'true':
+                  continue
+              req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
+              req.add_header('X-App-Password', pw)
+              print(source, urlopen(req).read().decode())
+          PY
           curl -fsS http://127.0.0.1:8000/api/source-health
           EOF

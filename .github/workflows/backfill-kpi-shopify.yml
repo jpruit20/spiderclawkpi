@@ -53,20 +53,20 @@ jobs:
           APP_PASSWORD=
           APP_PASSWORD=$(grep '^APP_PASSWORD=' .env | cut -d= -f2-)
           python3 - <<PY
-from urllib.request import Request, urlopen
-pw = ${APP_PASSWORD@Q}
-hours = ${INPUT_HOURS@Q}
-run_recent = ${INPUT_RUN_RECENT@Q}.lower() == 'true'
-base = 'http://127.0.0.1:8000'
-for path in [f'/api/admin/backfill/shopify?hours={hours}']:
-    req = Request(base + path, method='POST')
-    req.add_header('X-App-Password', pw)
-    print(path, urlopen(req).read().decode())
-if run_recent:
-    req = Request(base + '/api/admin/run-sync/shopify', method='POST')
-    req.add_header('X-App-Password', pw)
-    print('/api/admin/run-sync/shopify', urlopen(req).read().decode())
-PY
+          from urllib.request import Request, urlopen
+          pw = ${APP_PASSWORD@Q}
+          hours = ${INPUT_HOURS@Q}
+          run_recent = ${INPUT_RUN_RECENT@Q}.lower() == 'true'
+          base = 'http://127.0.0.1:8000'
+          for path in [f'/api/admin/backfill/shopify?hours={hours}']:
+              req = Request(base + path, method='POST')
+              req.add_header('X-App-Password', pw)
+              print(path, urlopen(req).read().decode())
+          if run_recent:
+              req = Request(base + '/api/admin/run-sync/shopify', method='POST')
+              req.add_header('X-App-Password', pw)
+              print('/api/admin/run-sync/shopify', urlopen(req).read().decode())
+          PY
           DB_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
           ./.venv/bin/python scripts/validate_shopify_window.py --db-url "$DB_URL" --start "$INPUT_START" --end "$INPUT_END"
           EOF
