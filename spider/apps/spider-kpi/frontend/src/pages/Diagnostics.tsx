@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api } from '../lib/api'
 import { DiagnosticItem, RecommendationItem } from '../lib/types'
@@ -35,12 +36,19 @@ export function DiagnosticsPage() {
     }
   }, [])
 
+  const actionItems = useMemo(() => [
+    recommendations[0]?.recommended_action || 'No recommendation returned; inspect top diagnostics and source health before acting.',
+    diagnostics[0]?.root_cause ? `Highest-confidence root cause: ${diagnostics[0].root_cause}` : 'Root cause confidence is thin; widen the evidence set before committing changes.',
+    diagnostics[0]?.owner_team ? `Primary owner should be ${diagnostics[0].owner_team}.` : 'No owner tagged; assign clear operational ownership before remediation.',
+  ], [diagnostics, recommendations])
+
   return (
     <div className="page-grid">
       <div className="page-head">
         <h2>Diagnostics</h2>
         <p>What changed, why it changed, what to fix, and who should own it.</p>
       </div>
+      <ActionBlock items={actionItems} />
       {loading ? <Card title="Diagnostics Status"><div className="state-message">Loading live diagnostics…</div></Card> : null}
       {error ? <Card title="Diagnostics Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (

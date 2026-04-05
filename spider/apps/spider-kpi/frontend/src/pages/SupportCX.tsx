@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
+import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
@@ -220,6 +222,23 @@ export function SupportCX() {
     return flags
   }, [agentWorkload, currentRows, themeRows])
 
+  const provenanceItems: MetricProvenanceItem[] = [
+    {
+      metric: 'Tickets / Backlog / Response time',
+      sourceSystem: 'Freshdesk via backend support endpoints',
+      queryLogic: 'support overview rows + support agents + support tickets',
+      timeWindow: `${range.startDate} → ${range.endDate}`,
+      refreshCadence: 'Freshdesk poll sync',
+      transformationLogic: 'selected-range aggregation plus backlog snapshot at range end',
+      caveats: 'Agent/workload views depend on ticket ownership quality in Freshdesk.',
+    },
+  ]
+  const actionItems = [
+    managementFlags[0] || 'No urgent support management flag triggered in the selected range.',
+    burdenAvg > 20 ? 'Support burden is high relative to orders; inspect top issue themes and replacement/refund drivers immediately.' : 'Support burden is manageable; focus on preventing recurring top themes from rising.',
+    backlogSnapshotTickets.length > 200 ? 'Backlog is elevated; rebalance ownership and review unresolved queue aging.' : 'Backlog is not the primary risk; focus on first-response speed and issue-type concentration.',
+  ]
+
   return (
     <div className="page-grid">
       <div className="page-head">
@@ -229,6 +248,8 @@ export function SupportCX() {
       </div>
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+      <ActionBlock items={actionItems} />
+      <MetricProvenancePanel items={provenanceItems} />
 
       {loading ? <Card title="Support Status"><div className="state-message">Loading live support data…</div></Card> : null}
       {error ? <Card title="Support Error"><div className="state-message error">{error}</div></Card> : null}

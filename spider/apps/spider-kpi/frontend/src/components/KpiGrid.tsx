@@ -1,3 +1,4 @@
+import { toneForAov, toneForConversion, toneForMer } from '../lib/decisionSupport'
 import { KPIIntraday, IntradayStatus, KpiDisplayMode, KpiDisplayRow } from '../lib/types'
 
 function currency(value?: number | null) {
@@ -77,14 +78,14 @@ export function KpiGrid({
 
   const items = latest
     ? [
-        ['Revenue', currency(latest.revenue), false],
-        ['Orders', integer(latest.orders), false],
-        ['AOV', currency(latest.average_order_value), false],
-        ['Sessions', integer(latest.sessions), displayMode === 'today_intraday' && intradayUnavailable],
-        ['Conversion', percent(latest.conversion_rate), displayMode === 'today_intraday' && intradayUnavailable],
-        ['Revenue / Session', currency(latest.revenue_per_session), displayMode === 'today_intraday' && intradayUnavailable],
-        ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null],
-        ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null],
+        ['Revenue', currency(latest.revenue), false, 'neutral'],
+        ['Orders', integer(latest.orders), false, 'neutral'],
+        ['AOV', currency(latest.average_order_value), false, toneForAov(latest.average_order_value)],
+        ['Sessions', integer(latest.sessions), displayMode === 'today_intraday' && intradayUnavailable, 'neutral'],
+        ['Conversion', percent(latest.conversion_rate), displayMode === 'today_intraday' && intradayUnavailable, toneForConversion(latest.conversion_rate)],
+        ['Revenue / Session', currency(latest.revenue_per_session), displayMode === 'today_intraday' && intradayUnavailable, 'neutral'],
+        ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null, 'neutral'],
+        ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null, toneForMer(latest.mer)],
       ]
     : []
 
@@ -113,8 +114,8 @@ export function KpiGrid({
         <div className="state-message">{noDataMessage || 'No KPI summary returned.'}</div>
       ) : (
         <div className="kpi-grid">
-          {items.map(([label, value, unavailable]) => (
-            <div className="stat-card" key={String(label)}>
+          {items.map(([label, value, unavailable, tone]) => (
+            <div className={`stat-card ${tone !== 'neutral' ? `status-${tone}` : ''}`} key={String(label)}>
               <div className="stat-label">{label}</div>
               <div className="stat-value">{metricValue(String(value), Boolean(unavailable))}</div>
             </div>
