@@ -43,7 +43,16 @@ jobs:
           git pull --ff-only origin master
           systemctl restart spider-kpi.service
           systemctl is-active spider-kpi.service
-          curl -fsS http://127.0.0.1:8000/health
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "backend health check did not recover in time" >&2
+          systemctl status spider-kpi.service --no-pager || true
+          journalctl -u spider-kpi.service -n 80 --no-pager || true
+          exit 1
           EOF
 
       - name: Post-deploy backend validation
