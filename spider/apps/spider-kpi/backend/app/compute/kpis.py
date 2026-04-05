@@ -232,7 +232,6 @@ def recompute_daily_kpis(db: Session) -> int:
     intraday_events = db.execute(
         select(ShopifyOrderEvent)
         .where(
-            ShopifyOrderEvent.event_type == "poll.order_snapshot",
             ShopifyOrderEvent.business_date == intraday_business_date,
         )
         .order_by(ShopifyOrderEvent.event_timestamp.asc().nullslast(), ShopifyOrderEvent.id.asc())
@@ -253,9 +252,11 @@ def recompute_daily_kpis(db: Session) -> int:
             continue
         bucket = created_at.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
         row = cumulative_by_bucket.setdefault(bucket, {"orders": 0, "revenue": 0.0})
-        row["orders"] += 1
+        normalized = event.normalized_payload or {}
+        if normalized.get("counts_as_order"):
+            row["orders"] += 1
         try:
-            row["revenue"] += float((event.normalized_payload or {}).get("total_price") or 0.0)
+            row["revenue"] += float(normalized.get("recognized_revenue") or normalized.get("current_total_price") or normalized.get("total_price") or 0.0)
         except (TypeError, ValueError):
             pass
 
