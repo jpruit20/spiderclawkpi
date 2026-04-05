@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -76,16 +76,16 @@ class Settings(BaseSettings):
 
     triplewhale_api_key: Optional[str] = None
 
-    ga4_property_id: Optional[str] = None
-    ga4_client_email: Optional[str] = None
-    ga4_private_key: Optional[str] = None
-    ga4_project_id: Optional[str] = None
-    ga4_data_api_base_url: str = 'https://analyticsdata.googleapis.com/v1beta'
-    ga4_admin_api_base_url: str = 'https://analyticsadmin.googleapis.com/v1beta'
+    ga4_property_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_PROPERTY_ID', 'GOOGLE_ANALYTICS_PROPERTY_ID', 'GA_PROPERTY_ID'))
+    ga4_client_email: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_CLIENT_EMAIL', 'GOOGLE_ANALYTICS_CLIENT_EMAIL', 'GOOGLE_CLIENT_EMAIL'))
+    ga4_private_key: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_PRIVATE_KEY', 'GOOGLE_ANALYTICS_PRIVATE_KEY', 'GOOGLE_PRIVATE_KEY'))
+    ga4_project_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_PROJECT_ID', 'GOOGLE_ANALYTICS_PROJECT_ID', 'GOOGLE_PROJECT_ID'))
+    ga4_data_api_base_url: str = Field(default='https://analyticsdata.googleapis.com/v1beta', validation_alias=AliasChoices('GA4_DATA_API_BASE_URL', 'GOOGLE_ANALYTICS_DATA_API_BASE_URL'))
+    ga4_admin_api_base_url: str = Field(default='https://analyticsadmin.googleapis.com/v1beta', validation_alias=AliasChoices('GA4_ADMIN_API_BASE_URL', 'GOOGLE_ANALYTICS_ADMIN_API_BASE_URL'))
 
-    clarity_project_id: Optional[str] = None
-    clarity_api_token: Optional[str] = None
-    clarity_base_url: str = 'https://www.clarity.ms/export-data/api/v1'
+    clarity_project_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('CLARITY_PROJECT_ID', 'MICROSOFT_CLARITY_PROJECT_ID'))
+    clarity_api_token: Optional[str] = Field(default=None, validation_alias=AliasChoices('CLARITY_API_TOKEN', 'CLARITY_API_KEY', 'MICROSOFT_CLARITY_API_TOKEN', 'MICROSOFT_CLARITY_API_KEY'))
+    clarity_base_url: str = Field(default='https://www.clarity.ms/export-data/api/v1', validation_alias=AliasChoices('CLARITY_BASE_URL', 'MICROSOFT_CLARITY_BASE_URL'))
 
     freshdesk_domain: Optional[str] = None
     freshdesk_api_key: Optional[str] = None
