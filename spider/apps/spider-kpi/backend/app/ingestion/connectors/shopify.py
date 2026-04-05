@@ -240,6 +240,32 @@ def _fetch_order_by_id(order_id: str) -> dict[str, Any] | None:
     return payload.get("order")
 
 
+def _extract_order_id_for_topic(topic: str, payload: dict[str, Any]) -> str | None:
+    if payload.get("id") is not None and topic.startswith("orders/"):
+        return str(payload.get("id"))
+    if payload.get("order_id") is not None:
+        return str(payload.get("order_id"))
+    order = payload.get("order") or {}
+    if isinstance(order, dict) and order.get("id") is not None:
+        return str(order.get("id"))
+    return str(payload.get("id")) if payload.get("id") is not None else None
+
+
+def _canonicalize_webhook_payload(topic: str, payload: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    order_id = _extract_order_id_for_topic(topic, payload)
+    if not order_id:
+        return None, payload
+    if topic.startswith("orders/"):
+        return order_id, payload
+    try:
+        canonical = _fetch_order_by_id(order_id)
+        if canonical:
+            return order_id, canonical
+    except Exception:
+        logger.exception("shopify webhook canonical fetch failed", extra={"topic": topic, "order_id": order_id})
+    return order_id, payload
+
+
 def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.date]) -> int:
     if not business_dates:
         return 0
@@ -288,26 +314,27 @@ def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.
 
 
 def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> ShopifyOrderEvent:
-    order_id = str(payload.get("id")) if payload.get("id") is not None else None
-    created_at = payload.get("created_at") or payload.get("updated_at")
+    order_id, canonical_payload = _canonicalize_webhook_payload(topic, payload)
+    created_at = canonical_payload.get("created_at") or canonical_payload.get("updated_at") or payload.get("created_at") or payload.get("updated_at")
     event_ts = _parse_datetime(created_at) if created_at else None
     if order_id:
         existing = _latest_event(db, topic, order_id)
         if existing and existing.event_timestamp == event_ts:
             existing.raw_payload = payload
-            financials = _extract_financials(payload)
-            existing.normalized_payload = _normalized_payload_from_order(payload, financials)
+            financials = _extract_financials(canonical_payload)
+            existing.normalized_payload = _normalized_payload_from_order(canonical_payload, financials)
+            existing.business_date = _business_date_from_dt(event_ts) if event_ts else existing.business_date
             db.commit()
             db.refresh(existing)
             return existing
-    financials = _extract_financials(payload)
+    financials = _extract_financials(canonical_payload)
     event = ShopifyOrderEvent(
         event_type=topic,
         order_id=order_id,
         event_timestamp=event_ts,
         business_date=_business_date_from_dt(event_ts) if event_ts else None,
         raw_payload=payload,
-        normalized_payload=_normalized_payload_from_order(payload, financials),
+        normalized_payload=_normalized_payload_from_order(canonical_payload, financials),
     )
     db.add(event)
     db.commit()
