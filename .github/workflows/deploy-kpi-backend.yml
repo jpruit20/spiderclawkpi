@@ -9,7 +9,7 @@ on:
       - 'spider/apps/spider-kpi/deploy/**'
       - 'spider/apps/spider-kpi/README.md'
       - 'spider/apps/spider-kpi/DEPLOYMENT.md'
-      - 'spider/apps/spider-kpi/.github/workflows/deploy-kpi-backend.yml'
+      - '.github/workflows/deploy-kpi-backend.yml'
   workflow_dispatch:
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
         env:
           DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
           DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
-          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT || '22' }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
         run: |
           ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
           set -euo pipefail
@@ -50,7 +50,7 @@ jobs:
         env:
           DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
           DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
-          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT || '22' }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
         run: |
           ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
           set -euo pipefail
