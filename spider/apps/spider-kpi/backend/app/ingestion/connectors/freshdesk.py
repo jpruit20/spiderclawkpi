@@ -114,6 +114,46 @@ def _request_tickets(base_url: str, params: dict[str, Any], headers: dict[str, s
     )
 
 
+def _request_agents(base_url: str, params: dict[str, Any], headers: dict[str, str]) -> requests.Response:
+    request_url = f"{base_url}/agents"
+    if " " in request_url:
+        raise ValueError(f"Freshdesk request URL contains spaces: {request_url!r}")
+    if ".freshdesk.com/.freshdesk.com" in request_url or ".freshdesk.com.freshdesk.com" in request_url:
+        raise ValueError(f"Freshdesk request URL contains duplicate domain: {request_url}")
+    logger.info("freshdesk request", extra={"resolved_base_url": base_url, "request_url": request_url})
+    return requests.get(
+        request_url,
+        auth=_auth(),
+        headers=headers,
+        params=params,
+        timeout=TIMEOUT_SECONDS,
+    )
+
+
+def _fetch_agent_directory(base_url: str) -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    params = {"per_page": 100, "page": 1, "state": "full_time"}
+    directory: dict[str, str] = {}
+
+    while True:
+        response = _request_agents(base_url, params, headers)
+        response.raise_for_status()
+        batch = response.json()
+        if not batch:
+            break
+        for agent in batch:
+            agent_id = str(agent.get("id") or "").strip()
+            if not agent_id:
+                continue
+            name = str(agent.get("contact", {}).get("name") or agent.get("name") or agent.get("email") or agent_id).strip()
+            directory[agent_id] = name or agent_id
+        params["page"] += 1
+        if len(batch) < 100:
+            break
+
+    return directory
+
+
 def _clean_exception_message(exc: Exception, base_url: str | None = None) -> str:
     message = str(exc)
     if base_url:
@@ -133,7 +173,7 @@ def _extract_first_response_hours(ticket: dict[str, Any]) -> float:
     return 0.0
 
 
-def _rebuild_daily_marts(db: Session, start_date, end_date) -> None:
+def _rebuild_daily_marts(db: Session, start_date, end_date, agent_directory: dict[str, str] | None = None) -> None:
     if start_date is None or end_date is None or start_date > end_date:
         return
 
@@ -186,6 +226,12 @@ def _rebuild_daily_marts(db: Session, start_date, end_date) -> None:
         csat = float(ticket.csat_score or 0.0)
         reopened = 1 if status.lower() in {"reopened", "4"} else 0
         raw_payload = ticket.raw_payload or {}
+        agent_name = (
+            raw_payload.get("responder_name")
+            or raw_payload.get("responder", {}).get("name")
+            or (agent_directory or {}).get(agent_id)
+            or agent_id
+        )
         sla_breach = 1 if raw_payload.get("fr_escalated") or raw_payload.get("is_escalated") else 0
 
         if start_date <= created_business_date <= end_date:
@@ -199,7 +245,7 @@ def _rebuild_daily_marts(db: Session, start_date, end_date) -> None:
                 grouped_daily[created_business_date]["csat_total"] += csat
                 grouped_daily[created_business_date]["csat_count"] += 1
             grouped_group[(created_business_date, group_name)]["tickets_created"] += 1
-            grouped_agent[(created_business_date, agent_id)]["agent_name"] = agent_id
+            grouped_agent[(created_business_date, agent_id)]["agent_name"] = str(agent_name)
             if fr_hours > 0:
                 grouped_agent[(created_business_date, agent_id)]["first_response_hours_total"] += fr_hours
                 grouped_agent[(created_business_date, agent_id)]["first_response_count"] += 1
@@ -211,7 +257,7 @@ def _rebuild_daily_marts(db: Session, start_date, end_date) -> None:
                 grouped_daily[resolved_business_date]["resolution_count"] += 1
             grouped_group[(resolved_business_date, group_name)]["tickets_resolved"] += 1
             grouped_agent[(resolved_business_date, agent_id)]["tickets_resolved"] += 1
-            grouped_agent[(resolved_business_date, agent_id)]["agent_name"] = agent_id
+            grouped_agent[(resolved_business_date, agent_id)]["agent_name"] = str(agent_name)
             if res_hours > 0:
                 grouped_agent[(resolved_business_date, agent_id)]["resolution_hours_total"] += res_hours
                 grouped_agent[(resolved_business_date, agent_id)]["resolution_count"] += 1
@@ -313,6 +359,7 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
         all_tickets: list[dict[str, Any]] = []
         seen_ticket_ids: set[str] = set()
         base_url = _base_url()
+        agent_directory = _fetch_agent_directory(base_url)
 
         while True:
             response = _request_tickets(base_url, params, headers)
@@ -356,6 +403,7 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             channel = str(ticket.get("source") or "unknown")
             group_name = str(ticket.get("group_id") or "unassigned")
             agent_id = str(ticket.get("responder_id") or "unassigned")
+            responder_name = agent_directory.get(agent_id) or str(ticket.get("responder_name") or ticket.get("responder", {}).get("name") or agent_id)
             fr_hours = _extract_first_response_hours(ticket)
             res_hours = ((resolved_at - created_at).total_seconds() / 3600.0) if resolved_at else 0.0
             csat = float(ticket.get("satisfaction_rating", {}).get("score") or 0.0)
@@ -381,7 +429,7 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             record.csat_score = csat if csat > 0 else None
             record.tags_json = ticket.get("tags") or []
             record.category = (ticket.get("tags") or [None])[0]
-            record.raw_payload = ticket
+            record.raw_payload = {**ticket, "responder_name": responder_name}
 
             existing_event = db.execute(
                 select(FreshdeskTicketEvent)
@@ -413,7 +461,7 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
         if affected_dates:
             rebuild_start = min(affected_dates)
             rebuild_end = max(max(affected_dates), _business_date(datetime.now(timezone.utc)))
-            _rebuild_daily_marts(db, rebuild_start, rebuild_end)
+            _rebuild_daily_marts(db, rebuild_start, rebuild_end, agent_directory=agent_directory)
 
         duration_ms = int((time.monotonic() - started) * 1000)
         run.metadata_json = {**run.metadata_json, **stats, "duration_ms": duration_ms, "resolved_base_url": base_url}

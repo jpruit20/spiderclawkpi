@@ -29,6 +29,7 @@
 
 ## Current implementation notes
 - Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
+- Freshdesk agent-name enrichment is being added at ingestion/mart rebuild time so Support / CX agent tables show human-readable names instead of responder IDs.
 - Replaced the separate `spider-kpi/` Vercel auth shell from manual OAuth redirects to an embedded-app pattern using App Bridge-authenticated backend requests, server-side session-token verification, and Shopify token exchange.
 - Added `spider-kpi/shopify.app.toml` with embedded=true, production application URL `https://kpi.spidergrills.com`, and required KPI scopes.
 - Added a minimal embedded homepage that checks session-backed backend auth, token exchange, and an Admin API read.
