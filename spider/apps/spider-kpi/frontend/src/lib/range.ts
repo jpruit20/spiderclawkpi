@@ -31,7 +31,10 @@ export function dateInputValue(value?: string) {
 
 export function buildPresetRange(preset: Exclude<RangePreset, 'custom'>, rows: { business_date: string }[], options: BuildPresetOptions = {}): RangeState {
   const sorted = [...rows].sort((a, b) => a.business_date.localeCompare(b.business_date))
-  const latest = options.anchorDate || sorted[sorted.length - 1]?.business_date || businessTodayDate()
+  const requestedLatest = options.anchorDate || sorted[sorted.length - 1]?.business_date || businessTodayDate()
+  const latest = sorted.some((row) => row.business_date === requestedLatest)
+    ? requestedLatest
+    : (sorted[sorted.length - 1]?.business_date || requestedLatest)
   if (preset === 'today') {
     return { preset, startDate: latest, endDate: latest }
   }
