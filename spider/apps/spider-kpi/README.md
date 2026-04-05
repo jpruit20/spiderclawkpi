@@ -128,6 +128,7 @@ Use:
 - API-backed source health as the operational truth
 
 See `DEPLOYMENT.md` for the locked deploy path.
+See `deploy/PRODUCTION_RUNBOOK.md` for the current Vercel + DigitalOcean production deploy and validation workflow.
 
 ## Notes
 
