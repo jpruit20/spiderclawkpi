@@ -14,7 +14,6 @@ import type {
 
 const DEFAULT_API_BASE = ''
 const API_BASE = (import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).replace(/\/$/, '')
-const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD || ''
 
 type RequestOptions = {
   signal?: AbortSignal
@@ -35,14 +34,13 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { signal, timeoutMs = 15000 } = options
-  const headers: HeadersInit = APP_PASSWORD ? { 'X-App-Password': APP_PASSWORD } : {}
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   const abortListener = () => controller.abort()
   signal?.addEventListener('abort', abortListener)
 
   try {
-    const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers, signal: controller.signal })
+    const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
       throw new ApiError(`API error ${response.status} for ${path}${detail ? `: ${detail}` : ''}`, response.status, path)

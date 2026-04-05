@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://spider:spider@db:5432/spider_kpi"
     cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
-    app_password: str = "spider-kpi"
-    auth_disabled: bool = True
+    app_password: str = "change-me"
+    auth_disabled: bool = False
     jwt_secret: str = "change-me"
 
     shopify_store_url: Optional[str] = None
