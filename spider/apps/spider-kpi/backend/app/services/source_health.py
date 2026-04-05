@@ -67,7 +67,20 @@ def start_sync_run(db: Session, source_name: str, sync_type: str, metadata_json:
         .limit(1)
     ).scalars().first()
     if existing_running is not None:
-        return existing_running
+        started_at = existing_running.started_at or existing_running.created_at
+        if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=30):
+            existing_running.status = "failed"
+            existing_running.finished_at = datetime.now(timezone.utc)
+            existing_running.error_message = "Stale running sync expired automatically before starting a fresh run."
+            existing_running.metadata_json = {
+                **(existing_running.metadata_json or {}),
+                "auto_expired": True,
+                "expired_at": datetime.now(timezone.utc).isoformat(),
+            }
+            db.add(existing_running)
+            db.flush()
+        else:
+            return existing_running
 
     run = SourceSyncRun(
         source_name=source_name,
