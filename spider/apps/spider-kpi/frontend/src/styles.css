@@ -154,7 +154,8 @@ a { color: inherit; }
 }
 
 .scope-note,
-.scope-banner {
+.scope-banner,
+.stale-banner {
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.03);
   border-radius: 18px;
@@ -262,6 +263,11 @@ a { color: inherit; }
 .stack-list {
   display: grid;
   gap: 12px;
+}
+
+.stack-list.compact {
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .list-item {
@@ -380,6 +386,24 @@ th {
 .mini-metrics {
   display: grid;
   gap: 8px;
+}
+
+.provenance-panel summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--text);
+}
+
+.provenance-panel summary small {
+  color: var(--muted);
+}
+
+.stale-banner strong {
+  display: block;
+  color: var(--orange);
 }
 
 @media (max-width: 1400px) {

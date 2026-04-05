@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
+import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
@@ -108,6 +110,31 @@ export function CommercialPerformance() {
   const trafficContribution = priorRevenue ? ((currentSessions - priorSessions) / Math.max(priorSessions, 1)) * 100 : 0
   const conversionContribution = priorConversion ? ((currentConversion - priorConversion) / priorConversion) * 100 : 0
   const aovContribution = priorAov ? ((currentAov - priorAov) / priorAov) * 100 : 0
+  const provenanceItems: MetricProvenanceItem[] = [
+    {
+      metric: 'Revenue / Orders / AOV',
+      sourceSystem: 'Shopify via backend /api/kpis/daily',
+      queryLogic: 'daily KPI rows filtered to selected range',
+      timeWindow: `${range.startDate} → ${range.endDate}`,
+      refreshCadence: 'Shopify poll + webhook backed sync',
+      transformationLogic: 'range sum with derived AOV',
+      caveats: 'Business-date attribution follows backend KPI mart logic.',
+    },
+    {
+      metric: 'Sessions / Conversion / MER',
+      sourceSystem: 'Triple Whale + KPI mart via /api/kpis/daily',
+      queryLogic: 'daily KPI rows filtered to selected range',
+      timeWindow: `${range.startDate} → ${range.endDate}`,
+      refreshCadence: 'Triple Whale poll sync',
+      transformationLogic: 'range sum with derived conversion and MER',
+      caveats: 'Comparison quality depends on a full prior window being available.',
+    },
+  ]
+  const actionItems = [
+    currentMer < 3 ? 'MER is soft; inspect paid efficiency and landing page conversion before increasing spend.' : 'MER is holding; focus on where volume quality or AOV can move the next decision.',
+    currentConversion < 1 ? 'Conversion is below a healthy operating band; inspect session-to-cart and checkout leakage before traffic expansion.' : 'Conversion is not the primary bottleneck; inspect AOV and merchandising mix.',
+    currentAov < 400 ? 'AOV is below target shape; prioritize bundles, accessories, and SKU-mix interventions.' : 'AOV is supportive; next action should focus on volume quality and order rate.',
+  ]
 
   return (
     <div className="page-grid">
@@ -118,6 +145,9 @@ export function CommercialPerformance() {
       </div>
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+
+      <ActionBlock items={actionItems} />
+      <MetricProvenancePanel items={provenanceItems} />
 
       {loading ? (
         <Card title="Performance Summary"><div className="state-message">Loading live KPI summary…</div></Card>

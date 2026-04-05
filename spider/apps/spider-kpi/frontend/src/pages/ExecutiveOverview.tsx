@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { KpiGrid } from '../components/KpiGrid'
+import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
+import { StaleDataBanner } from '../components/StaleDataBanner'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
@@ -205,6 +208,40 @@ export function ExecutiveOverview() {
       ? { status: 'partial' as IntradayStatus, message: `Intraday summary endpoint failed, but hourly series is available. ${intradayError}` }
       : computedIntradayState
   const scopeLabel = summarizeRangeLabel(range)
+  const provenanceItems: MetricProvenanceItem[] = [
+    {
+      metric: 'Revenue',
+      sourceSystem: 'Shopify via backend /api/overview',
+      queryLogic: 'overview.daily_series -> summarize selected range',
+      timeWindow: scopeLabel,
+      refreshCadence: 'poll + webhook backed sync, visible in source health',
+      transformationLogic: 'selected-range sum of kpi_daily.revenue',
+      caveats: displayKpi?.is_partial_day ? 'Partial-day or intraday values may be incomplete.' : 'Dependent on current Shopify truth rebuild path.',
+    },
+    {
+      metric: 'Orders',
+      sourceSystem: 'Shopify via backend /api/overview',
+      queryLogic: 'overview.daily_series -> summarize selected range',
+      timeWindow: scopeLabel,
+      refreshCadence: 'poll + webhook backed sync, visible in source health',
+      transformationLogic: 'selected-range sum of kpi_daily.orders',
+      caveats: 'Order counts inherit backend business-date attribution and latest-order-state logic.',
+    },
+    {
+      metric: 'Sessions',
+      sourceSystem: 'Triple Whale via backend /api/overview',
+      queryLogic: 'overview.daily_series sessions field',
+      timeWindow: scopeLabel,
+      refreshCadence: 'poll sync, visible in source health',
+      transformationLogic: 'selected-range sum of kpi_daily.sessions',
+      caveats: 'If intraday sessions lag, UI marks partial/unavailable instead of silently showing zero.',
+    },
+  ]
+  const actionItems = [
+    liveConnectors.some((row) => row.derived_status !== 'healthy') ? 'Resolve stale or failed connectors before acting on directional changes.' : 'Live connectors are healthy; use movement in revenue, sessions, and orders as decision-grade signals.',
+    rangeRows.length < 3 ? 'Widen the date range before making directional decisions; current window is too thin.' : 'Compare this range against the prior period before making budget or channel changes.',
+    (data?.alerts?.[0]?.message || data?.recommendations?.[0]?.recommended_action) ? `First priority: ${data?.recommendations?.[0]?.recommended_action || data?.alerts?.[0]?.message}` : 'No priority recommendation returned; inspect Diagnostics and Source Health before changing operations.',
+  ]
 
   return (
     <div className="page-grid">
@@ -215,6 +252,7 @@ export function ExecutiveOverview() {
       </div>
 
       <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
+      <StaleDataBanner rows={liveConnectors} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
       {error ? <Card title="Overview Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
@@ -222,6 +260,8 @@ export function ExecutiveOverview() {
       {!loading && !error && data ? (
         <>
           <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} />
+          <ActionBlock items={actionItems} />
+          <MetricProvenancePanel items={provenanceItems} />
           <div className="two-col two-col-equal">
             <Card title="Revenue + Sessions Trend">
               {range.preset === 'today' ? (
