@@ -83,11 +83,19 @@ After a Shopify deploy/backfill, validate all of these:
 Shopify polling must rebuild touched dates from canonical latest per-order state.
 Do **not** overwrite `shopify_orders_daily` directly from a partial recent poll window.
 
-## To make backend deploys fully automatic later
+## Backend automation status
 
-One of the following still needs to be added:
-- GitHub Action that SSHes into the droplet, pulls latest code, restarts service, and optionally runs validation
-- webhook receiver on the droplet that performs `git pull` + restart
-- managed deployment system (e.g. DO App Platform, deploy agent, or CI runner on droplet)
+Implemented:
+- GitHub Actions deploy workflow for backend code deploys (`Deploy KPI Backend`)
+- GitHub Actions manual Shopify backfill workflow (`Backfill KPI Shopify`)
 
-Until one of those exists, backend deploys remain push-to-GitHub + pull-on-droplet.
+Current model:
+- backend code changes can auto-deploy on push to `master`
+- historical Shopify repair/backfill is manually triggerable from GitHub Actions with explicit window inputs
+
+## Manual backfill workflow
+
+Use the `Backfill KPI Shopify` workflow in GitHub Actions when you need to:
+- repair historical Shopify days
+- repopulate a wider historical window after connector logic changes
+- validate `shopify_orders_daily` and `kpi_daily` for a specific date range

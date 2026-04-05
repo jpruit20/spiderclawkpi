@@ -1,0 +1,72 @@
+name: Backfill KPI Shopify
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'How many hours of Shopify history to backfill'
+        required: true
+        default: '1080'
+      validate_start:
+        description: 'Validation window start date (YYYY-MM-DD)'
+        required: true
+        default: '2026-03-29'
+      validate_end:
+        description: 'Validation window end date (YYYY-MM-DD)'
+        required: true
+        default: '2026-04-05'
+      run_recent_sync:
+        description: 'Run a normal recent Shopify sync after backfill'
+        required: true
+        default: 'true'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DO_KPI_SSH_KEY }}
+
+      - name: Add droplet host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run Shopify backfill on droplet
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+          INPUT_HOURS: ${{ github.event.inputs.hours }}
+          INPUT_START: ${{ github.event.inputs.validate_start }}
+          INPUT_END: ${{ github.event.inputs.validate_end }}
+          INPUT_RUN_RECENT: ${{ github.event.inputs.run_recent_sync }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<EOF
+          set -euo pipefail
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          APP_PASSWORD=
+          APP_PASSWORD=$(grep '^APP_PASSWORD=' .env | cut -d= -f2-)
+          python3 - <<PY
+from urllib.request import Request, urlopen
+pw = ${APP_PASSWORD@Q}
+hours = ${INPUT_HOURS@Q}
+run_recent = ${INPUT_RUN_RECENT@Q}.lower() == 'true'
+base = 'http://127.0.0.1:8000'
+for path in [f'/api/admin/backfill/shopify?hours={hours}']:
+    req = Request(base + path, method='POST')
+    req.add_header('X-App-Password', pw)
+    print(path, urlopen(req).read().decode())
+if run_recent:
+    req = Request(base + '/api/admin/run-sync/shopify', method='POST')
+    req.add_header('X-App-Password', pw)
+    print('/api/admin/run-sync/shopify', urlopen(req).read().decode())
+PY
+          DB_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
+          ./.venv/bin/python scripts/validate_shopify_window.py --db-url "$DB_URL" --start "$INPUT_START" --end "$INPUT_END"
+          EOF
