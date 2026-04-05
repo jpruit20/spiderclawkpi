@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 
-BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi")
+BASE_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = BASE_DIR / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
