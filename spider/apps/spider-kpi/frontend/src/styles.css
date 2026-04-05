@@ -113,7 +113,8 @@ a { color: inherit; }
   flex-wrap: wrap;
 }
 
-.range-group {
+.range-group,
+.compare-toolbar {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;

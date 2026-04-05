@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
+import { CompareToolbar } from '../components/CompareToolbar'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
+import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { KPIDaily } from '../lib/types'
 import { useUrlRange } from '../lib/urlRange'
@@ -45,6 +47,7 @@ export function CommercialPerformance() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
+  const [compareMode, setCompareMode] = useState<CompareMode>('prior_period')
   const requestIdRef = useRef(0)
   const hydratedRangeRef = useRef(false)
 
@@ -93,11 +96,10 @@ export function CommercialPerformance() {
   const currentMer = currentAdSpend ? currentRevenue / currentAdSpend : 0
 
   const priorRows = useMemo(() => {
-    const endIndex = rows.findIndex((row) => row.business_date === range.startDate)
-    const span = currentRows.length
-    if (endIndex <= 0 || !span) return []
-    return rows.slice(Math.max(0, endIndex - span), endIndex)
-  }, [rows, range, currentRows])
+    if (compareMode === 'same_day_last_week') return sameDayLastWeekRows(rows, currentRows)
+    if (compareMode === 'none') return []
+    return priorPeriodRows(rows, range.startDate, currentRows.length)
+  }, [compareMode, rows, range.startDate, currentRows])
 
   const priorRevenue = sum(priorRows, 'revenue')
   const priorSessions = sum(priorRows, 'sessions')
@@ -107,6 +109,8 @@ export function CommercialPerformance() {
   const priorAov = priorOrders ? priorRevenue / priorOrders : 0
   const priorMer = priorAdSpend ? priorRevenue / priorAdSpend : 0
   const priorComparable = priorRows.length === currentRows.length && currentRows.length > 0
+  const revenueCompare = compareValue(currentRevenue, priorComparable ? priorRevenue : null, 'Revenue')
+  const ordersCompare = compareValue(currentOrders, priorComparable ? priorOrders : null, 'Orders')
   const trafficContribution = priorRevenue ? ((currentSessions - priorSessions) / Math.max(priorSessions, 1)) * 100 : 0
   const conversionContribution = priorConversion ? ((currentConversion - priorConversion) / priorConversion) * 100 : 0
   const aovContribution = priorAov ? ((currentAov - priorAov) / priorAov) * 100 : 0
@@ -145,6 +149,7 @@ export function CommercialPerformance() {
       </div>
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+      <CompareToolbar mode={compareMode} onChange={setCompareMode} />
 
       <ActionBlock items={actionItems} />
       <MetricProvenancePanel items={provenanceItems} />
@@ -164,7 +169,8 @@ export function CommercialPerformance() {
             <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} comparable={priorComparable} format={(v) => `$${v.toFixed(2)}`} />
             <SummaryBlock label="MER" current={currentMer} prior={priorMer} comparable={priorComparable} format={(v) => v.toFixed(2)} />
           </div>
-          {!priorComparable ? <div className="state-message">Prior period incomplete; comparison may be distorted.</div> : null}
+          {!priorComparable ? <div className="state-message">Comparison window incomplete; deltas may be distorted.</div> : null}
+          {priorComparable ? <div className="scope-note">Compare mode: {compareMode === 'same_day_last_week' ? 'Same day last week' : 'Prior period'} · Revenue {formatDeltaPct(revenueCompare.deltaPct)} · Orders {formatDeltaPct(ordersCompare.deltaPct)}</div> : null}
         </>
       ) : (
         <Card title="Performance Summary"><div className="state-message">No KPI rows returned.</div></Card>
