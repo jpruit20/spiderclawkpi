@@ -275,7 +275,9 @@ export function ExecutiveOverview() {
                       <div className="item-head">
                         <strong>{item.source}</strong>
                         <div className="inline-badges">
-                          <span className={`badge ${item.configured && item.latest_run_status === 'success' ? 'badge-good' : 'badge-neutral'}`}>{item.configured && item.latest_run_status === 'success' ? 'Live' : 'Configured'}</span>
+                          <span className={`badge ${item.configured && item.latest_run_status === 'success' ? 'badge-good' : item.configured ? 'badge-neutral' : 'badge-warn'}`}>
+                            {item.configured && item.latest_run_status === 'success' ? 'Live' : item.configured ? 'Configured' : 'Not configured'}
+                          </span>
                           <span className={`badge ${truthfulHealthy ? 'badge-good' : 'badge-neutral'}`}>{truthfulHealthy ? 'healthy' : item.derived_status}</span>
                         </div>
                       </div>
