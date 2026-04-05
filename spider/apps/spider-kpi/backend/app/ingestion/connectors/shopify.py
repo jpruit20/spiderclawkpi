@@ -266,6 +266,14 @@ def _canonicalize_webhook_payload(topic: str, payload: dict[str, Any]) -> tuple[
     return order_id, payload
 
 
+def _event_timestamp_from_payload(payload: dict[str, Any]) -> datetime | None:
+    for key in ("updated_at", "processed_at", "created_at"):
+        value = payload.get(key)
+        if value:
+            return _parse_datetime(str(value))
+    return None
+
+
 def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.date]) -> int:
     if not business_dates:
         return 0
@@ -315,11 +323,10 @@ def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.
 
 def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> ShopifyOrderEvent:
     order_id, canonical_payload = _canonicalize_webhook_payload(topic, payload)
-    created_at = canonical_payload.get("created_at") or canonical_payload.get("updated_at") or payload.get("created_at") or payload.get("updated_at")
-    event_ts = _parse_datetime(created_at) if created_at else None
+    event_ts = _event_timestamp_from_payload(canonical_payload) or _event_timestamp_from_payload(payload)
     if order_id:
         existing = _latest_event(db, topic, order_id)
-        if existing and existing.event_timestamp == event_ts:
+        if existing and existing.event_timestamp == event_ts and existing.raw_payload == payload:
             existing.raw_payload = payload
             financials = _extract_financials(canonical_payload)
             existing.normalized_payload = _normalized_payload_from_order(canonical_payload, financials)
