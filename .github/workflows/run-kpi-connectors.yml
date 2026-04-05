@@ -1,0 +1,65 @@
+name: Run KPI Connectors
+
+on:
+  workflow_dispatch:
+    inputs:
+      shopify:
+        description: 'Run Shopify sync'
+        required: true
+        default: 'true'
+      triplewhale:
+        description: 'Run Triple Whale sync'
+        required: true
+        default: 'true'
+      freshdesk:
+        description: 'Run Freshdesk sync'
+        required: true
+        default: 'true'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DO_KPI_SSH_KEY }}
+
+      - name: Add droplet host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run selected connector syncs on droplet
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+          INPUT_SHOPIFY: ${{ github.event.inputs.shopify }}
+          INPUT_TRIPLEWHALE: ${{ github.event.inputs.triplewhale }}
+          INPUT_FRESHDESK: ${{ github.event.inputs.freshdesk }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<EOF
+          set -euo pipefail
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          python3 - <<PY
+from pathlib import Path
+from urllib.request import Request, urlopen
+pw = Path('.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
+base = 'http://127.0.0.1:8000'
+for enabled, source in [
+    (${INPUT_SHOPIFY@Q}.lower() == 'true', 'shopify'),
+    (${INPUT_TRIPLEWHALE@Q}.lower() == 'true', 'triplewhale'),
+    (${INPUT_FRESHDESK@Q}.lower() == 'true', 'freshdesk'),
+]:
+    if not enabled:
+        continue
+    req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
+    req.add_header('X-App-Password', pw)
+    print(source, urlopen(req).read().decode())
+PY
+          curl -fsS http://127.0.0.1:8000/api/source-health
+          EOF

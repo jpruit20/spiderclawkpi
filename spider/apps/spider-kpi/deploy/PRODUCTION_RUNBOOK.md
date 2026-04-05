@@ -88,6 +88,7 @@ Do **not** overwrite `shopify_orders_daily` directly from a partial recent poll 
 Implemented:
 - GitHub Actions deploy workflow for backend code deploys (`Deploy KPI Backend`)
 - GitHub Actions manual Shopify backfill workflow (`Backfill KPI Shopify`)
+- GitHub Actions manual connector sync workflow (`Run KPI Connectors`)
 
 Current model:
 - backend code changes can auto-deploy on push to `master`
