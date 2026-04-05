@@ -43,6 +43,7 @@ class ShopifyOrderEvent(TimestampMixin, Base):
     __tablename__ = "shopify_order_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_id: Mapped[Optional[str]] = mapped_column(String(128), unique=True, index=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     event_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)

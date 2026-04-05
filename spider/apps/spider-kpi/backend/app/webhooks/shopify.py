@@ -17,6 +17,8 @@ async def handle_shopify_webhook(
     db: Session = Depends(db_session),
     x_shopify_hmac_sha256: str | None = Header(default=None, alias="X-Shopify-Hmac-Sha256"),
     x_shopify_topic: str | None = Header(default=None, alias="X-Shopify-Topic"),
+    x_shopify_event_id: str | None = Header(default=None, alias="X-Shopify-Event-Id"),
+    x_shopify_webhook_id: str | None = Header(default=None, alias="X-Shopify-Webhook-Id"),
 ):
     raw_body = await request.body()
     if not verify_shopify_hmac(raw_body, x_shopify_hmac_sha256):
@@ -27,7 +29,8 @@ async def handle_shopify_webhook(
         raise HTTPException(status_code=400, detail="Missing X-Shopify-Topic")
 
     payload = json.loads(raw_body.decode("utf-8"))
-    event = store_webhook_event(db, topic, payload)
+    delivery_id = (x_shopify_event_id or x_shopify_webhook_id or "").strip() or None
+    event = store_webhook_event(db, topic, payload, delivery_id=delivery_id)
     touched_dates = {event.business_date} if event.business_date else set()
     created_at = (event.normalized_payload or {}).get("created_at")
     if created_at:

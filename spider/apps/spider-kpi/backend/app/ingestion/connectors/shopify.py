@@ -203,6 +203,12 @@ def _latest_event(db: Session, event_type: str, order_id: str) -> ShopifyOrderEv
     ).scalars().first()
 
 
+def _event_by_delivery_id(db: Session, delivery_id: str) -> ShopifyOrderEvent | None:
+    return db.execute(
+        select(ShopifyOrderEvent).where(ShopifyOrderEvent.delivery_id == delivery_id).limit(1)
+    ).scalars().first()
+
+
 def _latest_order_state(db: Session, order_id: str) -> ShopifyOrderEvent | None:
     return db.execute(
         select(ShopifyOrderEvent)
@@ -321,7 +327,11 @@ def rebuild_shopify_daily_from_events(db: Session, business_dates: set[datetime.
     return len(business_dates)
 
 
-def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> ShopifyOrderEvent:
+def store_webhook_event(db: Session, topic: str, payload: dict[str, Any], delivery_id: str | None = None) -> ShopifyOrderEvent:
+    if delivery_id:
+        existing_delivery = _event_by_delivery_id(db, delivery_id)
+        if existing_delivery is not None:
+            return existing_delivery
     order_id, canonical_payload = _canonicalize_webhook_payload(topic, payload)
     event_ts = _event_timestamp_from_payload(canonical_payload) or _event_timestamp_from_payload(payload)
     if order_id:
@@ -336,6 +346,7 @@ def store_webhook_event(db: Session, topic: str, payload: dict[str, Any]) -> Sho
             return existing
     financials = _extract_financials(canonical_payload)
     event = ShopifyOrderEvent(
+        delivery_id=delivery_id,
         event_type=topic,
         order_id=order_id,
         event_timestamp=event_ts,
