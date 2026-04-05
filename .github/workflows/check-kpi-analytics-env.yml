@@ -1,0 +1,52 @@
+name: Check KPI Analytics Env
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DO_KPI_SSH_KEY }}
+
+      - name: Add droplet host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Check GA4 / Clarity env on droplet
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
+          set -euo pipefail
+          cat >/tmp/check_kpi_env.py <<'PY'
+          import importlib.util
+          p = '/opt/spiderclawkpi/spider/apps/spider-kpi/backend/app/core/config.py'
+          spec = importlib.util.spec_from_file_location('backend_config', p)
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          s = m.get_settings()
+          data = {
+              'ga4_property_id': s.ga4_property_id,
+              'ga4_client_email': s.ga4_client_email,
+              'ga4_private_key': s.ga4_private_key,
+              'ga4_project_id': s.ga4_project_id,
+              'clarity_project_id': s.clarity_project_id,
+              'clarity_api_token': s.clarity_api_token,
+              'clarity_base_url': s.clarity_base_url,
+          }
+          for k, v in data.items():
+              print(k, 'set' if v else 'missing')
+          PY
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          ./.venv/bin/python /tmp/check_kpi_env.py
+          EOF
