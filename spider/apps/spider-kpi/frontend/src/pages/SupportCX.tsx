@@ -103,24 +103,16 @@ export function SupportCX() {
       assigned: number
       resolved: number
       openBacklog: number
-      firstResponseValues: number[]
-      resolutionValues: number[]
-      slaBreaches: number
-      totalTickets: number
     }>()
 
-    function ensureAgent(key: string, ticket?: FreshdeskTicketItem) {
-      const agent = ticket?.raw_payload?.responder_name || ticket?.agent_id || key
+    function ensureAgent(key: string, label?: string) {
+      const agent = label || key
       if (!map.has(key)) {
         map.set(key, {
           agent: String(agent || key),
           assigned: 0,
           resolved: 0,
           openBacklog: 0,
-          firstResponseValues: [],
-          resolutionValues: [],
-          slaBreaches: 0,
-          totalTickets: 0,
         })
       }
       return map.get(key)!
@@ -128,18 +120,19 @@ export function SupportCX() {
 
     rangeTickets.forEach((ticket) => {
       const key = ticket.agent_id || 'unassigned'
-      const row = ensureAgent(key, ticket)
+      const row = ensureAgent(key, ticket.raw_payload?.responder_name || ticket.agent_id || key)
       row.assigned += 1
-      row.totalTickets += 1
-      if (ticket.resolved_at_source && normalizeDate(ticket.resolved_at_source)! <= range.endDate) row.resolved += 1
-      if ((ticket.first_response_hours || 0) > 0) row.firstResponseValues.push(Number(ticket.first_response_hours || 0))
-      if ((ticket.resolution_hours || 0) > 0) row.resolutionValues.push(Number(ticket.resolution_hours || 0))
-      if (ticket.raw_payload?.fr_escalated || ticket.raw_payload?.is_escalated) row.slaBreaches += 1
+    })
+
+    rangeAgents.forEach((agent) => {
+      const key = agent.agent_id || agent.agent_name || 'unassigned'
+      const row = ensureAgent(key, agent.agent_name || key)
+      row.resolved += Number(agent.tickets_resolved || 0)
     })
 
     backlogSnapshotTickets.forEach((ticket) => {
       const key = ticket.agent_id || 'unassigned'
-      const row = ensureAgent(key, ticket)
+      const row = ensureAgent(key, ticket.raw_payload?.responder_name || ticket.agent_id || key)
       row.openBacklog += 1
     })
 
@@ -151,14 +144,50 @@ export function SupportCX() {
         ...row,
         assignedShare: percentShare(row.assigned, totalAssigned),
         resolvedShare: percentShare(row.resolved, totalResolved),
+      }))
+      .sort((a, b) => b.assigned - a.assigned || b.resolved - a.resolved || b.openBacklog - a.openBacklog)
+  }, [rangeTickets, rangeAgents, backlogSnapshotTickets])
+
+  const responsePerformance = useMemo(() => {
+    const map = new Map<string, {
+      agent: string
+      resolved: number
+      firstResponseValues: number[]
+      resolutionValues: number[]
+    }>()
+
+    function ensureAgent(key: string, label?: string) {
+      const agent = label || key
+      if (!map.has(key)) {
+        map.set(key, {
+          agent: String(agent || key),
+          resolved: 0,
+          firstResponseValues: [],
+          resolutionValues: [],
+        })
+      }
+      return map.get(key)!
+    }
+
+    rangeAgents.forEach((agent) => {
+      const key = agent.agent_id || agent.agent_name || 'unassigned'
+      const row = ensureAgent(key, agent.agent_name || key)
+      row.resolved += Number(agent.tickets_resolved || 0)
+      if ((agent.first_response_hours || 0) > 0) row.firstResponseValues.push(Number(agent.first_response_hours || 0))
+      if ((agent.resolution_hours || 0) > 0) row.resolutionValues.push(Number(agent.resolution_hours || 0))
+    })
+
+    return Array.from(map.values())
+      .map((row) => ({
+        agent: row.agent,
+        resolved: row.resolved,
         avgFirstResponse: row.firstResponseValues.length ? row.firstResponseValues.reduce((a, b) => a + b, 0) / row.firstResponseValues.length : 0,
         medianFirstResponse: median(row.firstResponseValues),
         avgResolution: row.resolutionValues.length ? row.resolutionValues.reduce((a, b) => a + b, 0) / row.resolutionValues.length : 0,
         medianResolution: median(row.resolutionValues),
-        slaBreachRate: row.totalTickets ? (row.slaBreaches / row.totalTickets) * 100 : 0,
       }))
-      .sort((a, b) => b.assigned - a.assigned || b.openBacklog - a.openBacklog)
-  }, [rangeTickets, backlogSnapshotTickets, range.endDate])
+      .sort((a, b) => b.resolved - a.resolved || a.avgFirstResponse - b.avgFirstResponse)
+  }, [rangeAgents])
 
   const themeRows = useMemo(() => {
     const map = new Map<string, { theme: string; count: number; open: number; priorities: Record<string, number> }>()
@@ -257,18 +286,18 @@ export function SupportCX() {
                       <th>Median FRT</th>
                       <th>Avg Resolution</th>
                       <th>Median Resolution</th>
-                      <th>SLA Breach Rate</th>
+                      <th>Resolved</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {agentWorkload.map((row) => (
+                    {responsePerformance.map((row) => (
                       <tr key={`${row.agent}-perf`}>
                         <td>{row.agent}</td>
                         <td>{row.avgFirstResponse.toFixed(2)}h</td>
                         <td>{row.medianFirstResponse.toFixed(2)}h</td>
                         <td>{row.avgResolution.toFixed(2)}h</td>
                         <td>{row.medianResolution.toFixed(2)}h</td>
-                        <td>{row.slaBreachRate.toFixed(2)}%</td>
+                        <td>{row.resolved}</td>
                       </tr>
                     ))}
                   </tbody>

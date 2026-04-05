@@ -15,6 +15,7 @@
 - TOOLS.md
 - apps/spider-kpi/backend/app/core/config.py
 - apps/spider-kpi/backend/app/ingestion/connectors/shopify.py
+- apps/spider-kpi/frontend/src/pages/SupportCX.tsx
 - apps/spider-kpi/.env.example
 
 ## Blockers
@@ -27,6 +28,7 @@
 - Validate the new Shopify embedded app auth shell inside Shopify admin and confirm token exchange + Admin API probe succeed on `https://kpi.spidergrills.com`.
 
 ## Current implementation notes
+- Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
 - Replaced the separate `spider-kpi/` Vercel auth shell from manual OAuth redirects to an embedded-app pattern using App Bridge-authenticated backend requests, server-side session-token verification, and Shopify token exchange.
 - Added `spider-kpi/shopify.app.toml` with embedded=true, production application URL `https://kpi.spidergrills.com`, and required KPI scopes.
 - Added a minimal embedded homepage that checks session-backed backend auth, token exchange, and an Admin API read.
