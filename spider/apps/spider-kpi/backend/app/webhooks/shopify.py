@@ -10,16 +10,20 @@ from app.ingestion.connectors.shopify import rebuild_shopify_daily_from_events, 
 router = APIRouter(prefix="/webhooks/shopify", tags=["shopify-webhooks"])
 
 
-@router.post("/{topic}")
+@router.post("")
 async def handle_shopify_webhook(
-    topic: str,
     request: Request,
     db: Session = Depends(db_session),
-    x_shopify_hmac_sha256: str | None = Header(default=None),
+    x_shopify_hmac_sha256: str | None = Header(default=None, alias="X-Shopify-Hmac-Sha256"),
+    x_shopify_topic: str | None = Header(default=None, alias="X-Shopify-Topic"),
 ):
     raw_body = await request.body()
     if not verify_shopify_hmac(raw_body, x_shopify_hmac_sha256):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    topic = (x_shopify_topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Missing X-Shopify-Topic")
 
     payload = json.loads(raw_body.decode("utf-8"))
     event = store_webhook_event(db, topic, payload)
