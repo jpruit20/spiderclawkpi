@@ -1,0 +1,150 @@
+[
+  {
+    "route": "/",
+    "render_success": true,
+    "http_status": 200,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/root-desktop.png",
+      "screenshots/root-mobile.png"
+    ],
+    "html_path": "html/root.html",
+    "dom_snapshot_path": "html/root.dom.html",
+    "console_log_path": "logs/root.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "root route returns index shell"
+  },
+  {
+    "route": "/commercial",
+    "render_success": false,
+    "http_status": 404,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [
+      "direct_route_returns_404"
+    ],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/_commercial-desktop.png",
+      "screenshots/_commercial-mobile.png"
+    ],
+    "html_path": "html/_commercial.html",
+    "dom_snapshot_path": "html/_commercial.dom.html",
+    "console_log_path": "logs/_commercial.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "non-root routes currently hard-fail at edge with 404 NOT_FOUND"
+  },
+  {
+    "route": "/support",
+    "render_success": false,
+    "http_status": 404,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [
+      "direct_route_returns_404"
+    ],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/_support-desktop.png",
+      "screenshots/_support-mobile.png"
+    ],
+    "html_path": "html/_support.html",
+    "dom_snapshot_path": "html/_support.dom.html",
+    "console_log_path": "logs/_support.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "non-root routes currently hard-fail at edge with 404 NOT_FOUND"
+  },
+  {
+    "route": "/issues",
+    "render_success": false,
+    "http_status": 404,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [
+      "direct_route_returns_404"
+    ],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/_issues-desktop.png",
+      "screenshots/_issues-mobile.png"
+    ],
+    "html_path": "html/_issues.html",
+    "dom_snapshot_path": "html/_issues.dom.html",
+    "console_log_path": "logs/_issues.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "non-root routes currently hard-fail at edge with 404 NOT_FOUND"
+  },
+  {
+    "route": "/diagnostics",
+    "render_success": false,
+    "http_status": 404,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [
+      "direct_route_returns_404"
+    ],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/_diagnostics-desktop.png",
+      "screenshots/_diagnostics-mobile.png"
+    ],
+    "html_path": "html/_diagnostics.html",
+    "dom_snapshot_path": "html/_diagnostics.dom.html",
+    "console_log_path": "logs/_diagnostics.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "non-root routes currently hard-fail at edge with 404 NOT_FOUND"
+  },
+  {
+    "route": "/source-health",
+    "render_success": false,
+    "http_status": 404,
+    "TTFB": null,
+    "LCP": null,
+    "CLS": null,
+    "INP": null,
+    "js_errors": [],
+    "api_errors": [],
+    "missing_data_states": [
+      "direct_route_returns_404"
+    ],
+    "auth_session_state": "public",
+    "screenshot_paths": [
+      "screenshots/_source-health-desktop.png",
+      "screenshots/_source-health-mobile.png"
+    ],
+    "html_path": "html/_source-health.html",
+    "dom_snapshot_path": "html/_source-health.dom.html",
+    "console_log_path": "logs/_source-health.dom.log",
+    "desktop_screenshot_exists": true,
+    "mobile_screenshot_exists": true,
+    "evidence_note": "non-root routes currently hard-fail at edge with 404 NOT_FOUND"
+  }
+]

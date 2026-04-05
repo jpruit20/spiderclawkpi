@@ -1,0 +1,2 @@
+[28149:28149:0405/170124.798810:ERROR:base/memory/shared_memory_switch.cc:289] Failed global descriptor lookup: 7
+[28027:28027:0405/170124.826263:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files

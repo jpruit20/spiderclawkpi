@@ -18,6 +18,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).replace(/\/
 type RequestOptions = {
   signal?: AbortSignal
   timeoutMs?: number
+  retries?: number
 }
 
 export class ApiError extends Error {
@@ -33,37 +34,52 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { signal, timeoutMs = 15000 } = options
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
-  const abortListener = () => controller.abort()
-  signal?.addEventListener('abort', abortListener)
+  const { signal, timeoutMs = 15000, retries = 1 } = options
 
-  try {
-    const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw new ApiError(`API error ${response.status} for ${path}${detail ? `: ${detail}` : ''}`, response.status, path)
-    }
-    const text = await response.text()
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+    const abortListener = () => controller.abort()
+    signal?.addEventListener('abort', abortListener)
+    const startedAt = performance.now()
+    console.info('[kpi-ui] api_request_start', { path, attempt })
+
     try {
-      return text ? JSON.parse(text) as T : (null as T)
-    } catch {
-      throw new ApiError(`Invalid JSON returned for ${path}`, response.status, path)
+      const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new ApiError(`API error ${response.status} for ${path}${detail ? `: ${detail}` : ''}`, response.status, path)
+      }
+      const text = await response.text()
+      try {
+        const parsed = text ? JSON.parse(text) as T : (null as T)
+        console.info('[kpi-ui] api_request_success', { path, attempt, durationMs: Math.round(performance.now() - startedAt) })
+        return parsed
+      } catch {
+        throw new ApiError(`Invalid JSON returned for ${path}`, response.status, path)
+      }
+    } catch (error) {
+      const apiError = error instanceof ApiError
+        ? error
+        : signal?.aborted
+          ? new ApiError(`Request was aborted for ${path}`, undefined, path)
+          : controller.signal.aborted
+            ? new ApiError(`Request timed out for ${path}`, undefined, path)
+            : new ApiError(`Network error for ${path}`, undefined, path)
+      console.error('[kpi-ui] api_request_fail', { path, attempt, message: apiError.message, status: apiError.status })
+      if (attempt < retries && !signal?.aborted) {
+        window.clearTimeout(timeout)
+        signal?.removeEventListener('abort', abortListener)
+        continue
+      }
+      throw apiError
+    } finally {
+      window.clearTimeout(timeout)
+      signal?.removeEventListener('abort', abortListener)
     }
-  } catch (error) {
-    if (error instanceof ApiError) throw error
-    if (signal?.aborted) {
-      throw new ApiError(`Request was aborted for ${path}`, undefined, path)
-    }
-    if (controller.signal.aborted) {
-      throw new ApiError(`Request timed out for ${path}`, undefined, path)
-    }
-    throw new ApiError(`Network error for ${path}`, undefined, path)
-  } finally {
-    window.clearTimeout(timeout)
-    signal?.removeEventListener('abort', abortListener)
   }
+
+  throw new ApiError(`Exhausted retries for ${path}`, undefined, path)
 }
 
 export function getApiBase() {

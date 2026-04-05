@@ -6,6 +6,7 @@ import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
 import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
+import { useUrlRange } from '../lib/urlRange'
 import { DataQualityResponse, IntradayStatus, KPIIntraday, KPIDaily, KpiDisplayMode, KpiDisplayRow, OverviewResponse, SourceHealthItem } from '../lib/types'
 
 function truthyConnectorRows(rows: SourceHealthItem[]) {
@@ -52,6 +53,13 @@ export function ExecutiveOverview() {
   const [dataQualityError, setDataQualityError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
   const requestIdRef = useRef(0)
+  const hydratedRangeRef = useRef(false)
+
+  useUrlRange(range, (nextRange) => {
+    if (hydratedRangeRef.current) return
+    hydratedRangeRef.current = true
+    setRange(nextRange)
+  })
 
   function sanitizeDailyRows(rows: KPIDaily[]) {
     if (!rows.length) return rows
@@ -77,7 +85,7 @@ export function ExecutiveOverview() {
           const orderedSeries = [...(overviewPayload.value.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date))
           const safeSeries = sanitizeDailyRows(orderedSeries)
           setData({ ...overviewPayload.value, daily_series: orderedSeries })
-          setRange(buildPresetRange('7d', safeSeries, { anchorDate: todayDate }))
+          setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', safeSeries, { anchorDate: todayDate }))
       } else {
         setData(null)
         setError(overviewPayload.reason instanceof ApiError ? overviewPayload.reason.message : 'Failed to load overview')

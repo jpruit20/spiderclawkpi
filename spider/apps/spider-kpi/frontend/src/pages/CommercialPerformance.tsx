@@ -5,6 +5,7 @@ import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { KPIDaily } from '../lib/types'
+import { useUrlRange } from '../lib/urlRange'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
   return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
@@ -43,6 +44,13 @@ export function CommercialPerformance() {
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
   const requestIdRef = useRef(0)
+  const hydratedRangeRef = useRef(false)
+
+  useUrlRange(range, (nextRange) => {
+    if (hydratedRangeRef.current) return
+    hydratedRangeRef.current = true
+    setRange(nextRange)
+  })
 
   async function load(signal?: AbortSignal) {
       const requestId = ++requestIdRef.current
