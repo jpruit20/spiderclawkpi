@@ -41,6 +41,7 @@ jobs:
           git fetch origin
           git checkout master
           git pull --ff-only origin master
+          ./.venv/bin/pip install -r backend/requirements.txt
           systemctl restart spider-kpi.service
           systemctl is-active spider-kpi.service
           for i in $(seq 1 20); do
