@@ -10,12 +10,16 @@ from app.models import Alert, SourceConfig, SourceSyncRun
 STALE_MINUTES_BY_SOURCE = {
     "shopify": 90,
     "triplewhale": 180,
+    "ga4": 240,
+    "clarity": 240,
     "freshdesk": 360,
     "decision-engine": 180,
 }
 SOURCE_TYPES = {
     "shopify": "connector",
     "triplewhale": "connector",
+    "ga4": "connector",
+    "clarity": "connector",
     "freshdesk": "connector",
     "decision-engine": "compute",
 }

@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session, require_auth
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
+from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.freshdesk import sync_freshdesk
+from app.ingestion.connectors.ga4 import sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun
@@ -42,6 +44,10 @@ def run_sync(source: str, db: Session = Depends(db_session)):
         result = sync_triplewhale(db, backfill_days=1)
     elif source == "freshdesk":
         result = sync_freshdesk(db, days=7)
+    elif source == "ga4":
+        result = sync_ga4(db, days=7)
+    elif source == "clarity":
+        result = sync_clarity(db, days=min(3, settings.backfill_days))
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
@@ -62,6 +68,10 @@ def backfill_source(source: str, db: Session = Depends(db_session)):
         result = sync_triplewhale(db, backfill_days=settings.backfill_days)
     elif source == "freshdesk":
         result = sync_freshdesk(db, days=settings.backfill_days)
+    elif source == "ga4":
+        result = sync_ga4(db, days=settings.backfill_days)
+    elif source == "clarity":
+        result = sync_clarity(db, days=min(3, settings.backfill_days))
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 

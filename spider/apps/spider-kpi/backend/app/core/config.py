@@ -76,6 +76,17 @@ class Settings(BaseSettings):
 
     triplewhale_api_key: Optional[str] = None
 
+    ga4_property_id: Optional[str] = None
+    ga4_client_email: Optional[str] = None
+    ga4_private_key: Optional[str] = None
+    ga4_project_id: Optional[str] = None
+    ga4_data_api_base_url: str = 'https://analyticsdata.googleapis.com/v1beta'
+    ga4_admin_api_base_url: str = 'https://analyticsadmin.googleapis.com/v1beta'
+
+    clarity_project_id: Optional[str] = None
+    clarity_api_token: Optional[str] = None
+    clarity_base_url: str = 'https://www.clarity.ms/export-data/api/v1'
+
     freshdesk_domain: Optional[str] = None
     freshdesk_api_key: Optional[str] = None
     freshdesk_api_user: Optional[str] = None

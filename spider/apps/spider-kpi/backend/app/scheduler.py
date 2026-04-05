@@ -5,7 +5,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.freshdesk import sync_freshdesk
+from app.ingestion.connectors.ga4 import sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceConfig, SourceSyncRun
@@ -37,7 +39,7 @@ def run_seed() -> None:
     try:
         existing_live_configs = db.execute(
             select(SourceConfig).where(
-                SourceConfig.source_name.in_(["shopify", "triplewhale", "freshdesk"])
+                SourceConfig.source_name.in_(["shopify", "triplewhale", "ga4", "clarity", "freshdesk"])
             )
         ).scalars().all()
         if any(
@@ -63,6 +65,10 @@ def run_syncs() -> None:
             any_success = _successful_result(sync_triplewhale(db, backfill_days=1)) or any_success
         if not _already_running(db, "freshdesk"):
             any_success = _successful_result(sync_freshdesk(db, days=7)) or any_success
+        if not _already_running(db, "ga4"):
+            any_success = _successful_result(sync_ga4(db, days=7)) or any_success
+        if not _already_running(db, "clarity"):
+            any_success = _successful_result(sync_clarity(db, days=3)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)
