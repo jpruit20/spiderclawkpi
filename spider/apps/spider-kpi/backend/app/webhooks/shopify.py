@@ -1,11 +1,12 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
-from app.ingestion.connectors.shopify import rebuild_shopify_daily_from_events, store_webhook_event, verify_shopify_hmac
+from app.ingestion.connectors.shopify import _business_date_from_dt, _parse_datetime, rebuild_shopify_daily_from_events, store_webhook_event, verify_shopify_hmac
 
 router = APIRouter(prefix="/webhooks/shopify", tags=["shopify-webhooks"])
 
@@ -28,6 +29,12 @@ async def handle_shopify_webhook(
     payload = json.loads(raw_body.decode("utf-8"))
     event = store_webhook_event(db, topic, payload)
     touched_dates = {event.business_date} if event.business_date else set()
+    created_at = (event.normalized_payload or {}).get("created_at")
+    if created_at:
+        try:
+            touched_dates.add(_business_date_from_dt(_parse_datetime(str(created_at))))
+        except Exception:
+            pass
     rebuild_shopify_daily_from_events(db, touched_dates)
     recompute_daily_kpis(db)
     recompute_diagnostics(db)
