@@ -260,10 +260,10 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
         return {"ok": True, "records_processed": processed, **stats, "duration_ms": duration_ms, "last_payload": last_payload}
     except Exception as exc:
         db.rollback()
-        failed_run = start_sync_run(db, "triplewhale", "backfill_daily_failed", {"days": days, **stats, "last_payload": last_payload})
+        run = db.merge(run)
         duration_ms = int((time.monotonic() - started) * 1000)
-        failed_run.metadata_json = {**failed_run.metadata_json, **stats, "duration_ms": duration_ms, "last_payload": last_payload}
-        finish_sync_run(db, failed_run, status="failed", error_message=str(exc), records_processed=processed)
+        run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms, "last_payload": last_payload}
+        finish_sync_run(db, run, status="failed", error_message=str(exc), records_processed=processed)
         db.commit()
         logger.exception("triplewhale sync failed")
         return {"ok": False, "message": str(exc), "records_processed": processed, **stats, "duration_ms": duration_ms, "last_payload": last_payload}

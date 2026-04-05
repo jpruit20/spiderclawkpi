@@ -423,11 +423,11 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
         return {"ok": True, "records_processed": len(all_tickets), **stats, "duration_ms": duration_ms, "resolved_base_url": base_url}
     except Exception as exc:
         db.rollback()
-        failed_run = start_sync_run(db, "freshdesk", "poll_recent_failed", {"days": days, **stats, "resolved_base_url": resolved_base_url})
+        run = db.merge(run)
         duration_ms = int((time.monotonic() - started) * 1000)
         clean_message = _clean_exception_message(exc, resolved_base_url)
-        failed_run.metadata_json = {**failed_run.metadata_json, **stats, "duration_ms": duration_ms, "resolved_base_url": resolved_base_url}
-        finish_sync_run(db, failed_run, status="failed", error_message=clean_message)
+        run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms, "resolved_base_url": resolved_base_url}
+        finish_sync_run(db, run, status="failed", error_message=clean_message)
         db.commit()
         logger.exception("freshdesk sync failed")
         return {"ok": False, "message": clean_message, "records_processed": 0, **stats, "duration_ms": duration_ms, "resolved_base_url": resolved_base_url}

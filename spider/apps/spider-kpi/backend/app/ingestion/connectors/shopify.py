@@ -471,10 +471,10 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         }
     except Exception as exc:
         db.rollback()
-        failed_run = start_sync_run(db, "shopify", "poll_recent_failed", {"hours": hours, **stats})
+        run = db.merge(run)
         duration_ms = int((time.monotonic() - started) * 1000)
-        failed_run.metadata_json = {**failed_run.metadata_json, **stats, "duration_ms": duration_ms}
-        finish_sync_run(db, failed_run, status="failed", error_message=str(exc))
+        run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms}
+        finish_sync_run(db, run, status="failed", error_message=str(exc))
         db.commit()
         logger.exception("shopify sync failed")
         return {"ok": False, "message": str(exc), "records_processed": 0, **stats, "duration_ms": duration_ms}
