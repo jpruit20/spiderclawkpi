@@ -411,6 +411,30 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             next_url = _extract_next_link(response.headers.get("Link"))
             next_params = None
 
+        updated_at_min = window_start_utc.isoformat()
+        updated_params = {
+            "status": "any",
+            "limit": "250",
+            "order": "updated_at asc",
+            "updated_at_min": updated_at_min,
+            "fields": "id,created_at,updated_at,total_price,current_total_price,financial_status,cancelled_at,customer.id",
+        }
+        next_url = endpoint
+        next_params = updated_params
+        while next_url:
+            response = _request_json(session, next_url, params=next_params)
+            payload = response.json()
+            batch_orders = payload.get("orders", [])
+            stats["records_fetched"] += len(batch_orders)
+            for order in batch_orders:
+                order_id = order.get("id")
+                if order_id in seen_ids:
+                    continue
+                seen_ids.add(order_id)
+                all_orders.append(order)
+            next_url = _extract_next_link(response.headers.get("Link"))
+            next_params = None
+
         daily: dict[datetime.date, dict[str, float]] = {}
         latest_order_timestamp: datetime | None = None
         for order in all_orders:
