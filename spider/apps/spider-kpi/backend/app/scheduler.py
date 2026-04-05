@@ -8,13 +8,13 @@ from app.db.session import SessionLocal
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
-from app.models import SourceSyncRun
+from app.models import SourceConfig, SourceSyncRun
 from app.services.seed import seed_from_prototype_files
 from sqlalchemy import desc, select
 
 
 settings = get_settings()
-BASE_DIR = Path("/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi")
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 def _already_running(db, source_name: str) -> bool:
@@ -35,8 +35,18 @@ def _successful_result(result: dict | None) -> bool:
 def run_seed() -> None:
     db = SessionLocal()
     try:
-        seed_from_prototype_files(db, BASE_DIR)
-        if not _already_running(db, "decision-engine"):
+        existing_live_configs = db.execute(
+            select(SourceConfig).where(
+                SourceConfig.source_name.in_(["shopify", "triplewhale", "freshdesk"])
+            )
+        ).scalars().all()
+        if any(
+            cfg and cfg.configured and (cfg.sync_mode or "") != "seeded-prototype"
+            for cfg in existing_live_configs
+        ):
+            return
+        seeded = seed_from_prototype_files(db, BASE_DIR)
+        if any(seeded.values()) and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)
     finally:

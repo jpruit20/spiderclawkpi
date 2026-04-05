@@ -134,9 +134,14 @@ def _fetch_agent_directory(base_url: str) -> dict[str, str]:
     headers = {"Accept": "application/json"}
     params = {"per_page": 100, "page": 1, "state": "full_time"}
     directory: dict[str, str] = {}
+    tried_without_state = False
 
     while True:
         response = _request_agents(base_url, params, headers)
+        if response.status_code == 400 and not tried_without_state and params.get("state") == "full_time":
+            params = {"per_page": 100, "page": 1}
+            tried_without_state = True
+            continue
         response.raise_for_status()
         batch = response.json()
         if not batch:

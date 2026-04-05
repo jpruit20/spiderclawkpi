@@ -86,27 +86,34 @@ def seed_from_prototype_files(db: Session, base_dir: Path) -> dict[str, int]:
             )
             seeded["tw_summary_daily"] += 1
 
-    upsert_source_config(
-        db,
-        "shopify",
-        configured=shopify_seen,
-        sync_mode="seeded-prototype",
-        config_json={"seeded_from": str(processed_dir / "orders_daily.json")},
-    )
-    upsert_source_config(
-        db,
-        "decision-engine",
-        configured=kpi_seen,
-        sync_mode="seeded-prototype",
-        config_json={"seeded_from": str(processed_dir / "kpi_daily.json")},
-    )
-    upsert_source_config(
-        db,
-        "triplewhale",
-        configured=tw_seen,
-        sync_mode="seeded-prototype",
-        config_json={"seeded_from": str(processed_dir / "tw_metrics.json")},
-    )
+    existing_shopify = db.execute(select(SourceConfig).where(SourceConfig.source_name == "shopify")).scalar_one_or_none()
+    existing_decision_engine = db.execute(select(SourceConfig).where(SourceConfig.source_name == "decision-engine")).scalar_one_or_none()
+    existing_triplewhale = db.execute(select(SourceConfig).where(SourceConfig.source_name == "triplewhale")).scalar_one_or_none()
+
+    if existing_shopify is None or (existing_shopify.sync_mode or "") == "seeded-prototype":
+        upsert_source_config(
+            db,
+            "shopify",
+            configured=shopify_seen,
+            sync_mode="seeded-prototype",
+            config_json={"seeded_from": str(processed_dir / "orders_daily.json")},
+        )
+    if existing_decision_engine is None or (existing_decision_engine.sync_mode or "") == "seeded-prototype":
+        upsert_source_config(
+            db,
+            "decision-engine",
+            configured=kpi_seen,
+            sync_mode="seeded-prototype",
+            config_json={"seeded_from": str(processed_dir / "kpi_daily.json")},
+        )
+    if existing_triplewhale is None or (existing_triplewhale.sync_mode or "") == "seeded-prototype":
+        upsert_source_config(
+            db,
+            "triplewhale",
+            configured=tw_seen,
+            sync_mode="seeded-prototype",
+            config_json={"seeded_from": str(processed_dir / "tw_metrics.json")},
+        )
 
     db.commit()
     return seeded
