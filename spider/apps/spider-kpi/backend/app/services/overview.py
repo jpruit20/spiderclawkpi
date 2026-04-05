@@ -27,7 +27,7 @@ def build_kpi_payload(
     if tw and (tw.sessions or 0) > 0:
         sessions_source = "triplewhale"
     elif shopify_analytics and (shopify_analytics.sessions or 0) > 0:
-        sessions_source = None
+        sessions_source = "shopify_analytics"
     else:
         sessions_source = None
 
@@ -58,7 +58,7 @@ def build_kpi_payload(
         "revenue_source": revenue_source,
         "sessions_source": sessions_source,
         "orders_source": "shopify" if shopify else None,
-        "is_partial_day": (revenue_source != "shopify") or (sessions_source != "triplewhale") or shopify is None,
+        "is_partial_day": (revenue_source != "shopify") or (sessions_source is None) or shopify is None,
         "is_fallback_day": revenue_source == "triplewhale" or sessions_source == "triplewhale",
     }
     return payload
