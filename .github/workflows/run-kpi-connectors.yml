@@ -15,6 +15,14 @@ on:
         description: 'Run Freshdesk sync'
         required: true
         default: 'true'
+      ga4:
+        description: 'Run GA4 sync'
+        required: true
+        default: 'true'
+      clarity:
+        description: 'Run Clarity sync'
+        required: true
+        default: 'true'
 
 jobs:
   sync:
@@ -41,6 +49,8 @@ jobs:
           INPUT_SHOPIFY: ${{ github.event.inputs.shopify }}
           INPUT_TRIPLEWHALE: ${{ github.event.inputs.triplewhale }}
           INPUT_FRESHDESK: ${{ github.event.inputs.freshdesk }}
+          INPUT_GA4: ${{ github.event.inputs.ga4 }}
+          INPUT_CLARITY: ${{ github.event.inputs.clarity }}
         run: |
           ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<EOF
           set -euo pipefail
@@ -48,13 +58,15 @@ jobs:
           export INPUT_SHOPIFY='${INPUT_SHOPIFY}'
           export INPUT_TRIPLEWHALE='${INPUT_TRIPLEWHALE}'
           export INPUT_FRESHDESK='${INPUT_FRESHDESK}'
+          export INPUT_GA4='${INPUT_GA4}'
+          export INPUT_CLARITY='${INPUT_CLARITY}'
           ./.venv/bin/python - <<'PY'
           import os
           from pathlib import Path
           from urllib.request import Request, urlopen
           pw = Path('.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
           base = 'http://127.0.0.1:8000'
-          for env_name, source in [('INPUT_SHOPIFY', 'shopify'), ('INPUT_TRIPLEWHALE', 'triplewhale'), ('INPUT_FRESHDESK', 'freshdesk')]:
+          for env_name, source in [('INPUT_SHOPIFY', 'shopify'), ('INPUT_TRIPLEWHALE', 'triplewhale'), ('INPUT_FRESHDESK', 'freshdesk'), ('INPUT_GA4', 'ga4'), ('INPUT_CLARITY', 'clarity')]:
               if os.getenv(env_name, 'true').lower() != 'true':
                   continue
               req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
