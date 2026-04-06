@@ -83,6 +83,7 @@
 - 2026-04-06 pragmatic production fix: because Vercel continued ignoring the SPA catch-all config, added a frontend build step that writes static `dist/<route>/index.html` fallbacks for each known dashboard route (`commercial`, `support`, `ux`, `issues`, `diagnostics`, `source-health`). Local build verified those route files are emitted.
 - 2026-04-06 native-serving hardening: added repo-root Vercel edge routing for `/api/* -> https://api-kpi.spidergrills.com/api/*`, removed the stale duplicate `frontend/vercel.json`, and added a reusable `automation/smoke_test_kpi.sh` script to check frontend routes and key APIs after deploys.
 - 2026-04-06 browser network-error root cause: the live frontend bundle was still configured to call `https://api-kpi.spidergrills.com` directly from the browser, which risks cross-origin failures because the backend does not advertise the required CORS headers for the frontend origin. Patched `src/lib/api.ts` so `kpi.spidergrills.com` always uses same-origin `/api` through the Vercel edge proxy and trims any stray whitespace from configured API base values.
+- 2026-04-06 executive overview metric wiring fix: the today/intraday executive summary was hard-coding `ad_spend` and `mer` to `null`, so those cards rendered as `—` even when the daily KPI mart had values. Patched Executive Overview to reuse same-day daily ad spend/open backlog and derive MER/cost-per-purchase from the intraday revenue plus same-day ad spend.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

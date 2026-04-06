@@ -6,6 +6,9 @@ import { MetricProvenancePanel, MetricProvenanceItem } from '../components/Metri
 import { RangeToolbar } from '../components/RangeToolbar'
 import { StaleDataBanner } from '../components/StaleDataBanner'
 import { TrendChart } from '../components/TrendChart'
+import { EventAnnotationList } from '../components/EventAnnotationList'
+import { StatePanel } from '../components/StatePanel'
+import { ThresholdPanel } from '../components/ThresholdPanel'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
 import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
@@ -147,6 +150,8 @@ export function ExecutiveOverview() {
     const revenue = Number(latestRow.revenue || 0)
     const sessions = Number(latestRow.sessions || 0)
     const orders = Number(latestRow.orders || 0)
+    const matchingDailyRow = safeDailyRows.find((row) => row.business_date === todayDate)
+    const adSpend = matchingDailyRow?.ad_spend ?? null
     return {
       business_date: todayDate,
       revenue,
@@ -158,12 +163,12 @@ export function ExecutiveOverview() {
       add_to_cart_rate: null,
       bounce_rate: null,
       purchases: orders,
-      ad_spend: null,
-      mer: null,
-      cost_per_purchase: null,
+      ad_spend: adSpend,
+      mer: adSpend ? revenue / adSpend : null,
+      cost_per_purchase: adSpend && orders ? adSpend / orders : null,
       tickets_created: null,
       tickets_resolved: null,
-      open_backlog: null,
+      open_backlog: matchingDailyRow?.open_backlog ?? null,
       first_response_time: null,
       resolution_time: null,
       sla_breach_rate: null,
@@ -176,7 +181,7 @@ export function ExecutiveOverview() {
       is_partial_day: true,
       is_fallback_day: false,
     } as KpiDisplayRow
-  }, [todaysIntradaySeries, todayDate])
+  }, [todaysIntradaySeries, todayDate, safeDailyRows])
   const latestCompleteDay = useMemo(() => {
     if (data?.latest_kpi) return data.latest_kpi
     const rows = data?.daily_series || []
@@ -259,7 +264,16 @@ export function ExecutiveOverview() {
 
       {!loading && !error && data ? (
         <>
-          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} />
+          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
+          <ThresholdPanel metrics={[
+            { metric: 'conversion_rate', value: displayKpi?.conversion_rate },
+            { metric: 'mer', value: displayKpi?.mer },
+            { metric: 'average_order_value', value: displayKpi?.average_order_value },
+            { metric: 'bounce_rate', value: displayKpi?.bounce_rate },
+            { metric: 'open_backlog', value: displayKpi?.open_backlog },
+            { metric: 'tickets_per_100_orders', value: displayKpi?.tickets_per_100_orders },
+            { metric: 'first_response_time', value: displayKpi?.first_response_time },
+          ]} />
           <ActionBlock items={actionItems} />
           <MetricProvenancePanel items={provenanceItems} />
           <div className="two-col two-col-equal">
@@ -358,6 +372,12 @@ export function ExecutiveOverview() {
             </Card>
             <Card title="Data Quality Visibility">
               <div className="stack-list">
+                {displayKpi?.is_partial_day ? (
+                  <StatePanel kind="partial" tone="warn" title="Selected KPI window includes partial data" message="At least one displayed KPI row is partial-day or intraday. Treat short-window movement as directional until the next complete business day lands." />
+                ) : null}
+                {displayKpi?.is_fallback_day ? (
+                  <StatePanel kind="partial" tone="warn" title="Fallback source used in selected window" message="At least one KPI row relied on fallback source logic. Use source health and provenance before making irreversible decisions." />
+                ) : null}
                 {dataQualityError ? (
                   <div className="list-item status-warn">
                     <strong>Data quality feed unavailable</strong>
@@ -393,6 +413,18 @@ export function ExecutiveOverview() {
                   </div>
                 ) : null}
               </div>
+            </Card>
+          </div>
+          <div className="two-col two-col-equal">
+            <Card title="Decision Event Annotations">
+              <EventAnnotationList diagnostics={data?.diagnostics || []} recommendations={data?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
+            </Card>
+            <Card title="Inventory / Fulfillment Risk Layer">
+              {sourceHealth.some((row) => row.source === 'business_central' || row.source === 'dynamics') ? (
+                <StatePanel kind="partial" tone="warn" title="ERP risk layer not decision-grade yet" message="Inventory / fulfillment connector rows exist but this page still needs connector-backed stockout, aging, and fulfillment latency metrics before operators should trust it." />
+              ) : (
+                <StatePanel kind="partial" tone="warn" title="ERP inventory layer blocked" message="Dynamics / Business Central is not live in source health yet, so inventory and fulfillment risk are still blind spots. Do not treat the executive page as complete for ops decisions." detail="Required next layer: stockout risk, open PO coverage, fulfillment aging, and ship-delay burden by SKU/family." />
+              )}
             </Card>
           </div>
         </>
