@@ -9,6 +9,10 @@
       "handle": "filesystem"
     },
     {
+      "src": "/api/(.*)",
+      "dest": "https://api-kpi.spidergrills.com/api/$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "/index.html"
     }
