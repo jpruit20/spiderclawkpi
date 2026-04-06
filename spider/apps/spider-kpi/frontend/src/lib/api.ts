@@ -13,7 +13,24 @@ import type {
 } from './types'
 
 const DEFAULT_API_BASE = ''
-const API_BASE = (import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).replace(/\/$/, '')
+
+function resolveApiBase() {
+  const configured = (import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).trim().replace(/\/$/, '')
+
+  if (typeof window !== 'undefined') {
+    const { hostname, origin } = window.location
+    if (hostname === 'kpi.spidergrills.com') {
+      return ''
+    }
+    if (configured && configured === origin) {
+      return ''
+    }
+  }
+
+  return configured
+}
+
+const API_BASE = resolveApiBase()
 
 type RequestOptions = {
   signal?: AbortSignal
