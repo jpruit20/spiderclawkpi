@@ -257,6 +257,13 @@ export function ExecutiveOverview() {
       </div>
 
       <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
+      {!loading && !error && data ? (
+        <div className="three-col">
+          <Card title="Revenue in Scope"><div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div><div className="state-message">Top-line revenue for the visible executive scope</div></Card>
+          <Card title="Trustworthy Live Connectors"><div className="hero-metric">{liveConnectors.filter((row) => isTruthfullyHealthy(row)).length}/{liveConnectors.length || 0}</div><div className="state-message">Live source trust before acting on KPI movement</div></Card>
+          <Card title="Current Decision Focus"><div className="state-message">{actionItems[0]}</div></Card>
+        </div>
+      ) : null}
       <StaleDataBanner rows={liveConnectors} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}

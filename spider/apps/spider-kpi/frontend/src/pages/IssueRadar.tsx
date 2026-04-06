@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { IssueClusterItem, IssueRadarResponse } from '../lib/types'
@@ -8,7 +9,7 @@ function ClusterList({ title, rows }: { title: string; rows: IssueClusterItem[] 
     <Card title={title}>
       <div className="stack-list">
         {rows.map((item) => (
-          <div className="list-item" key={`${title}-${item.id}`}>
+          <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={`${title}-${item.id}`}>
             <div className="item-head">
               <strong>{item.title}</strong>
               <span className={`badge severity-${item.severity}`}>{item.severity}</span>
@@ -69,6 +70,11 @@ export function IssueRadar() {
     [data.clusters],
   )
   const topThree = sortedClusters.slice(0, 3)
+  const actionItems = [
+    topThree[0] ? `Top issue to address now: ${topThree[0].title}. ${String(topThree[0].details_json?.priority_reason_summary || '')}` : 'No priority cluster returned yet; verify connector health and issue normalization.',
+    data.fastest_rising[0] ? `Fastest-rising signal: ${data.fastest_rising[0].title}. Check whether the trend reflects a new product, fulfillment, or support workflow issue.` : 'No rising cluster yet; keep reviewing complaint burden and business risk instead of chasing noise.',
+    data.live_sources.length ? `Issue radar currently leans on live sources: ${data.live_sources.join(', ')}.` : 'Issue radar still needs more live source coverage before it can serve as the primary voice-of-customer surface.',
+  ]
 
   return (
     <div className="page-grid">
@@ -77,6 +83,14 @@ export function IssueRadar() {
         <p>Priority-sorted issue intelligence with the top business risks called out explicitly.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
+      {!loading && !error ? (
+        <div className="three-col">
+          <Card title="Priority Clusters"><div className="hero-metric">{sortedClusters.length}</div><div className="state-message">Issue clusters ranked by business impact</div></Card>
+          <Card title="Live Sources"><div className="hero-metric">{data.live_sources.length}</div><div className="state-message">Live inputs currently feeding issue analysis</div></Card>
+          <Card title="Fastest Rising"><div className="hero-metric">{data.fastest_rising.length}</div><div className="state-message">Clusters with active upward pressure</div></Card>
+        </div>
+      ) : null}
+      <ActionBlock title="Issue Prioritization Actions" items={actionItems} />
       {loading ? <Card title="Issue Radar Status"><div className="state-message">Loading live issue data…</div></Card> : null}
       {error ? <Card title="Issue Radar Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
@@ -89,7 +103,7 @@ export function IssueRadar() {
           <Card title="All Priority-Sorted Clusters">
             <div className="stack-list">
               {sortedClusters.map((item) => (
-                <div className="list-item" key={item.id}>
+                <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={item.id}>
                   <div className="item-head">
                     <strong>{item.title}</strong>
                     <div className="inline-badges">
@@ -109,7 +123,7 @@ export function IssueRadar() {
             <Card title="Issue Signals">
               <div className="stack-list">
                 {data.signals.map((item) => (
-                  <div className="list-item" key={item.id}>
+                  <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={item.id}>
                     <div className="item-head">
                       <strong>{item.title}</strong>
                       <span className={`badge severity-${item.severity}`}>{item.severity}</span>

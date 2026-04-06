@@ -3,6 +3,8 @@ import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
+import { StatePanel } from '../components/StatePanel'
+import { ThresholdPanel } from '../components/ThresholdPanel'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
@@ -248,7 +250,21 @@ export function SupportCX() {
       </div>
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+      {!loading && !error ? (
+        <div className="three-col">
+          <Card title="Open Backlog"><div className="hero-metric">{currentRows[currentRows.length - 1]?.open_backlog ?? 0}</div><div className="state-message">Queue still open at range end</div></Card>
+          <Card title="Response Risk"><div className="hero-metric">{currentRows[currentRows.length - 1]?.first_response_time?.toFixed(2) ?? '0.00'}h</div><div className="state-message">Latest first-response time in selected range</div></Card>
+          <Card title="Issue Themes"><div className="hero-metric">{themeRows.length}</div><div className="state-message">Distinct complaint / ticket themes in range</div></Card>
+        </div>
+      ) : null}
       <ActionBlock items={actionItems} />
+      <ThresholdPanel metrics={[
+        { metric: 'open_backlog', value: currentRows[currentRows.length - 1]?.open_backlog },
+        { metric: 'tickets_per_100_orders', value: burdenAvg },
+        { metric: 'first_response_time', value: currentRows[currentRows.length - 1]?.first_response_time },
+        { metric: 'resolution_time', value: currentRows[currentRows.length - 1]?.resolution_time },
+        { metric: 'sla_breach_rate', value: currentRows[currentRows.length - 1]?.sla_breach_rate },
+      ]} />
       <MetricProvenancePanel items={provenanceItems} />
 
       {loading ? <Card title="Support Status"><div className="state-message">Loading live support data…</div></Card> : null}
@@ -257,12 +273,13 @@ export function SupportCX() {
       {!loading && !error ? (
         <>
           <div className="three-col">
-            <Card title="Selected Range Avg Tickets / 100 Orders"><div className="hero-metric">{burdenAvg.toFixed(2)}</div></Card>
-            <Card title="Latest Open Backlog"><div className="hero-metric">{currentRows[currentRows.length - 1]?.open_backlog ?? 0}</div></Card>
+            <Card title="Selected Range Avg Tickets / 100 Orders"><div className="hero-metric">{burdenAvg.toFixed(2)}</div><div className="state-message">Average support burden normalized to order volume</div></Card>
+            <Card title="Latest Open Backlog"><div className="hero-metric">{currentRows[currentRows.length - 1]?.open_backlog ?? 0}</div><div className="state-message">Open tickets still unresolved at the end of the range</div></Card>
             <Card title="Management Flags">
               <div className="stack-list">
                 {managementFlags.map((flag, index) => <div className="list-item status-warn" key={index}><p>{flag}</p></div>)}
                 {!managementFlags.length ? <div className="list-item status-good"><p>No management flags triggered for the selected range.</p></div> : null}
+                {!rangeTickets.length ? <StatePanel kind="empty" tone="muted" title="No ticket-level evidence in range" message="Support KPI aggregates exist, but no ticket rows landed in this selected range for theme or ownership analysis." /> : null}
               </div>
             </Card>
           </div>

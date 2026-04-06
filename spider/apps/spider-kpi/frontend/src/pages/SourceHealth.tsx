@@ -90,6 +90,8 @@ export function SourceHealthPage() {
   const liveConnectors = useMemo(() => rows.filter((row) => isLiveConnector(row)), [rows])
   const scaffoldedRows = useMemo(() => rows.filter((row) => isScaffolded(row)), [rows])
   const computeRows = useMemo(() => rows.filter((row) => row.source_type === 'compute'), [rows])
+  const healthyLiveCount = useMemo(() => liveConnectors.filter((row) => isTruthfullyHealthy(row)).length, [liveConnectors])
+  const staleOrFailedCount = useMemo(() => liveConnectors.filter((row) => !isTruthfullyHealthy(row)).length, [liveConnectors])
 
   return (
     <div className="page-grid">
@@ -98,6 +100,13 @@ export function SourceHealthPage() {
         <p>Live connectors, scaffolded sources, and internal compute are separated so the UI matches actual system state.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
+      {!loading && !error ? (
+        <div className="three-col">
+          <Card title="Healthy Live Connectors"><div className="hero-metric">{healthyLiveCount}/{liveConnectors.length || 0}</div><div className="state-message">Truthfully healthy live integrations</div></Card>
+          <Card title="Needs Attention"><div className="hero-metric">{staleOrFailedCount}</div><div className="state-message">Live connectors that are stale or failed</div></Card>
+          <Card title="Scaffolded / Compute"><div className="hero-metric">{scaffoldedRows.length + computeRows.length}</div><div className="state-message">Non-live sources separated from real connector health</div></Card>
+        </div>
+      ) : null}
       {loading ? <Card title="Source Health Status"><div className="state-message">Loading live source health…</div></Card> : null}
       {error ? <Card title="Source Health Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
       {!loading && !error ? (

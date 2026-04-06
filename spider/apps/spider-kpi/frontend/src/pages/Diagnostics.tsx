@@ -42,12 +42,22 @@ export function DiagnosticsPage() {
     diagnostics[0]?.owner_team ? `Primary owner should be ${diagnostics[0].owner_team}.` : 'No owner tagged; assign clear operational ownership before remediation.',
   ], [diagnostics, recommendations])
 
+  const highSeverityCount = diagnostics.filter((item) => item.severity === 'high').length
+  const assignedCount = diagnostics.filter((item) => item.owner_team).length
+
   return (
     <div className="page-grid">
       <div className="page-head">
         <h2>Diagnostics</h2>
         <p>What changed, why it changed, what to fix, and who should own it.</p>
       </div>
+      {!loading && !error ? (
+        <div className="three-col">
+          <Card title="Priority Diagnostics"><div className="hero-metric">{diagnostics.length}</div><div className="state-message">Evidence items currently surfaced</div></Card>
+          <Card title="High Severity"><div className="hero-metric">{highSeverityCount}</div><div className="state-message">Items marked high severity</div></Card>
+          <Card title="Ownership Tagged"><div className="hero-metric">{assignedCount}/{diagnostics.length || 0}</div><div className="state-message">Diagnostics with an owner team assigned</div></Card>
+        </div>
+      ) : null}
       <ActionBlock items={actionItems} />
       {loading ? <Card title="Diagnostics Status"><div className="state-message">Loading live diagnostics…</div></Card> : null}
       {error ? <Card title="Diagnostics Error"><div className="state-message error">{error}</div></Card> : null}
@@ -56,8 +66,14 @@ export function DiagnosticsPage() {
           <Card title="Driver Diagnostics">
             <div className="stack-list">
               {diagnostics.map((item) => (
-                <div className="list-item" key={item.id}>
-                  <strong>{item.title}</strong>
+                <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={item.id}>
+                  <div className="item-head">
+                    <strong>{item.title}</strong>
+                    <div className="inline-badges">
+                      <span className={`badge severity-${item.severity}`}>{item.severity}</span>
+                      <span className="badge badge-neutral">{item.business_date}</span>
+                    </div>
+                  </div>
                   <p>{item.summary}</p>
                   <small>Root cause: {item.root_cause || 'n/a'} · Owner: {item.owner_team || 'TBD'} · Confidence: {item.confidence}</small>
                   <small>
@@ -83,8 +99,11 @@ export function DiagnosticsPage() {
           <Card title="Recommended Actions">
             <div className="stack-list">
               {recommendations.map((item) => (
-                <div className="list-item" key={item.id}>
-                  <strong>{item.title}</strong>
+                <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={item.id}>
+                  <div className="item-head">
+                    <strong>{item.title}</strong>
+                    <span className={`badge severity-${item.severity}`}>{item.severity}</span>
+                  </div>
                   <p>{item.recommended_action}</p>
                   <small>{item.owner_team} · Severity: {item.severity}</small>
                 </div>

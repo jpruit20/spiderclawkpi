@@ -12,6 +12,9 @@ export function Layout({ children }: { children: ReactNode }) {
             <p>Decision Engine</p>
           </div>
         </div>
+        <div className="sidebar-summary">
+          <small>Use the left nav in order: top-line truth, commercial drivers, support risk, UX friction, issue signals, diagnostics, then source health.</small>
+        </div>
         <nav className="nav">
           <NavLink to="/">Executive Overview</NavLink>
           <NavLink to="/commercial">Commercial Performance</NavLink>

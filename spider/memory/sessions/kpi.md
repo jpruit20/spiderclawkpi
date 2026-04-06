@@ -34,13 +34,11 @@
 - Frontend public availability is currently blocked by Vercel Authentication on `kpi.spidergrills.com`, even though the backend health endpoint is healthy.
 
 ## Next actions
-- Validate that the Vercel edge config now serves both frontend routes and proxied `/api/*` calls natively from `kpi.spidergrills.com`.
-- Run and keep a repeatable smoke test for frontend routes plus key API endpoints after deploys.
-- Validate the latest frontend hardening pass in a browser against live APIs and make sure new partial/empty/error states surface honestly under real degraded-source conditions.
+- Validate the latest full-dashboard UX/UI pass in production and watch for any regressions in executive/commercial/support page hierarchy or route behavior.
+- Keep the smoke test current as pages and endpoints evolve.
 - Decide whether to promote the threshold framework into a backend/shared config so thresholds become source-controlled policy instead of frontend-only heuristics.
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
-- Validate the new decision-quality pass in-browser against live APIs, especially threshold ordering, compare formatting, and UX telemetry readiness states.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
@@ -85,6 +83,7 @@
 - 2026-04-06 browser network-error root cause: the live frontend bundle was still configured to call `https://api-kpi.spidergrills.com` directly from the browser, which risks cross-origin failures because the backend does not advertise the required CORS headers for the frontend origin. Patched `src/lib/api.ts` so `kpi.spidergrills.com` always uses same-origin `/api` through the Vercel edge proxy and trims any stray whitespace from configured API base values.
 - 2026-04-06 executive overview metric wiring fix: the today/intraday executive summary was hard-coding `ad_spend` and `mer` to `null`, so those cards rendered as `—` even when the daily KPI mart had values. Patched Executive Overview to reuse same-day daily ad spend/open backlog and derive MER/cost-per-purchase from the intraday revenue plus same-day ad spend.
 - 2026-04-06 executive overview cross-check follow-up: the same today/intraday path was also dropping same-day daily values for add-to-cart rate, bounce rate, ticket/support metrics, and tickets-per-100-orders. Patched the executive summary builder to inherit all compatible same-day daily KPI fields while still using intraday revenue/orders/sessions for live top-line cards.
+- 2026-04-06 full-dashboard UX/UI pass (3 iterations): completed a broad information-hierarchy pass across Executive, Commercial, Support, UX, Issue Radar, Diagnostics, and Source Health; added top-of-page summary cards on key pages, improved action-block priority framing, tightened compare-summary readability, surfaced severity more clearly in diagnostics/issues, added sidebar workflow guidance, and reduced UX-page redundancy while preserving explicit telemetry trust states.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

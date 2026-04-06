@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { CompareToolbar } from '../components/CompareToolbar'
+import { CompareSummary } from '../components/CompareSummary'
+import { EventAnnotationList } from '../components/EventAnnotationList'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
+import { StatePanel } from '../components/StatePanel'
+import { ThresholdPanel } from '../components/ThresholdPanel'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
-import { KPIDaily } from '../lib/types'
+import { KPIDaily, OverviewResponse } from '../lib/types'
 import { useUrlRange } from '../lib/urlRange'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
@@ -48,6 +52,7 @@ export function CommercialPerformance() {
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '7d', startDate: '', endDate: '' })
   const [compareMode, setCompareMode] = useState<CompareMode>('prior_period')
+  const [overview, setOverview] = useState<OverviewResponse | null>(null)
   const requestIdRef = useRef(0)
   const hydratedRangeRef = useRef(false)
 
@@ -62,11 +67,12 @@ export function CommercialPerformance() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.dailyKpis(signal)
+        const [payload, overviewPayload] = await Promise.all([api.dailyKpis(signal), api.overview(signal)])
         if (signal?.aborted || requestId !== requestIdRef.current) return
         const ordered = [...payload].sort((a, b) => a.business_date.localeCompare(b.business_date))
         const safeRows = isIncompleteLatestDay(ordered[ordered.length - 1]) ? ordered.slice(0, -1) : ordered
         setRows(safeRows)
+        setOverview(overviewPayload)
         setRange((current) => current.startDate && current.endDate ? current : buildPresetRange('7d', safeRows, { anchorDate: todayDate }))
       } catch (err) {
         if (signal?.aborted || requestId !== requestIdRef.current) return
@@ -114,6 +120,12 @@ export function CommercialPerformance() {
   const trafficContribution = priorRevenue ? ((currentSessions - priorSessions) / Math.max(priorSessions, 1)) * 100 : 0
   const conversionContribution = priorConversion ? ((currentConversion - priorConversion) / priorConversion) * 100 : 0
   const aovContribution = priorAov ? ((currentAov - priorAov) / priorAov) * 100 : 0
+  const comparePoints = [
+    compareValue(currentRevenue, priorComparable ? priorRevenue : null, 'Revenue'),
+    compareValue(currentOrders, priorComparable ? priorOrders : null, 'Orders'),
+    compareValue(currentSessions, priorComparable ? priorSessions : null, 'Sessions'),
+    compareValue(currentConversion, priorComparable ? priorConversion : null, 'Conversion'),
+  ]
   const provenanceItems: MetricProvenanceItem[] = [
     {
       metric: 'Revenue / Orders / AOV',
@@ -151,7 +163,21 @@ export function CommercialPerformance() {
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
       <CompareToolbar mode={compareMode} onChange={setCompareMode} />
 
+      {!loading && !error && currentRows.length ? (
+        <div className="three-col">
+          <Card title="Revenue in Scope"><div className="hero-metric">${currentRevenue.toFixed(0)}</div><div className="state-message">Selected-range revenue with current compare mode applied below</div></Card>
+          <Card title="MER in Scope"><div className="hero-metric">{currentMer.toFixed(2)}</div><div className="state-message">Media efficiency at the current range scope</div></Card>
+          <Card title="Conversion in Scope"><div className="hero-metric">{currentConversion.toFixed(2)}%</div><div className="state-message">Order-rate signal before traffic expansion decisions</div></Card>
+        </div>
+      ) : null}
+
       <ActionBlock items={actionItems} />
+      <ThresholdPanel metrics={[
+        { metric: 'conversion_rate', value: currentConversion },
+        { metric: 'mer', value: currentMer },
+        { metric: 'average_order_value', value: currentAov },
+        { metric: 'bounce_rate', value: currentRows.length ? currentRows.reduce((sum, row) => sum + Number(row.bounce_rate || 0), 0) / currentRows.length : null },
+      ]} />
       <MetricProvenancePanel items={provenanceItems} />
 
       {loading ? (
@@ -169,8 +195,9 @@ export function CommercialPerformance() {
             <SummaryBlock label="Ad Spend" current={currentAdSpend} prior={priorAdSpend} comparable={priorComparable} format={(v) => `$${v.toFixed(2)}`} />
             <SummaryBlock label="MER" current={currentMer} prior={priorMer} comparable={priorComparable} format={(v) => v.toFixed(2)} />
           </div>
-          {!priorComparable ? <div className="state-message">Comparison window incomplete; deltas may be distorted.</div> : null}
+          {!priorComparable ? <StatePanel kind="partial" tone="warn" title="Comparison window incomplete" message="Deltas are not trustworthy yet because the selected range cannot be fully matched to the comparison window." /> : null}
           {priorComparable ? <div className="scope-note">Compare mode: {compareMode === 'same_day_last_week' ? 'Same day last week' : 'Prior period'} · Revenue {formatDeltaPct(revenueCompare.deltaPct)} · Orders {formatDeltaPct(ordersCompare.deltaPct)}</div> : null}
+          <CompareSummary mode={compareMode} points={comparePoints} />
         </>
       ) : (
         <Card title="Performance Summary"><div className="state-message">No KPI rows returned.</div></Card>
@@ -200,6 +227,14 @@ export function CommercialPerformance() {
             <div className="list-item"><strong>AOV change</strong><p>{priorComparable ? `${aovContribution.toFixed(1)}%` : '—'}</p></div>
             <div className="list-item"><strong>Interpretation</strong><p>These are directional driver changes vs the prior comparison window, not an additive revenue decomposition.</p></div>
           </div>
+        </Card>
+      </div>
+      <div className="two-col two-col-equal">
+        <Card title="Decision Event Annotations">
+          <EventAnnotationList diagnostics={overview?.diagnostics || []} recommendations={overview?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
+        </Card>
+        <Card title="Inventory / Fulfillment Risk Layer">
+          <StatePanel kind="partial" tone="warn" title="Inventory layer still blocked by ERP coverage" message="Commercial decisions can be made on demand efficiency today, but stockout and ship-delay risk are not yet wired into this page. Avoid scaling campaigns blindly if a SKU family is supply-constrained." detail="Needed next metrics: SKU stock cover, backorder exposure, fulfillment aging, and delayed-ship rate by product line." />
         </Card>
       </div>
       <Card title="Daily Performance Table">
