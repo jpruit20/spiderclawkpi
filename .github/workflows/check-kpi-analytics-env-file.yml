@@ -1,0 +1,32 @@
+name: Check KPI Analytics Env File
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DO_KPI_SSH_KEY }}
+
+      - name: Add droplet host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Show analytics key names present in droplet env file
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
+          set -euo pipefail
+          grep -nE '^(GA4|GOOGLE_ANALYTICS|CLARITY|MICROSOFT_CLARITY)_' /opt/spiderclawkpi/spider/apps/spider-kpi/.env | sed 's/=.*$/=<redacted>/' || true
+          EOF
