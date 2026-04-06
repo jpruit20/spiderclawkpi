@@ -13,7 +13,7 @@ TIMEOUT_SECONDS = 45
 
 
 def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
-    configured = bool(settings.clarity_project_id and settings.clarity_api_token and settings.clarity_base_url)
+    configured = bool(settings.clarity_api_token and settings.clarity_base_url)
     upsert_source_config(
         db,
         'clarity',
@@ -24,15 +24,16 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
     db.commit()
 
     if not configured:
-        return {'ok': False, 'message': 'Clarity not fully configured (project_id/api_token/base_url required)', 'records_processed': 0}
+        return {'ok': False, 'message': 'Clarity not fully configured (api_token/base_url required)', 'records_processed': 0}
 
     run = start_sync_run(db, 'clarity', 'data_export', {'days': days})
     db.commit()
 
     try:
-        url = f"{settings.clarity_base_url.rstrip('/')}/projects/{settings.clarity_project_id}/export-data?numOfDays={days}"
+        url = settings.clarity_base_url.rstrip('/')
         response = requests.get(
             url,
+            params={'numOfDays': max(1, min(days, 3)), 'dimension1': 'URL'},
             headers={'Authorization': f'Bearer {settings.clarity_api_token}', 'Accept': 'application/json'},
             timeout=TIMEOUT_SECONDS,
         )
