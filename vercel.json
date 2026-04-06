@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
+  "installCommand": "cd spider/apps/spider-kpi/frontend && npm install",
   "buildCommand": "cd spider/apps/spider-kpi/frontend && npm run build",
   "outputDirectory": "spider/apps/spider-kpi/frontend/dist",
   "rewrites": [
