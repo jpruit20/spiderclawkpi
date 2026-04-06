@@ -272,6 +272,7 @@ export function ExecutiveOverview() {
       {!loading && !error && data ? (
         <>
           <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
+          <ActionBlock items={actionItems} />
           <ThresholdPanel metrics={[
             { metric: 'conversion_rate', value: displayKpi?.conversion_rate },
             { metric: 'mer', value: displayKpi?.mer },
@@ -281,7 +282,6 @@ export function ExecutiveOverview() {
             { metric: 'tickets_per_100_orders', value: displayKpi?.tickets_per_100_orders },
             { metric: 'first_response_time', value: displayKpi?.first_response_time },
           ]} />
-          <ActionBlock items={actionItems} />
           <MetricProvenancePanel items={provenanceItems} />
           <div className="two-col two-col-equal">
             <Card title="Revenue + Sessions Trend">
@@ -326,7 +326,7 @@ export function ExecutiveOverview() {
           <div className="two-col">
             <Card title="Top Alerts">
               <div className="stack-list">
-                {(data?.alerts || []).slice(0, 6).map((alert) => (
+                {(data?.alerts || []).slice(0, 3).map((alert) => (
                   <div className="list-item" key={alert.id}>
                     <strong>{alert.title}</strong>
                     <p>{alert.message}</p>
@@ -368,7 +368,7 @@ export function ExecutiveOverview() {
           <div className="two-col">
             <Card title="Recommendations">
               <div className="stack-list">
-                {(data?.recommendations || []).slice(0, 6).map((item) => (
+                {(data?.recommendations || []).slice(0, 3).map((item) => (
                   <div className="list-item" key={item.id}>
                     <strong>{item.title}</strong>
                     <p>{item.recommended_action}</p>

@@ -95,7 +95,7 @@ export function IssueRadar() {
       {error ? <Card title="Issue Radar Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
-          <ClusterList title="Highest Business Risk" rows={topThree} />
+          <ClusterList title="Priority Queue" rows={topThree} />
           <div className="two-col">
             <ClusterList title="Fastest Rising" rows={data.fastest_rising} />
             <ClusterList title="Highest Complaint Burden" rows={data.highest_burden} />

@@ -13,7 +13,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="sidebar-summary">
-          <small>Use the left nav in order: top-line truth, commercial drivers, support risk, UX friction, issue signals, diagnostics, then source health.</small>
+          <small>Start with truth, then drivers, then risk.</small>
         </div>
         <nav className="nav">
           <NavLink to="/">Executive Overview</NavLink>

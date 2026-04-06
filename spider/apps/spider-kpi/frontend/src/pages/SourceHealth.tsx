@@ -27,12 +27,12 @@ function SourceCard({ row }: { row: SourceHealthItem }) {
   const internalCompute = row.source_type === 'compute'
   const truthfulHealthy = liveConnector && isTruthfullyHealthy(row)
   const displayStatus = truthfulHealthy ? 'healthy' : row.derived_status
-  const label = scaffolded ? 'Type: Scaffolded source' : internalCompute ? 'Type: Internal compute' : 'Type: Live connector'
+  const label = scaffolded ? 'scaffolded' : internalCompute ? 'compute' : 'live'
   const summary = scaffolded
-    ? 'Scaffolded source intentionally disabled until live ingestion is implemented.'
+    ? 'Intentionally disabled until live ingestion is implemented.'
     : truthfulHealthy
-      ? 'Health: Healthy. Recent successful sync exists.'
-      : `Health: ${displayStatus.charAt(0).toUpperCase()}${displayStatus.slice(1)}. ${row.status_summary}`
+      ? 'Recent successful sync exists.'
+      : row.status_summary
 
   return (
     <div className={`list-item status-${statusTone(displayStatus)}`}>
@@ -49,7 +49,7 @@ function SourceCard({ row }: { row: SourceHealthItem }) {
         {row.stale_minutes !== undefined && row.stale_minutes !== null ? ` · Freshness lag: ${row.stale_minutes} min` : ''}
       </small>
       {row.last_success_at ? <small>Last success: {row.last_success_at}</small> : null}
-      {!truthfulHealthy ? <small>Health status: {displayStatus}</small> : null}
+      {!truthfulHealthy ? <small>Health: {displayStatus}</small> : null}
       {row.last_error && !truthfulHealthy ? <small><strong>Last error:</strong> {row.last_error}</small> : null}
     </div>
   )
