@@ -1,6 +1,7 @@
 # Session: KPI
 
 ## Objective
+- Investigate the reported KPI website outage and restore clear public access.
 - Tune and refine the Spider Grills KPI dashboard so the data is more meaningful, actionable, and decision-grade.
 
 ## Current assumptions
@@ -13,19 +14,33 @@
 - MEMORY.md
 - AGENTS.md
 - TOOLS.md
-- apps/spider-kpi/backend/app/core/config.py
-- apps/spider-kpi/backend/app/ingestion/connectors/shopify.py
+- apps/spider-kpi/frontend/src/App.tsx
+- apps/spider-kpi/frontend/src/components/KpiGrid.tsx
+- apps/spider-kpi/frontend/src/components/StatePanel.tsx
+- apps/spider-kpi/frontend/src/components/CompareSummary.tsx
+- apps/spider-kpi/frontend/src/components/ThresholdPanel.tsx
+- apps/spider-kpi/frontend/src/components/EventAnnotationList.tsx
+- apps/spider-kpi/frontend/src/pages/ExecutiveOverview.tsx
+- apps/spider-kpi/frontend/src/pages/CommercialPerformance.tsx
 - apps/spider-kpi/frontend/src/pages/SupportCX.tsx
-- apps/spider-kpi/.env.example
+- apps/spider-kpi/frontend/src/pages/UXBehavior.tsx
+- apps/spider-kpi/frontend/src/lib/thresholds.ts
+- apps/spider-kpi/frontend/src/components/CompareSummary.tsx
+- apps/spider-kpi/frontend/src/App.tsx
+- apps/spider-kpi/frontend/src/styles.css
 
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
+- Frontend public availability is currently blocked by Vercel Authentication on `kpi.spidergrills.com`, even though the backend health endpoint is healthy.
 
 ## Next actions
-- Audit current dashboard surfaces for weak interpretability.
-- Promote validated KPI rules into topic memory.
+- Remove or correct the Vercel deployment/auth protection currently blocking public access to `kpi.spidergrills.com`.
+- Validate the latest frontend hardening pass in a browser against live APIs and make sure new partial/empty/error states surface honestly under real degraded-source conditions.
+- Decide whether to promote the threshold framework into a backend/shared config so thresholds become source-controlled policy instead of frontend-only heuristics.
+- Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
+- Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
+- Validate the new decision-quality pass in-browser against live APIs, especially threshold ordering, compare formatting, and UX telemetry readiness states.
 - Keep implementation-specific notes here instead of polluting durable files.
-- Validate the new Shopify embedded app auth shell inside Shopify admin and confirm token exchange + Admin API probe succeed on `https://kpi.spidergrills.com`.
 
 ## Current implementation notes
 - Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
@@ -50,6 +65,19 @@
   - deploy/runtime files now point at the recovered FastAPI repo path instead of the obsolete pre-recovery path,
   - `scripts/refresh_all.py` now executes the current connector + compute stack directly and was validated live.
 - Final sidecar assessment: the system is good enough to stop for now; main remaining caveat is that older-order Shopify refunds/cancellations/edits outside the recent `created_at` poll window are not yet folded back into `ShopifyOrderDaily` automatically via webhook-driven daily-mart updates.
+- 2026-04-05 investigation: live Shopify Admin API for the current business-window returns roughly the user-reported totals (`$96,061.83` / `157` recognized orders across `2026-03-29`..`2026-04-05`, or `$94,641.85` / `155` for complete days `2026-03-29`..`2026-04-04`). The dashboard discrepancy is therefore real and backend-side rather than frontend range math.
+- 2026-04-05 production topology verified: `kpi.spidergrills.com` is the Vercel frontend; `api-kpi.spidergrills.com` resolves to DigitalOcean droplet `157.245.209.71`; the live FastAPI backend runs via `systemd` service `spider-kpi.service` from `/opt/spiderclawkpi/spider/apps/spider-kpi`, with Postgres on `127.0.0.1:5432`.
+- 2026-04-05 production validation: droplet backfill and run-sync endpoints succeeded (`shopify` backfill processed 1,085 rows across 61 business dates; recent sync processed 149 rows), but `shopify_orders_daily` / `kpi_daily` for `2026-03-29..2026-04-05` remained materially low (`118` orders / `$66,202.19` including today, `115` / `$64,730.21` complete days). This proves production code is behind the corrected local Shopify recovery logic rather than merely stale.
+- 2026-04-05 repo hardening: `scripts/refresh_all.py` and admin seed path were made repo-relative so production maintenance commands work outside the original dev workstation path.
+- 2026-04-05 root-cause patch: Shopify poll sync no longer overwrites `shopify_orders_daily` directly from a partial recent fetch; it now upserts canonical per-order event state, rebuilds touched business dates from the latest order state, and then recomputes downstream KPI rows. Commit pushed: `e9f8a0c` (`Rebuild Shopify daily from canonical order state`).
+- 2026-04-05 follow-up ops hardening: added `deploy/PRODUCTION_RUNBOOK.md` plus `scripts/validate_shopify_window.py` so future production deploys and Shopify/KPI window validation are repeatable without ad-hoc shell debugging.
+- 2026-04-05 source-health fix: production source health showed Shopify/Triple Whale as broken due to scheduler seed-on-start clobbering live connector config back to `seeded-prototype`, and Freshdesk was genuinely failing on the agents endpoint with `state=full_time`. Patched scheduler/seed protections, added Freshdesk fallback behavior, and extended backend deploy automation to run connector syncs plus validation after deploy. Latest verified healthy production source-health state: Shopify, Triple Whale, and Freshdesk all healthy.
+- 2026-04-05 UI audit start: saved first-pass evidence bundle to `sidecar/reviews/kpi_site_audit/` with screenshots, headers, HTML, DOM dumps, manifest, and ranked recommendations. Highest-severity proven frontend defect is that direct navigation to all major non-root routes on `kpi.spidergrills.com` returns `404 NOT_FOUND` from Vercel, blocking deep links, route refresh, and URL-persisted operational state.
+- 2026-04-05 first frontend hardening pass: added route-level error boundaries, structured API request logging with safe retry, and URL-persisted date ranges for Executive Overview + Commercial Performance. Commit pushed: `e5221a2`.
+- 2026-04-05 extended frontend decision-engine pass completed locally: added a reusable normalized state panel (`loading` / `empty` / `error` / `partial` / `ready`), a threshold framework for conversion/MER/AOV/support burden/FRT, compare-summary blocks, stale-age surfacing inside KPI cards, decision event annotation panels sourced from diagnostics + recommendations, explicit inventory/fulfillment risk placeholders, and a more operational UX / Venom telemetry page. Executive Overview is now lazy-loaded too, and `npm run build` passed with chunked output including separate `react-vendor` and `charts-vendor` bundles plus route chunks.
+- 2026-04-05 follow-up frontend hardening pass completed locally: threshold policy now covers bounce rate, support resolution time, and SLA breach rate; threshold cards sort worst-first and show target bands; compare-summary values now format revenue/conversion honestly; decision event annotations sort by severity/recency with visible tone badges; the UX / Behavior page now includes a scaffolded canonical GA4+Clarity+app telemetry event contract, readiness checklist/score, and explicit normalization state; and the root Executive route now uses the same lazy suspense boundary path as other routes. `npm run build` passed again after the changes.
+- 2026-04-06 outage check: `kpi.spidergrills.com` returns `HTTP 401` with a Vercel Authentication page (`Authentication Required`), while `https://api-kpi.spidergrills.com/health` returns `200 {"ok":true}`. The frontend deployment itself is `Ready` in Vercel under project `spiderclawkpi`; the failure is an access/protection gate, not backend downtime.
+- 2026-04-06 Vercel project inspection: the live production project is `spiderclawkpi` with root directory `spider/apps/spider-kpi/frontend`. Local `.vercel/project.json` files still reference older project name `kpi_dashboard`, which is confusing and should be cleaned up, but the immediate outage is the Vercel auth gate.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.
