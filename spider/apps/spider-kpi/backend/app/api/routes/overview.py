@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session
 from app.compute.kpis import get_data_quality
 from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
-from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
+from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, CXSnapshotOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
 from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
+from app.services.cx_snapshot import build_customer_experience_snapshot
 from app.services.issue_radar import build_issue_radar
 from app.services.telemetry import summarize_telemetry
 from app.services.overview import build_kpi_payload, build_overview
@@ -102,6 +103,14 @@ def get_sources(db: Session = Depends(db_session)):
 @router.get("/telemetry/summary", response_model=TelemetrySummaryOut)
 def telemetry_summary(db: Session = Depends(db_session)):
     return summarize_telemetry(db)
+
+
+@router.get("/cx/snapshot", response_model=CXSnapshotOut)
+def get_cx_snapshot(db: Session = Depends(db_session)):
+    evaluateCustomerExperienceActions(db)
+    evaluateActionClosure(db)
+    db.commit()
+    return build_customer_experience_snapshot(db)
 
 
 @router.get("/cx/actions", response_model=list[CXActionOut])

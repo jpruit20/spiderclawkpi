@@ -212,6 +212,51 @@ export interface CXActionItem {
   snapshot_timestamp: string
 }
 
+export interface CXMetricItem {
+  key: string
+  label: string
+  owner: string
+  current: number
+  target: number
+  delta: number
+  trend7d: number
+  trend30d: number
+  status: 'green' | 'yellow' | 'red'
+  confidence?: 'normal' | 'low'
+  trigger_condition?: string | null
+  critical_immediate?: boolean
+  consecutive_bad_days?: number
+  consecutive_green_days?: number
+  snapshot_timestamp: string
+}
+
+export interface CXInsightItem {
+  text: string
+  evidence: string[]
+  snapshot_timestamp: string
+}
+
+export interface CXTeamLoadItem {
+  name: string
+  tickets_closed_per_day: number
+  active_queue_size: number
+  throughput_ratio: number
+  avg_close_time: number
+  reopen_rate: number
+  share_pct: number
+  snapshot_timestamp: string
+}
+
+export interface CXSnapshotResponse {
+  snapshot_timestamp?: string | null
+  header_metrics: CXMetricItem[]
+  grid_metrics: CXMetricItem[]
+  actions: CXActionItem[]
+  today_focus: CXActionItem[]
+  team_load: CXTeamLoadItem[]
+  insights: CXInsightItem[]
+}
+
 export type KpiDisplayMode = 'latest_complete_day' | 'today_intraday' | 'selected_range_summary'
 export type IntradayStatus = 'live' | 'partial' | 'delayed' | 'unavailable'
 export type RangeOption = 7 | 14 | 30 | 90

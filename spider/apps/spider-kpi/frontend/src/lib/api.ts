@@ -1,5 +1,6 @@
 import type {
   CXActionItem,
+  CXSnapshotResponse,
   DataQualityResponse,
   DiagnosticItem,
   FreshdeskAgentDailyItem,
@@ -120,6 +121,7 @@ export const api = {
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),
   supportTickets: (signal?: AbortSignal) => request<FreshdeskTicketItem[]>('/api/support/tickets', { signal }),
   issues: (signal?: AbortSignal) => request<IssueRadarResponse>('/api/issues', { signal }),
+  cxSnapshot: (signal?: AbortSignal) => request<CXSnapshotResponse>('/api/cx/snapshot', { signal }),
   cxActions: (status?: string, signal?: AbortSignal) => request<CXActionItem[]>(`/api/cx/actions${status ? `?status=${encodeURIComponent(status)}` : ''}`, { signal }),
   updateCxAction: (id: string, status: 'open' | 'in_progress' | 'resolved') => fetch(`${API_BASE}/api/cx/actions/${id}/update`, {
     method: 'POST',

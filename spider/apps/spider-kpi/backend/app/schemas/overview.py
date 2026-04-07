@@ -142,6 +142,51 @@ class CXActionOut(BaseModel):
         from_attributes = True
 
 
+class CXMetricOut(BaseModel):
+    key: str
+    label: str
+    owner: str
+    current: float
+    target: float
+    delta: float
+    trend7d: float
+    trend30d: float
+    status: str
+    confidence: Optional[str] = None
+    trigger_condition: Optional[str] = None
+    critical_immediate: Optional[bool] = None
+    consecutive_bad_days: Optional[int] = None
+    consecutive_green_days: Optional[int] = None
+    snapshot_timestamp: datetime
+
+
+class CXInsightOut(BaseModel):
+    text: str
+    evidence: list[str]
+    snapshot_timestamp: datetime
+
+
+class CXTeamLoadOut(BaseModel):
+    name: str
+    tickets_closed_per_day: float
+    active_queue_size: int
+    throughput_ratio: float
+    avg_close_time: float
+    reopen_rate: float
+    share_pct: float
+    snapshot_timestamp: datetime
+
+
+class CXSnapshotOut(BaseModel):
+    snapshot_timestamp: Optional[datetime] = None
+    header_metrics: list[CXMetricOut]
+    grid_metrics: list[CXMetricOut]
+    actions: list[CXActionOut]
+    today_focus: list[CXActionOut]
+    team_load: list[CXTeamLoadOut]
+    insights: list[CXInsightOut]
+
+
 class CXActionUpdateIn(BaseModel):
     status: str
 

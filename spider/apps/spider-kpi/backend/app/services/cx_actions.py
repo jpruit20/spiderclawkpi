@@ -3,288 +3,81 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
-from app.models import CXAction, FreshdeskAgentDaily, FreshdeskTicket, KPIDaily
+from app.core.config import get_settings
+from app.models import CXAction
+from app.services.action_engine import ActionSignal, resolve_action, upsert_action_signal
+from app.services.cx_snapshot import KPI_CONFIG, build_customer_experience_snapshot
 
-KPI_OWNER = {
-    'open_backlog': 'Jeremiah',
-    'aged_tickets_24h': 'Jeremiah',
-    'avg_close_time': 'Jeremiah',
-    'reopen_rate': 'Jeremiah',
-    'escalation_rate': 'Jeremiah',
-    'queue_concentration_pct': 'Jeremiah',
-}
+settings = get_settings()
 
 
 def ensure_cx_action_storage(db: Session) -> None:
     inspector = inspect(db.bind)
     if inspector.has_table('cx_actions'):
-        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_cx_actions_active_dedup_key ON cx_actions (dedup_key) WHERE status IN ('open','in_progress')"))
         return
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS cx_actions (
-            id VARCHAR(36) PRIMARY KEY,
-            trigger_kpi VARCHAR(64) NOT NULL,
-            trigger_condition VARCHAR(128) NOT NULL,
-            dedup_key VARCHAR(255) NOT NULL,
-            owner VARCHAR(128) NOT NULL,
-            co_owner VARCHAR(128),
-            escalation_owner VARCHAR(128),
-            title VARCHAR(255) NOT NULL,
-            required_action TEXT NOT NULL,
-            priority VARCHAR(32) NOT NULL,
-            status VARCHAR(32) NOT NULL DEFAULT 'open',
-            evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
-            opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            resolved_at TIMESTAMPTZ NULL,
-            auto_close_rule JSONB NOT NULL DEFAULT '{}'::jsonb,
-            snapshot_timestamp TIMESTAMPTZ NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """))
-    for sql in [
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_trigger_kpi ON cx_actions (trigger_kpi)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_dedup_key ON cx_actions (dedup_key)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_owner ON cx_actions (owner)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_co_owner ON cx_actions (co_owner)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_escalation_owner ON cx_actions (escalation_owner)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_priority ON cx_actions (priority)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_status ON cx_actions (status)",
-        "CREATE INDEX IF NOT EXISTS ix_cx_actions_snapshot_timestamp ON cx_actions (snapshot_timestamp)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_cx_actions_active_dedup_key ON cx_actions (dedup_key) WHERE status IN ('open','in_progress')",
-    ]:
-        db.execute(text(sql))
-    db.commit()
+    if settings.env == 'development' or settings.debug:
+        raise RuntimeError('cx_actions table missing in development; apply Alembic migration 20260407_0005_cx_actions.py before running the app')
+    raise RuntimeError('cx_actions table missing in production; apply Alembic migration 20260407_0005_cx_actions.py')
 
 
-def _normalize_date(value: datetime | None) -> str | None:
-    return value.isoformat()[:10] if value else None
-
-
-def _is_closed(status: str | None) -> bool:
-    text = str(status or '').lower()
-    return 'closed' in text or 'resolved' in text or 'solved' in text
-
-
-def _consecutive_bad_days(rows: list[KPIDaily], selector, predicate) -> int:
-    count = 0
-    for row in reversed(rows):
-        if predicate(selector(row)):
-            count += 1
-        else:
-            break
-    return count
-
-
-def _compute_snapshot(db: Session) -> dict[str, Any] | None:
-    rows = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    if not rows:
+def _build_signal(metric: dict[str, Any], snapshot_timestamp: datetime, product_linked: bool) -> ActionSignal | None:
+    if metric['status'] == 'green' or not metric.get('trigger_condition'):
         return None
-    snapshot = rows[-1]
-    snapshot_ts = datetime.combine(snapshot.business_date, datetime.min.time(), tzinfo=timezone.utc)
-
-    tickets = db.execute(select(FreshdeskTicket)).scalars().all()
-    snapshot_date = str(snapshot.business_date)
-    snapshot_open_tickets = []
-    for ticket in tickets:
-        created = _normalize_date(ticket.created_at_source)
-        resolved = _normalize_date(ticket.resolved_at_source)
-        if not created or created > snapshot_date:
-            continue
-        if resolved and resolved <= snapshot_date and _is_closed(ticket.status):
-            continue
-        snapshot_open_tickets.append(ticket)
-
-    start7 = str(rows[max(0, len(rows) - 7)].business_date)
-    assigned_counts: dict[str, int] = {}
-    escalated = 0
-    recent_tickets = 0
-    product_linked_recent = 0
-    for ticket in tickets:
-        created = _normalize_date(ticket.created_at_source)
-        if not created or created < start7 or created > snapshot_date:
-            continue
-        recent_tickets += 1
-        agent = str(ticket.raw_payload.get('responder_name') if ticket.raw_payload else '' or ticket.agent_id or 'Unassigned')
-        assigned_counts[agent] = assigned_counts.get(agent, 0) + 1
-        text = f"{ticket.subject or ''} {ticket.category or ''} {' '.join(ticket.tags_json or [])}".lower()
-        is_product = any(token in text for token in ['firmware', 'venom', 'disconnect', 'temperature', 'product'])
-        if any(token in text for token in ['escalat', 'engineering', 'urgent']):
-            escalated += 1
-            if is_product:
-                product_linked_recent += 1
-
-    total_assigned = sum(assigned_counts.values())
-    queue_concentration = (max(assigned_counts.values()) / total_assigned * 100) if total_assigned else 0.0
-    escalation_rate = (escalated / recent_tickets * 100) if recent_tickets else 0.0
-    aged_tickets = len(snapshot_open_tickets)
-    product_linked = product_linked_recent > 0
-
-    metrics = {
-        'open_backlog': {'current': snapshot.open_backlog, 'target': 90, 'red': 140, 'critical': 180},
-        'aged_tickets_24h': {'current': aged_tickets, 'target': 50, 'red': 90, 'critical': 120},
-        'avg_close_time': {'current': snapshot.resolution_time, 'target': 24, 'red': 48, 'critical': 60},
-        'reopen_rate': {'current': snapshot.reopen_rate, 'target': 5, 'red': 8, 'critical': 12},
-        'escalation_rate': {'current': escalation_rate, 'target': 8, 'red': 12, 'critical': 18},
-        'queue_concentration_pct': {'current': queue_concentration, 'target': 40, 'red': 50, 'critical': 60},
-    }
-    return {
-        'snapshot_timestamp': snapshot_ts,
-        'rows': rows,
-        'metrics': metrics,
-        'product_linked': product_linked,
-    }
-
-
-def _build_action(metric_key: str, data: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any] | None:
-    current = float(data['current'])
-    target = float(data['target'])
-    red = float(data['red'])
-    critical = float(data['critical'])
-    status = 'green'
-    trigger = None
-    if current > red:
-        status = 'red'
-        trigger = f'{metric_key}_gt_{int(red)}'
-    elif current > target:
-        status = 'yellow'
-        trigger = f'{metric_key}_gt_{int(target)}'
-    if status == 'green':
+    if not metric['critical_immediate'] and metric['consecutive_bad_days'] < 2:
         return None
-
-    rows = snapshot['rows']
-    selector_map = {
-        'open_backlog': lambda r: r.open_backlog,
-        'aged_tickets_24h': lambda r: r.open_backlog,
-        'avg_close_time': lambda r: r.resolution_time,
-        'reopen_rate': lambda r: r.reopen_rate,
-        'escalation_rate': lambda r: r.reopen_rate,
-        'queue_concentration_pct': lambda r: r.open_backlog,
-    }
-    consecutive = _consecutive_bad_days(rows, selector_map[metric_key], lambda v: float(v) > target)
-    immediate = current > critical
-    if not immediate and consecutive < 2:
-        return None
-
-    titles = {
-        'open_backlog': 'Reduce active queue backlog',
-        'aged_tickets_24h': 'Clear aged ticket queue',
-        'avg_close_time': 'Reduce slow resolution cycle',
-        'reopen_rate': 'Fix repeat-contact driver',
-        'escalation_rate': 'Reduce escalation driver',
-        'queue_concentration_pct': 'Rebalance assignment load',
-    }
-    required_map = {
-        'open_backlog': 'Redistribute queue work immediately and clear the oldest backlog first.',
-        'aged_tickets_24h': 'Assign same-day ownership on aged tickets and stop new tickets from aging into the bucket.',
-        'avg_close_time': 'Review slow categories and rebalance work away from the slowest closure path.',
-        'reopen_rate': 'Audit repeat-contact tickets and fix the underlying unresolved issue.',
-        'escalation_rate': 'Identify escalation-heavy themes and remove the top escalation driver.',
-        'queue_concentration_pct': 'Shift assignment away from the overloaded rep and rebalance queue ownership.',
-    }
-    priority = 'critical' if immediate else 'high' if status == 'red' else 'medium'
-    co_owner = 'Kyle' if snapshot['product_linked'] and metric_key in {'reopen_rate', 'escalation_rate', 'avg_close_time'} else None
-    escalation_owner = 'Joseph' if status == 'red' and consecutive > 3 else None
-    return {
-        'trigger_kpi': metric_key,
-        'trigger_condition': trigger,
-        'dedup_key': f'{metric_key}:{trigger}',
-        'owner': KPI_OWNER[metric_key],
-        'co_owner': co_owner,
-        'escalation_owner': escalation_owner,
-        'title': titles[metric_key],
-        'required_action': required_map[metric_key],
-        'priority': priority,
-        'status': 'open',
-        'evidence': [
-            {'metric': metric_key, 'current': current, 'target': target},
-            {'consecutive_bad_days': consecutive, 'critical_immediate': immediate},
+    config = KPI_CONFIG[metric['key']]
+    return ActionSignal(
+        trigger_kpi=metric['key'],
+        trigger_condition=metric['trigger_condition'],
+        owner=config['owner'],
+        co_owner='Kyle' if product_linked and metric['key'] in {'reopen_rate', 'escalation_rate', 'avg_close_time'} else None,
+        escalation_owner='Joseph' if metric['status'] == 'red' and metric['consecutive_bad_days'] > 3 else None,
+        title=config['title'],
+        required_action=config['required_action'],
+        priority='critical' if metric['critical_immediate'] else 'high' if metric['status'] == 'red' else 'medium',
+        evidence=[
+            {'metric': metric['key'], 'current': metric['current'], 'target': metric['target'], 'status': metric['status']},
+            {'consecutive_bad_days': metric['consecutive_bad_days'], 'critical_immediate': metric['critical_immediate']},
+            {'snapshot_timestamp': snapshot_timestamp.isoformat()},
         ],
-        'auto_close_rule': {'type': 'kpi_recovery', 'requires_consecutive_green_days': 2, 'trigger_kpi': metric_key},
-        'snapshot_timestamp': snapshot['snapshot_timestamp'],
-        'consecutive_bad_days': consecutive,
-    }
+        auto_close_rule={'type': 'kpi_recovery', 'requires_consecutive_green_days': 2, 'trigger_kpi': metric['key']},
+        snapshot_timestamp=snapshot_timestamp,
+    )
 
 
 def evaluateCustomerExperienceActions(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
     ensure_cx_action_storage(db)
-    snapshot = snapshot or _compute_snapshot(db)
-    if snapshot is None:
+    snapshot = snapshot or build_customer_experience_snapshot(db)
+    if snapshot.get('snapshot_timestamp') is None:
         return []
-    active_actions: list[CXAction] = []
-    for metric_key, data in snapshot['metrics'].items():
-        action_payload = _build_action(metric_key, data, snapshot)
-        if action_payload is None:
+    grid_metrics = snapshot['grid_metrics']
+    product_linked = bool(snapshot.get('product_linked'))
+    actions: list[CXAction] = []
+    for metric in grid_metrics:
+        signal = _build_signal(metric, snapshot['snapshot_timestamp'], product_linked)
+        if signal is None:
             continue
-        existing = db.execute(
-            select(CXAction).where(
-                CXAction.dedup_key == action_payload['dedup_key'],
-                CXAction.status.in_(['open', 'in_progress'])
-            ).limit(1)
-        ).scalar_one_or_none()
-        now = datetime.now(timezone.utc)
-        if existing:
-            existing.owner = action_payload['owner']
-            existing.co_owner = action_payload['co_owner']
-            existing.escalation_owner = action_payload['escalation_owner']
-            existing.title = action_payload['title']
-            existing.required_action = action_payload['required_action']
-            existing.priority = action_payload['priority']
-            existing.evidence = action_payload['evidence']
-            existing.auto_close_rule = action_payload['auto_close_rule']
-            existing.snapshot_timestamp = action_payload['snapshot_timestamp']
-            existing.updated_at = now
-            active_actions.append(existing)
-        else:
-            created = CXAction(
-                trigger_kpi=action_payload['trigger_kpi'],
-                trigger_condition=action_payload['trigger_condition'],
-                dedup_key=action_payload['dedup_key'],
-                owner=action_payload['owner'],
-                co_owner=action_payload['co_owner'],
-                escalation_owner=action_payload['escalation_owner'],
-                title=action_payload['title'],
-                required_action=action_payload['required_action'],
-                priority=action_payload['priority'],
-                status='open',
-                evidence=action_payload['evidence'],
-                opened_at=now,
-                updated_at=now,
-                auto_close_rule=action_payload['auto_close_rule'],
-                snapshot_timestamp=action_payload['snapshot_timestamp'],
-            )
-            db.add(created)
-            active_actions.append(created)
+        action = upsert_action_signal(db, signal, reopen_predicate=lambda existing, _: True)
+        actions.append(action)
     db.flush()
-    return active_actions
+    return actions
 
 
 def evaluateActionClosure(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
     ensure_cx_action_storage(db)
-    snapshot = snapshot or _compute_snapshot(db)
-    if snapshot is None:
+    snapshot = snapshot or build_customer_experience_snapshot(db)
+    if snapshot.get('snapshot_timestamp') is None:
         return []
-    rows = snapshot['rows']
-    selector_map = {
-        'open_backlog': lambda r: r.open_backlog <= 90,
-        'aged_tickets_24h': lambda r: r.open_backlog <= 50,
-        'avg_close_time': lambda r: r.resolution_time <= 24,
-        'reopen_rate': lambda r: r.reopen_rate <= 5,
-        'escalation_rate': lambda r: r.reopen_rate <= 5,
-        'queue_concentration_pct': lambda r: r.open_backlog <= 90,
-    }
-    resolved: list[CXAction] = []
+    metric_map = {metric['key']: metric for metric in snapshot['grid_metrics']}
     active = db.execute(select(CXAction).where(CXAction.status.in_(['open', 'in_progress']))).scalars().all()
-    now = datetime.now(timezone.utc)
+    resolved: list[CXAction] = []
     for action in active:
-        last_two = rows[-2:] if len(rows) >= 2 else rows
-        if len(last_two) >= 2 and all(selector_map[action.trigger_kpi](row) for row in last_two):
-            action.status = 'resolved'
-            action.resolved_at = now
-            action.updated_at = now
+        metric = metric_map.get(action.trigger_kpi)
+        if metric and metric['consecutive_green_days'] >= 2:
+            resolve_action(db, action, snapshot['snapshot_timestamp'])
             resolved.append(action)
     db.flush()
     return resolved
@@ -292,10 +85,18 @@ def evaluateActionClosure(db: Session, snapshot: dict[str, Any] | None = None) -
 
 def seedCustomerExperienceActions(db: Session) -> list[CXAction]:
     ensure_cx_action_storage(db)
-    snapshot = _compute_snapshot(db)
-    if snapshot is None:
+    snapshot = build_customer_experience_snapshot(db)
+    if snapshot.get('snapshot_timestamp') is None:
         return []
     evaluateCustomerExperienceActions(db, snapshot)
     evaluateActionClosure(db, snapshot)
     db.commit()
     return db.execute(select(CXAction).order_by(CXAction.opened_at.desc())).scalars().all()
+
+
+def update_cx_action_status(db: Session, action: CXAction, status: str) -> CXAction:
+    action.status = status
+    action.updated_at = datetime.now(timezone.utc)
+    action.resolved_at = datetime.now(timezone.utc) if status == 'resolved' else None
+    db.flush()
+    return action
