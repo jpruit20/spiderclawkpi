@@ -32,6 +32,8 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
+- Tighten CX action closure logic for non-native metrics (`aged_tickets_24h`, `queue_concentration_pct`, `escalation_rate`) so closure persistence uses the same derived snapshot metric instead of current placeholder approximations.
+- Apply the formal `cx_actions` and telemetry Alembic migrations on the KPI backend host even though runtime bootstrap is now covering production.
 - Deploy the new CX division frontend route and validate live rendering plus data consistency against production APIs.
 - Apply the new telemetry Alembic migration and deploy backend changes to the KPI API host.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
@@ -48,6 +50,7 @@
 - 2026-04-07 frontend deploy completed via GitHub -> Vercel by pushing commits `b6f5bec` and follow-up hotfix `c673f81`; production `kpi.spidergrills.com` now serves `/departments` successfully after adding that route to the static SPA fallback generator.
 - 2026-04-07 backend AWS/Venom foundation pass: added telemetry session/daily schema, `aws_telemetry` connector scaffolding (URL or local-path ingestion), derived telemetry metrics, source-health registration, issue-radar integration, overview telemetry payload, and `/api/telemetry/summary` endpoint. This is architecture-complete but still depends on real AWS export credentials/path plus migration + backend deploy.
 - 2026-04-07 CX division architecture pass: added dedicated `/division/customer-experience` frontend route with a fixed six-section layout, single-snapshot logic, hardened KPI/action ownership rules, Today Focus ranking, team-load panel, and sample snapshot output; also removed the Jeremiah/CX section from the generic Department Views long-scroll page.
+- 2026-04-07 persistent CX action engine pass: moved CX actions from frontend-computed state into backend persistence with `cx_actions` storage, server-side evaluator/closure logic, `/api/cx/actions` + update API, frontend API-driven action consumption, and production bootstrap that self-initializes storage when the formal migration has not yet been applied.
 - Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
 - Freshdesk agent-name enrichment is being added at ingestion/mart rebuild time so Support / CX agent tables show human-readable names instead of responder IDs.
 - Replaced the separate `spider-kpi/` Vercel auth shell from manual OAuth redirects to an embedded-app pattern using App Bridge-authenticated backend requests, server-side session-token verification, and Shopify token exchange.
