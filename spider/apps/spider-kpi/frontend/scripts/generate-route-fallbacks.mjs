@@ -8,6 +8,7 @@ const distDir = path.resolve(__dirname, '..', 'dist')
 const indexPath = path.join(distDir, 'index.html')
 
 const routes = [
+  'departments',
   'revenue',
   'friction',
   'issues',
