@@ -96,14 +96,14 @@ export function SourceHealthPage() {
   return (
     <div className="page-grid">
       <div className="page-head">
-        <h2>Source Health</h2>
-        <p>Live connectors, scaffolded sources, and internal compute are separated so the UI matches actual system state.</p>
+        <h2>System Health</h2>
+        <p>Data trust, connector health, and execution reliability for the decision system.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {!loading && !error ? (
         <div className="three-col">
-          <Card title="Healthy Live Connectors"><div className="hero-metric">{healthyLiveCount}/{liveConnectors.length || 0}</div><div className="state-message">Truthfully healthy live integrations</div></Card>
-          <Card title="Needs Attention"><div className="hero-metric">{staleOrFailedCount}</div><div className="state-message">Live connectors that are stale or failed</div></Card>
+          <Card title="Trusted Live Inputs"><div className="hero-metric">{healthyLiveCount}/{liveConnectors.length || 0}</div><div className="state-message">Decision-grade live integrations</div></Card>
+          <Card title="Decision Risk"><div className="hero-metric">{staleOrFailedCount}</div><div className="state-message">Connectors currently reducing decision confidence</div></Card>
           <Card title="Scaffolded / Compute"><div className="hero-metric">{scaffoldedRows.length + computeRows.length}</div><div className="state-message">Non-live sources separated from real connector health</div></Card>
         </div>
       ) : null}

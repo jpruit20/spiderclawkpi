@@ -308,6 +308,22 @@ a { color: inherit; }
   margin-bottom: 6px;
 }
 
+.decision-item {
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+
+.decision-meta-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.decision-meta-grid p,
+.decision-meta-grid small {
+  margin: 0;
+}
+
 .inline-badges {
   display: flex;
   gap: 8px;

@@ -8,10 +8,15 @@ const distDir = path.resolve(__dirname, '..', 'dist')
 const indexPath = path.join(distDir, 'index.html')
 
 const routes = [
+  'revenue',
+  'friction',
+  'issues',
+  'root-cause',
+  'system-health',
+  // legacy aliases kept live during the transition
   'commercial',
   'support',
   'ux',
-  'issues',
   'diagnostics',
   'source-health',
 ]

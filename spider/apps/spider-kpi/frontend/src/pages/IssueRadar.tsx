@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
+import { currency } from '../lib/operatingModel'
 import { IssueClusterItem, IssueRadarResponse } from '../lib/types'
 
 function ClusterList({ title, rows }: { title: string; rows: IssueClusterItem[] }) {
@@ -19,6 +20,7 @@ function ClusterList({ title, rows }: { title: string; rows: IssueClusterItem[] 
               Priority #{String(item.details_json?.priority_rank ?? 'n/a')} · Score {String(item.details_json?.priority_score ?? 'n/a')} · Burden{' '}
               {String(item.details_json?.tickets_per_100_orders_by_theme ?? 'n/a')} / 100 orders · Trend {String(item.details_json?.trend_label ?? 'n/a')}
             </small>
+            <small>Estimated weekly impact {currency(Number(item.details_json?.priority_score || 0) * 12)}</small>
             <small>
               Impact: {Array.isArray(item.details_json?.impact_type) ? item.details_json.impact_type.join(', ') : String(item.details_json?.impact_type ?? 'n/a')} · Owner: {item.owner_team || 'TBD'}
             </small>
@@ -80,7 +82,7 @@ export function IssueRadar() {
     <div className="page-grid">
       <div className="page-head">
         <h2>Issue Radar</h2>
-        <p>Priority-sorted issue intelligence with the top business risks called out explicitly.</p>
+        <p>Operator queue for the issues most likely to suppress revenue if left unresolved.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {!loading && !error ? (
@@ -97,28 +99,9 @@ export function IssueRadar() {
         <>
           <ClusterList title="Priority Queue" rows={topThree} />
           <div className="two-col">
-            <ClusterList title="Fastest Rising" rows={data.fastest_rising} />
-            <ClusterList title="Highest Complaint Burden" rows={data.highest_burden} />
+            <ClusterList title="Fastest Rising" rows={data.fastest_rising.slice(0, 3)} />
+            <ClusterList title="Highest Complaint Burden" rows={data.highest_burden.slice(0, 3)} />
           </div>
-          <Card title="All Priority-Sorted Clusters">
-            <div className="stack-list">
-              {sortedClusters.map((item) => (
-                <div className={`list-item status-${item.severity === 'high' ? 'bad' : item.severity === 'medium' ? 'warn' : 'good'}`} key={item.id}>
-                  <div className="item-head">
-                    <strong>{item.title}</strong>
-                    <div className="inline-badges">
-                      <span className={`badge severity-${item.severity}`}>{item.severity}</span>
-                      <span className="badge badge-neutral">Priority {String(item.details_json?.priority_rank ?? 'n/a')}</span>
-                    </div>
-                  </div>
-                  <p>{String(item.details_json?.priority_reason_summary || 'No priority reason')}</p>
-                  <small>Tickets / 100 orders: {String(item.details_json?.tickets_per_100_orders_by_theme ?? 'n/a')} · Priority score: {String(item.details_json?.priority_score ?? 'n/a')}</small>
-                  <small>Impact type: {Array.isArray(item.details_json?.impact_type) ? item.details_json.impact_type.join(', ') : String(item.details_json?.impact_type ?? 'n/a')} · Trend: {String(item.details_json?.trend_label ?? 'n/a')}</small>
-                </div>
-              ))}
-              {!sortedClusters.length ? <div className="state-message">No clusters returned.</div> : null}
-            </div>
-          </Card>
           <div className="two-col">
             <Card title="Issue Signals">
               <div className="stack-list">

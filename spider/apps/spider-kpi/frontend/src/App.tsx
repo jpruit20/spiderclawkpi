@@ -2,14 +2,13 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { ExecutiveOverview } from './pages/ExecutiveOverview'
 
-const CommercialPerformance = lazy(() => import('./pages/CommercialPerformance').then((m) => ({ default: m.CommercialPerformance })))
-const DiagnosticsPage = lazy(() => import('./pages/Diagnostics').then((m) => ({ default: m.DiagnosticsPage })))
+const CommandCenter = lazy(() => import('./pages/CommandCenter').then((m) => ({ default: m.CommandCenter })))
+const RevenueEngine = lazy(() => import('./pages/RevenueEngine').then((m) => ({ default: m.RevenueEngine })))
+const FrictionMap = lazy(() => import('./pages/FrictionMap').then((m) => ({ default: m.FrictionMap })))
 const IssueRadar = lazy(() => import('./pages/IssueRadar').then((m) => ({ default: m.IssueRadar })))
-const SourceHealthPage = lazy(() => import('./pages/SourceHealth').then((m) => ({ default: m.SourceHealthPage })))
-const SupportCX = lazy(() => import('./pages/SupportCX').then((m) => ({ default: m.SupportCX })))
-const UXBehavior = lazy(() => import('./pages/UXBehavior').then((m) => ({ default: m.UXBehavior })))
+const RootCause = lazy(() => import('./pages/RootCause').then((m) => ({ default: m.RootCause })))
+const SystemHealthPage = lazy(() => import('./pages/SystemHealth').then((m) => ({ default: m.SystemHealthPage })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -25,13 +24,17 @@ export function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<ErrorBoundary label="Executive Overview"><ExecutiveOverview /></ErrorBoundary>} />
-        <Route path="/commercial" element={withBoundary('Commercial Performance', <CommercialPerformance />)} />
-        <Route path="/support" element={withBoundary('Support / CX', <SupportCX />)} />
-        <Route path="/ux" element={withBoundary('Website UX / Behavior', <UXBehavior />)} />
+        <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
+        <Route path="/revenue" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
+        <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />
-        <Route path="/diagnostics" element={withBoundary('Diagnostics', <DiagnosticsPage />)} />
-        <Route path="/source-health" element={withBoundary('Source Health', <SourceHealthPage />)} />
+        <Route path="/root-cause" element={withBoundary('Root Cause', <RootCause />)} />
+        <Route path="/system-health" element={withBoundary('System Health', <SystemHealthPage />)} />
+        <Route path="/commercial" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
+        <Route path="/support" element={withBoundary('Friction Map', <FrictionMap />)} />
+        <Route path="/ux" element={withBoundary('Friction Map', <FrictionMap />)} />
+        <Route path="/diagnostics" element={withBoundary('Root Cause', <RootCause />)} />
+        <Route path="/source-health" element={withBoundary('System Health', <SystemHealthPage />)} />
       </Routes>
     </Layout>
   )

@@ -1,6 +1,7 @@
 # Session: KPI
 
 ## Objective
+- Refactor the Spider KPI dashboard into a decision-first operating system centered on top revenue actions, impact, confidence, ownership, and system trust.
 - Investigate the reported KPI website outage and restore clear public access.
 - Tune and refine the Spider Grills KPI dashboard so the data is more meaningful, actionable, and decision-grade.
 
@@ -34,9 +35,9 @@
 - Frontend public availability is currently blocked by Vercel Authentication on `kpi.spidergrills.com`, even though the backend health endpoint is healthy.
 
 ## Next actions
-- Validate the latest full-dashboard UX/UI pass in production and watch for any regressions in executive/commercial/support page hierarchy or route behavior.
+- Validate the refactored command-center architecture in production and watch for regressions in routing, action ranking, and merged friction logic.
 - Keep the smoke test current as pages and endpoints evolve.
-- Decide whether to promote the threshold framework into a backend/shared config so thresholds become source-controlled policy instead of frontend-only heuristics.
+- Decide whether to promote the impact/confidence/action-lifecycle system into backend/shared policy so action prioritization becomes source-controlled, not frontend-only.
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
 - Keep implementation-specific notes here instead of polluting durable files.

@@ -13,16 +13,15 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="sidebar-summary">
-          <small>Start with truth, then drivers, then risk.</small>
+          <small>Start with the top action, then revenue driver, then friction, then root cause.</small>
         </div>
         <nav className="nav">
-          <NavLink to="/">Executive Overview</NavLink>
-          <NavLink to="/commercial">Commercial Performance</NavLink>
-          <NavLink to="/support">Support / CX</NavLink>
-          <NavLink to="/ux">Website UX / Behavior</NavLink>
+          <NavLink to="/">Command Center</NavLink>
+          <NavLink to="/revenue">Revenue Engine</NavLink>
+          <NavLink to="/friction">Friction Map</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
-          <NavLink to="/diagnostics">Diagnostics</NavLink>
-          <NavLink to="/source-health">Source Health</NavLink>
+          <NavLink to="/root-cause">Root Cause</NavLink>
+          <NavLink to="/system-health">System Health</NavLink>
         </nav>
         <div className="sidebar-foot">kpi.spidergrills.com</div>
       </aside>
