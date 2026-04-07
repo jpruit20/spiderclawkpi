@@ -42,7 +42,7 @@ export function UXBehavior() {
   const telemetryLag = Math.max(clarity?.stale_minutes || 0, ga4?.stale_minutes || 0)
 
   const actionItems = useMemo(() => [
-    sourceReady ? 'Clarity and GA4 are live; prioritize high-friction journeys, rage/dead clicks, scroll abandonment, and checkout drop-off before cosmetic page tweaks.' : 'Finish connector configuration for Clarity and GA4 so behavior insights become decision-grade instead of anecdotal.',
+    sourceReady ? 'Clarity and GA4 are live; prioritize high-friction journeys, rage/dead clicks, scroll abandonment, landing-page leakage, and checkout drop-off before cosmetic page tweaks.' : 'Finish connector configuration for Clarity and GA4 so behavior insights become decision-grade instead of anecdotal.',
     'Use this page to decide what UX issue to fix next, not to browse heatmaps endlessly. Focus on friction tied to revenue, checkout completion, and support burden.',
     'Translate session behavior into a single next action per pattern: fix a page, fix a funnel step, fix a message, or stop investigating.',
   ], [sourceReady])
@@ -81,8 +81,8 @@ export function UXBehavior() {
       queryLogic: 'runReport by date/page/event for sessions, users, pageviews, bounce, purchase revenue',
       timeWindow: 'rolling window + compare mode',
       refreshCadence: 'poll sync',
-      transformationLogic: 'context layer for whether UX friction is happening on meaningful traffic and revenue pathways',
-      caveats: 'Should be used to prioritize UX interventions, not duplicate broad marketing reporting.',
+      transformationLogic: 'live context layer for whether UX friction is happening on meaningful traffic and revenue pathways',
+      caveats: 'Use GA4 to rank UX interventions by meaningful traffic and revenue impact, not to duplicate broad marketing reporting.',
     },
   ]
 
@@ -159,8 +159,8 @@ export function UXBehavior() {
                 <small>Status: {ga4?.derived_status || 'missing'} · Sync mode: {ga4?.sync_mode || 'n/a'}</small>
               </div>
               <div className="list-item">
-                <strong>Planned context layer</strong>
-                <small>Sessions · Users · Pageviews · Bounce · Revenue context for UX friction prioritization</small>
+                <strong>Live context layer</strong>
+                <small>Sessions · Users · Pageviews · Bounce · Revenue context now feeds UX friction prioritization directly</small>
               </div>
             </div>
           </Card>
@@ -187,17 +187,17 @@ export function UXBehavior() {
             </div>
             <div className="list-item">
               <strong>Telemetry required</strong>
-              <small>GA4 sessions + funnel events · Clarity rage/dead clicks · JS error burden · landing page friction by template</small>
+              <small>GA4 sessions + funnel events + revenue context · Clarity rage/dead clicks · JS error burden · landing page friction by template</small>
             </div>
             <div className="list-item">
               <strong>Instrumentation debt</strong>
-              <small>Still missing a canonical cross-tool event set for PDP view, add-to-cart, checkout start, payment attempt, shipping-method friction, and purchase completion.</small>
+              <small>Core telemetry is now live; next maturity step is tightening the canonical cross-tool event set for PDP view, add-to-cart, checkout start, payment attempt, shipping-method friction, and purchase completion.</small>
             </div>
           </div>
         </Card>
         <Card title="Normalized UX state model">
           {sourceReady ? (
-            <StatePanel kind="ready" tone="good" message="Behavior telemetry appears healthy. Next step is prioritization, not connector debugging." detail="Use rising friction + meaningful traffic + revenue pathway impact as the ranking rule." />
+            <StatePanel kind="ready" tone="good" message="Behavior telemetry appears healthy. Next step is prioritization, not connector debugging." detail="Use rising friction + meaningful traffic + GA4 revenue pathway impact as the ranking rule." />
           ) : (
             <StatePanel kind="partial" tone="warn" message="This page is intentionally honest about partial telemetry. No faux heatmap confidence until both behavior and funnel context are healthy." detail="If a connector fails, keep this page in partial state instead of silently showing empty charts." />
           )}
