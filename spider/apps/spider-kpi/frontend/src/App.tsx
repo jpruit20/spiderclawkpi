@@ -4,6 +4,7 @@ import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 const CommandCenter = lazy(() => import('./pages/CommandCenter').then((m) => ({ default: m.CommandCenter })))
+const DepartmentViews = lazy(() => import('./pages/DepartmentViews').then((m) => ({ default: m.DepartmentViews })))
 const RevenueEngine = lazy(() => import('./pages/RevenueEngine').then((m) => ({ default: m.RevenueEngine })))
 const FrictionMap = lazy(() => import('./pages/FrictionMap').then((m) => ({ default: m.FrictionMap })))
 const IssueRadar = lazy(() => import('./pages/IssueRadar').then((m) => ({ default: m.IssueRadar })))
@@ -25,6 +26,7 @@ export function App() {
     <Layout>
       <Routes>
         <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
+        <Route path="/departments" element={withBoundary('Department Operating Views', <DepartmentViews />)} />
         <Route path="/revenue" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
         <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />

@@ -112,6 +112,21 @@ a { color: inherit; }
   color: var(--muted);
 }
 
+.department-section {
+  display: grid;
+  gap: 16px;
+}
+
+.department-head h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.department-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
 .page-meta {
   display: block;
   margin-top: 8px;
@@ -285,6 +300,10 @@ a { color: inherit; }
 .hero-metric {
   font-size: 40px;
   font-weight: 800;
+}
+
+.hero-metric-sm {
+  font-size: 26px;
 }
 
 .two-col {

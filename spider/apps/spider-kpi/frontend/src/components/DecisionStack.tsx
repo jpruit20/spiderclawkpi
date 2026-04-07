@@ -37,6 +37,7 @@ export function DecisionStack({ actions }: { actions: DecisionAction[] }) {
             </div>
             <p>{action.why}</p>
             <div className="inline-badges">
+              <span className={`badge ${action.severity === 'critical' ? 'badge-bad' : action.severity === 'high' ? 'badge-warn' : 'badge-neutral'}`}>{action.severity || 'medium'}</span>
               <span className="badge badge-good">{action.financialImpactLabel}</span>
               <span className="badge badge-neutral">confidence {action.confidence.toFixed(2)}</span>
               <span className="badge badge-neutral">{action.lifecycle.replace('_', ' ')}</span>
@@ -50,6 +51,10 @@ export function DecisionStack({ actions }: { actions: DecisionAction[] }) {
               <div><small>Owner</small><p>{action.owner}</p></div>
               <div><small>SLA</small><p>{action.sla}</p></div>
               <div><small>Priority score</small><p>{action.priorityScore.toFixed(0)}</p></div>
+            </div>
+            <div className="nested-block">
+              <small><strong>Recommended action:</strong> {action.recommendedAction || action.why}</small>
+              <small><strong>Evidence:</strong> {action.evidenceSources?.join(', ') || 'n/a'}</small>
             </div>
           </div>
         ))}
@@ -67,6 +72,7 @@ export function DecisionStack({ actions }: { actions: DecisionAction[] }) {
                 </div>
               </div>
               <p>{action.why}</p>
+              <small><strong>Owner:</strong> {action.owner} · <strong>SLA:</strong> {action.sla} · <strong>Evidence:</strong> {action.evidenceSources?.join(', ') || 'n/a'}</small>
             </div>
           ))}
         </div>

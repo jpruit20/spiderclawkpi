@@ -13,10 +13,11 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="sidebar-summary">
-          <small>Start with the top action, then revenue driver, then friction, then root cause.</small>
+          <small>Start with the ranked action stack, then leader views, then revenue/funnel friction, then root cause and source health.</small>
         </div>
         <nav className="nav">
           <NavLink to="/">Command Center</NavLink>
+          <NavLink to="/departments">Department Views</NavLink>
           <NavLink to="/revenue">Revenue Engine</NavLink>
           <NavLink to="/friction">Friction Map</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>

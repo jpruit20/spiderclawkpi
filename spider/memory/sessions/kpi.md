@@ -17,9 +17,14 @@
 - TOOLS.md
 - apps/spider-kpi/frontend/src/components/DecisionStack.tsx
 - apps/spider-kpi/frontend/src/lib/operatingModel.ts
+- apps/spider-kpi/frontend/src/lib/departmentViews.ts
 - apps/spider-kpi/frontend/src/pages/CommandCenter.tsx
+- apps/spider-kpi/frontend/src/pages/DepartmentViews.tsx
 - apps/spider-kpi/frontend/src/pages/IssueRadar.tsx
 - apps/spider-kpi/frontend/src/pages/RootCause.tsx
+- apps/spider-kpi/frontend/src/pages/SourceHealth.tsx
+- apps/spider-kpi/frontend/src/components/Layout.tsx
+- apps/spider-kpi/frontend/src/App.tsx
 - apps/spider-kpi/frontend/src/styles.css
 
 ## Blockers
@@ -27,14 +32,17 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
-- Visually validate the new canonical top-3 action hierarchy in-browser and trim any remaining above-the-fold duplication.
-- Decide whether to promote the impact/confidence/trust-penalty policy into backend/shared logic so action ranking becomes source-controlled instead of frontend-only.
+- Visually validate the new department-operating page and command-center action metadata in-browser against live data.
+- Decide whether to promote the impact/confidence/trust-penalty policy plus leader ownership mapping into backend/shared logic so action ranking becomes source-controlled instead of frontend-only.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
+- 2026-04-07 department operating-system pass: added a new frontend Department Views route that derives leader-specific operating views for Joseph, Bailey, Jeremiah, Kyle, Conor, and David from existing KPI/support/issue/source-health endpoints instead of replacing the current dashboard architecture.
+- 2026-04-07 command-center action model now includes severity, recommended action, and evidence sources, and the decision stack renders those explicitly alongside owner/SLA/impact/confidence.
+- 2026-04-07 source health now explicitly calls out AWS / Venom telemetry-health visibility gaps so product-reliability insights remain trust-limited instead of implied.
 - Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
 - Freshdesk agent-name enrichment is being added at ingestion/mart rebuild time so Support / CX agent tables show human-readable names instead of responder IDs.
 - Replaced the separate `spider-kpi/` Vercel auth shell from manual OAuth redirects to an embedded-app pattern using App Bridge-authenticated backend requests, server-side session-token verification, and Shopify token exchange.

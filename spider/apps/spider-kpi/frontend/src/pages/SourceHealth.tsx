@@ -92,6 +92,7 @@ export function SourceHealthPage() {
   const computeRows = useMemo(() => rows.filter((row) => row.source_type === 'compute'), [rows])
   const healthyLiveCount = useMemo(() => liveConnectors.filter((row) => isTruthfullyHealthy(row)).length, [liveConnectors])
   const staleOrFailedCount = useMemo(() => liveConnectors.filter((row) => !isTruthfullyHealthy(row)).length, [liveConnectors])
+  const telemetryRows = useMemo(() => rows.filter((row) => ['aws', 'aws_telemetry', 'venom', 'telemetry'].includes(row.source)), [rows])
 
   return (
     <div className="page-grid">
@@ -111,6 +112,12 @@ export function SourceHealthPage() {
       {error ? <Card title="Source Health Error"><div className="state-message error">{error}</div><button className="button" onClick={() => void load()}>Retry</button></Card> : null}
       {!loading && !error ? (
         <>
+          <Card title="AWS / Venom Telemetry Health">
+            <div className="stack-list">
+              {telemetryRows.map((row) => <SourceCard key={row.source} row={row} />)}
+              {!telemetryRows.length ? <div className="list-item status-warn"><p>AWS / Venom telemetry is not yet exposed as a source-health row, so product reliability insights should be treated as incomplete.</p></div> : null}
+            </div>
+          </Card>
           <Card title="Live Connectors">
             <div className="stack-list">
               {liveConnectors.map((row) => <SourceCard key={row.source} row={row} />)}

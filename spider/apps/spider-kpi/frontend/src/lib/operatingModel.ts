@@ -16,6 +16,9 @@ export interface DecisionAction {
   confidencePenalty: number
   financialImpactLabel: string
   signal: 'revenue' | 'conversion' | 'friction' | 'support' | 'trust'
+  severity?: 'critical' | 'high' | 'medium' | 'low'
+  recommendedAction?: string
+  evidenceSources?: string[]
   priorityScore: number
   trustState: ActionTrustState
   trustLabel: string
@@ -129,7 +132,7 @@ export function topDiagnosticAction(
     id: 'action-diagnostic-primary',
     title: recommendation?.title || diagnostic?.title || 'Address primary commercial drag',
     why: recommendation?.recommended_action || diagnostic?.summary || 'Primary evidence set suggests this is the top recoverable revenue constraint.',
-    owner: recommendation?.owner_team || diagnostic?.owner_team || 'Growth',
+    owner: recommendation?.owner_team || diagnostic?.owner_team || 'Marketing',
     sla: '48h',
     lifecycle: lifecycleFromMetadata(recommendation?.metadata_json),
     impactWeekly: impact,
@@ -141,6 +144,9 @@ export function topDiagnosticAction(
     }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'conversion',
+    severity: 'high',
+    recommendedAction: recommendation?.recommended_action || 'Inspect the top commercial drag and fix the highest-confidence conversion constraint before expanding spend.',
+    evidenceSources: ['shopify', 'triplewhale', diagnostic ? 'diagnostics' : 'overview'],
     priorityScore: impact,
   }, sourceHealth, ['shopify', 'triplewhale'])
   return [action]
@@ -169,6 +175,9 @@ export function backlogAction(rows: KPIDaily[], sourceHealth: SourceHealthItem[]
     }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'support',
+    severity: backlog > 200 ? 'critical' : 'high',
+    recommendedAction: 'Rebalance support load, clear aged backlog, and prevent queue drag from suppressing purchase confidence.',
+    evidenceSources: ['freshdesk', 'shopify'],
     priorityScore: impact,
   }, sourceHealth, ['freshdesk', 'shopify'])
   return [action]
@@ -195,6 +204,9 @@ export function issueAction(issue: IssueClusterItem | undefined, latest: KPIDail
     }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'friction',
+    severity: issue.severity === 'high' ? 'critical' : issue.severity === 'medium' ? 'high' : 'medium',
+    recommendedAction: String(issue.details_json?.recommended_action || 'Confirm root cause, assign an owner, and remove the highest-burden friction path.'),
+    evidenceSources: ['freshdesk', 'clarity', 'ga4'],
     priorityScore: impact,
   }, sourceHealth, ['freshdesk', 'clarity', 'ga4'])
   return [action]
@@ -217,6 +229,9 @@ export function trustAction(sourceHealth: SourceHealthItem[], latest: KPIDaily |
     confidencePenalty: 0,
     financialImpactLabel: `${currency(impact)}/week at risk`,
     signal: 'trust',
+    severity: 'critical',
+    recommendedAction: 'Restore unhealthy sources before changing spend, UX, or operational priorities.',
+    evidenceSources: unhealthy.map((row) => row.source),
     priorityScore: Number((impact * 0.4).toFixed(2)),
     trustState: 'trusted',
     trustLabel: 'Trusted',
