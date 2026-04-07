@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("APP_PASSWORD must be set to a non-default value when auth is enabled")
         if not settings.jwt_secret or settings.jwt_secret == "change-me":
             raise RuntimeError("JWT_SECRET must be set to a non-default value in production")
+    ga4_errors = settings.ga4_validation_errors()
+    if ga4_errors:
+        raise RuntimeError(f"{settings.ga4_invalid_message()} Details: {'; '.join(ga4_errors)}")
     scheduler.start()
     try:
         yield

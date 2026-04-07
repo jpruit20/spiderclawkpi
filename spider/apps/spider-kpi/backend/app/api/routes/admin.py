@@ -9,7 +9,7 @@ from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.freshdesk import sync_freshdesk
-from app.ingestion.connectors.ga4 import sync_ga4
+from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun
@@ -88,3 +88,8 @@ def seed(db: Session = Depends(db_session)):
         recompute_daily_kpis(db)
         recompute_diagnostics(db)
     return seeded
+
+
+@router.get('/debug/ga4')
+def debug_ga4():
+    return ga4_debug_self_check()

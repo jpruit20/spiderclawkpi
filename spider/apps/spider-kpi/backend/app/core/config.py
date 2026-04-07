@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional
@@ -56,6 +57,40 @@ class Settings(BaseSettings):
             cleaned = cleaned.replace("@db:", f"@{runtime_host}:")
         return cleaned
 
+    @field_validator('ga4_client_email', mode='before')
+    @classmethod
+    def normalize_ga4_client_email(cls, value: Any):
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip().strip('"').strip("'")
+        return cleaned or None
+
+    @field_validator('ga4_private_key', mode='before')
+    @classmethod
+    def normalize_ga4_private_key(cls, value: Any):
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+            cleaned = cleaned[1:-1]
+        return cleaned or None
+
+    @field_validator('ga4_project_id', mode='before')
+    @classmethod
+    def normalize_ga4_project_id(cls, value: Any):
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip().strip('"').strip("'")
+        return cleaned or None
+
+    @field_validator('ga4_property_id', mode='before')
+    @classmethod
+    def normalize_ga4_property_id(cls, value: Any):
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip().strip('"').strip("'")
+        return cleaned or None
+
     app_name: str = "Spider KPI Decision Engine"
     env: str = "development"
     debug: bool = False
@@ -95,6 +130,37 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = 5
     historical_start_date: str = "2024-01-01"
     backfill_days: int = 824
+
+    def ga4_validation_errors(self) -> list[str]:
+        fields = [self.ga4_client_email, self.ga4_private_key, self.ga4_project_id, self.ga4_property_id]
+        if not any(fields):
+            return []
+
+        errors: list[str] = []
+        if not self.ga4_client_email:
+            errors.append('GA4_CLIENT_EMAIL missing')
+        elif not self.ga4_client_email.endswith('.iam.gserviceaccount.com'):
+            errors.append('GA4_CLIENT_EMAIL must end with .iam.gserviceaccount.com')
+
+        if not self.ga4_private_key:
+            errors.append('GA4_PRIVATE_KEY missing')
+        else:
+            normalized_key = self.ga4_private_key.replace('\\n', '\n').strip()
+            if '-----BEGIN PRIVATE KEY-----' not in normalized_key or '-----END PRIVATE KEY-----' not in normalized_key:
+                errors.append('GA4_PRIVATE_KEY must contain a valid PEM header/footer')
+
+        if not self.ga4_project_id:
+            errors.append('GA4_PROJECT_ID missing')
+
+        if not self.ga4_property_id:
+            errors.append('GA4_PROPERTY_ID missing')
+        elif not re.fullmatch(r'\d+', self.ga4_property_id):
+            errors.append('GA4_PROPERTY_ID must be numeric')
+
+        return errors
+
+    def ga4_invalid_message(self) -> str:
+        return 'GA4 service-account credentials invalid or incomplete. Use client_email/private_key/project_id from Google service-account JSON and grant that service account access to the GA4 property.'
 
 
 @lru_cache(maxsize=1)
