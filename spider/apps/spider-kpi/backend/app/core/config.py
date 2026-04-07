@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     freshdesk_api_user: Optional[str] = None
 
     sync_interval_minutes: int = 5
+    clarity_sync_interval_minutes: int = 30
     historical_start_date: str = "2024-01-01"
     backfill_days: int = 824
 

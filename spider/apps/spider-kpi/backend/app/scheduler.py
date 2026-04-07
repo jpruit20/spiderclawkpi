@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -67,7 +68,18 @@ def run_syncs() -> None:
             any_success = _successful_result(sync_freshdesk(db, days=7)) or any_success
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
-        if not _already_running(db, "clarity"):
+        latest_clarity_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "clarity")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        clarity_due = (
+            latest_clarity_run is None
+            or latest_clarity_run.started_at is None
+            or latest_clarity_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.clarity_sync_interval_minutes)
+        )
+        if clarity_due and not _already_running(db, "clarity"):
             any_success = _successful_result(sync_clarity(db, days=3)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -146,6 +146,11 @@ def _derived_status(config: SourceConfig, latest_run: SourceSyncRun | None) -> t
     if latest_run.status == "running":
         return "running", "Sync is currently in progress.", None
     if latest_run.status == "failed":
+        if latest_run.error_message and '429' in latest_run.error_message and config.last_success_at is not None:
+            stale_minutes = _staleness_minutes(config.source_name, config.last_success_at)
+            threshold = STALE_MINUTES_BY_SOURCE.get(config.source_name, 240)
+            if stale_minutes is not None and stale_minutes <= threshold:
+                return "healthy", f"Latest poll was rate-limited, but last successful sync is still fresh ({stale_minutes} minutes old).", stale_minutes
         return "failed", latest_run.error_message or "Latest sync failed.", None
 
     stale_minutes = _staleness_minutes(config.source_name, config.last_success_at)
