@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,12 +8,16 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
 from app.api.routes.admin import router as admin_router
+from app.api.deps import require_auth
 from app.api.routes.health import router as health_router
 from app.api.routes.overview import router as overview_router
 from app.core.config import get_settings
+from app.ingestion.connectors.ga4 import ga4_debug_self_check
 from app.scheduler import build_scheduler
 from app.webhooks.shopify import router as shopify_webhook_router
 
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 scheduler = build_scheduler()
@@ -30,6 +35,13 @@ async def lifespan(app: FastAPI):
         if not settings.jwt_secret or settings.jwt_secret == "change-me":
             raise RuntimeError("JWT_SECRET must be set to a non-default value in production")
     ga4_errors = settings.ga4_validation_errors()
+    if any([settings.ga4_client_email, settings.ga4_project_id, settings.ga4_property_id, settings.ga4_private_key]):
+        logger.warning(
+            'GA4 startup config: client_email=%s project_id=%s property_id=%s',
+            settings.masked_ga4_client_email(),
+            settings.ga4_project_id or 'missing',
+            settings.ga4_property_id or 'missing',
+        )
     if ga4_errors:
         raise RuntimeError(f"{settings.ga4_invalid_message()} Details: {'; '.join(ga4_errors)}")
     scheduler.start()
@@ -65,3 +77,8 @@ async def serve_frontend(full_path: str):
         "detail": "Frontend build not found. Build the React app in frontend/ to serve the dashboard on this port.",
         "frontend_dist": str(FRONTEND_DIST_DIR),
     }
+
+
+@app.get('/debug/ga4', dependencies=[require_auth])
+async def debug_ga4_direct():
+    return ga4_debug_self_check()

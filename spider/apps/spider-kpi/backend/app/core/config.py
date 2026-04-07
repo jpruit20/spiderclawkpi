@@ -151,6 +151,8 @@ class Settings(BaseSettings):
 
         if not self.ga4_project_id:
             errors.append('GA4_PROJECT_ID missing')
+        elif re.fullmatch(r'\d+', self.ga4_project_id):
+            errors.append('GA4_PROJECT_ID must be a non-numeric string')
 
         if not self.ga4_property_id:
             errors.append('GA4_PROPERTY_ID missing')
@@ -161,6 +163,17 @@ class Settings(BaseSettings):
 
     def ga4_invalid_message(self) -> str:
         return 'GA4 service-account credentials invalid or incomplete. Use client_email/private_key/project_id from Google service-account JSON and grant that service account access to the GA4 property.'
+
+    def masked_ga4_client_email(self) -> str:
+        email = (self.ga4_client_email or '').strip()
+        if not email or '@' not in email:
+            return 'missing'
+        local, domain = email.split('@', 1)
+        if len(local) <= 4:
+            masked_local = local[0] + '***' if local else '***'
+        else:
+            masked_local = f'{local[:2]}***{local[-2:]}'
+        return f'{masked_local}@{domain}'
 
 
 @lru_cache(maxsize=1)

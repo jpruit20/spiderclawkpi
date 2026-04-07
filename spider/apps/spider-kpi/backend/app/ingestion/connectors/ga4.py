@@ -24,15 +24,7 @@ def _normalized_ga4_private_key() -> str:
 
 
 def _masked_service_account_email() -> str:
-    email = (settings.ga4_client_email or '').strip()
-    if not email or '@' not in email:
-        return 'missing'
-    local, domain = email.split('@', 1)
-    if len(local) <= 4:
-        masked_local = local[0] + '***' if local else '***'
-    else:
-        masked_local = f'{local[:2]}***{local[-2:]}'
-    return f'{masked_local}@{domain}'
+    return settings.masked_ga4_client_email()
 
 
 def _ga4_invalid_message() -> str:
@@ -46,17 +38,18 @@ def ga4_debug_self_check(days: int = 7) -> dict[str, Any]:
         'service_account_email': _masked_service_account_email(),
         'property_id': settings.ga4_property_id,
         'token_scope': GA4_SCOPE,
-        'token_acquisition_succeeded': False,
-        'run_report_succeeded': False,
+        'token_success': False,
+        'api_success': False,
         'validation_errors': validation_errors,
+        'error_message': None,
     }
     if validation_errors:
-        result['message'] = _ga4_invalid_message()
+        result['error_message'] = _ga4_invalid_message()
         return result
 
     try:
         token = _issue_service_account_token()
-        result['token_acquisition_succeeded'] = bool(token)
+        result['token_success'] = bool(token)
         url = f"{settings.ga4_data_api_base_url}/properties/{settings.ga4_property_id}:runReport"
         payload = {
             'dateRanges': [{'startDate': f'{days}daysAgo', 'endDate': 'today'}],
@@ -73,12 +66,12 @@ def ga4_debug_self_check(days: int = 7) -> dict[str, Any]:
             json=payload,
             timeout=TIMEOUT_SECONDS,
         )
-        result['run_report_succeeded'] = response.ok
+        result['api_success'] = response.ok
         if not response.ok:
-            result['message'] = response.text[:300]
+            result['error_message'] = response.text[:300]
         return result
     except Exception as exc:
-        result['message'] = str(exc)
+        result['error_message'] = str(exc)
         return result
 
 
