@@ -4,7 +4,7 @@ import { DecisionStack } from '../components/DecisionStack'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { compareValue, formatDeltaPct, priorPeriodRows } from '../lib/compare'
-import { backlogAction, currency, DecisionAction, issueAction, rankActions, summarizeLifecycle, topDiagnosticAction, trustAction } from '../lib/operatingModel'
+import { backlogAction, currency, DecisionAction, issueAction, rankActions, summarizeLifecycle, summarizeTrust, topDiagnosticAction, trustAction } from '../lib/operatingModel'
 import { KPIDaily, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
@@ -54,7 +54,6 @@ export function CommandCenter() {
   const priorSessions = sum(priorRows, 'sessions')
   const orders = sum(currentRows, 'orders')
   const priorOrders = sum(priorRows, 'orders')
-  const aov = orders ? revenue / orders : 0
   const conv = sessions ? (orders / sessions) * 100 : 0
   const priorConv = priorSessions ? (priorOrders / priorSessions) * 100 : 0
   const supportRows = support?.rows || []
@@ -67,7 +66,11 @@ export function CommandCenter() {
     ]
     return rankActions(built).slice(0, 5)
   }, [currentRows, sourceHealth, overview, issues, latest, supportRows])
+  const topThree = actions.slice(0, 3)
   const lifecycle = summarizeLifecycle(actions)
+  const trust = summarizeTrust(sourceHealth)
+  const trustLimitedCount = actions.filter((action) => action.trustState === 'trust_limited').length
+  const conditionalCount = actions.filter((action) => action.trustState === 'conditional').length
   const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
   const convDelta = compareValue(conv, priorRows.length === currentRows.length ? priorConv : null, 'Conversion')
 
@@ -75,13 +78,29 @@ export function CommandCenter() {
     <div className="page-grid">
       <div className="page-head">
         <h2>Command Center</h2>
-        <p>What to do next, why it matters, and the weekly revenue at stake.</p>
+        <p>Canonical next actions first. If trust degrades, dependent actions visibly lose confidence.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {loading ? <Card title="Command Center"><div className="state-message">Loading decision system…</div></Card> : null}
       {error ? <Card title="Command Center Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
+          <div className={`trust-banner ${trust.degraded ? 'trust-banner-degraded' : 'trust-banner-healthy'}`}>
+            <div>
+              <strong>{trust.degraded ? 'Trust degraded' : 'Trust healthy'}</strong>
+              <p>
+                {trust.degraded
+                  ? `${trust.degradedSources.join(', ')} is reducing decision confidence. Treat affected actions as conditional until trust is restored.`
+                  : `All ${trust.total}/${trust.total} core sources are healthy. Top actions can be treated as decision-grade.`}
+              </p>
+            </div>
+            <div className="inline-badges">
+              <span className="badge badge-neutral">core sources {trust.healthy}/{trust.total}</span>
+              <span className="badge badge-warn">conditional {conditionalCount}</span>
+              <span className="badge badge-bad">trust-limited {trustLimitedCount}</span>
+            </div>
+          </div>
+
           <div className="three-col">
             <Card title="Revenue Direction">
               <div className="hero-metric">{formatDeltaPct(revenueDelta.deltaPct)}</div>
@@ -99,12 +118,30 @@ export function CommandCenter() {
               </div>
             </Card>
           </div>
+
+          <Card title="Canonical decision order">
+            <div className="canonical-order-strip">
+              {topThree.map((action) => (
+                <div className={`canonical-order-item status-${action.trustState === 'trusted' ? 'good' : action.trustState === 'conditional' ? 'warn' : 'bad'}`} key={action.id}>
+                  <small>#{action.canonicalRank} {action.trustState === 'trusted' ? 'canonical' : action.trustState === 'conditional' ? 'conditional' : 'trust-limited'}</small>
+                  <strong>{action.title}</strong>
+                  <p>{action.financialImpactLabel} · owner {action.owner}</p>
+                </div>
+              ))}
+              {!topThree.length ? <div className="state-message">No top actions ranked yet.</div> : null}
+            </div>
+          </Card>
+
           <DecisionStack actions={actions} />
+
           <div className="two-col two-col-equal">
             <Card title="10-second decision view">
               <div className="stack-list compact">
                 <div className="list-item status-good"><strong>Do now</strong><p>{actions[0]?.title || 'No action ranked yet.'}</p></div>
-                <div className="list-item status-warn"><strong>Why</strong><p>{actions[0]?.why || 'Need live inputs to rank next action.'}</p></div>
+                <div className={`list-item status-${actions[0]?.trustState === 'trusted' ? 'good' : actions[0]?.trustState === 'conditional' ? 'warn' : 'bad'}`}>
+                  <strong>Confidence gate</strong>
+                  <p>{actions[0]?.trustLabel || 'Need live inputs to rank next action.'}</p>
+                </div>
                 <div className="list-item status-muted"><strong>Financial impact</strong><p>{actions[0]?.financialImpactLabel || '$0/week'} · owner {actions[0]?.owner || 'TBD'} · SLA {actions[0]?.sla || 'n/a'}</p></div>
               </div>
             </Card>

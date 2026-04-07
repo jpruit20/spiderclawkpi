@@ -15,29 +15,21 @@
 - MEMORY.md
 - AGENTS.md
 - TOOLS.md
-- apps/spider-kpi/frontend/src/App.tsx
-- apps/spider-kpi/frontend/src/components/KpiGrid.tsx
-- apps/spider-kpi/frontend/src/components/StatePanel.tsx
-- apps/spider-kpi/frontend/src/components/CompareSummary.tsx
-- apps/spider-kpi/frontend/src/components/ThresholdPanel.tsx
-- apps/spider-kpi/frontend/src/components/EventAnnotationList.tsx
-- apps/spider-kpi/frontend/src/pages/ExecutiveOverview.tsx
-- apps/spider-kpi/frontend/src/pages/CommercialPerformance.tsx
-- apps/spider-kpi/frontend/src/pages/SupportCX.tsx
-- apps/spider-kpi/frontend/src/pages/UXBehavior.tsx
-- apps/spider-kpi/frontend/src/lib/thresholds.ts
-- apps/spider-kpi/frontend/src/components/CompareSummary.tsx
-- apps/spider-kpi/frontend/src/App.tsx
+- apps/spider-kpi/frontend/src/components/DecisionStack.tsx
+- apps/spider-kpi/frontend/src/lib/operatingModel.ts
+- apps/spider-kpi/frontend/src/pages/CommandCenter.tsx
+- apps/spider-kpi/frontend/src/pages/IssueRadar.tsx
+- apps/spider-kpi/frontend/src/pages/RootCause.tsx
 - apps/spider-kpi/frontend/src/styles.css
 
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
-- Frontend public availability is currently blocked by Vercel Authentication on `kpi.spidergrills.com`, even though the backend health endpoint is healthy.
+- No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
-- Validate the refactored command-center architecture in production and watch for regressions in routing, action ranking, and merged friction logic.
-- Keep the smoke test current as pages and endpoints evolve.
-- Decide whether to promote the impact/confidence/action-lifecycle system into backend/shared policy so action prioritization becomes source-controlled, not frontend-only.
+- Visually validate the new canonical top-3 action hierarchy in-browser and trim any remaining above-the-fold duplication.
+- Decide whether to promote the impact/confidence/trust-penalty policy into backend/shared logic so action ranking becomes source-controlled instead of frontend-only.
+- Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
 - Keep implementation-specific notes here instead of polluting durable files.
@@ -94,6 +86,7 @@
 - 2026-04-06 startup follow-up bugfix: `/debug/ga4` in `app/main.py` initially used `dependencies=[require_auth]` instead of `dependencies=[Depends(require_auth)]`, which caused FastAPI startup failure before GA4 validation could run. Fixed and recompiled.
 - 2026-04-06 Clarity/GA4 live-state tuning: GA4 is now healthy in production after service-account/env fixes and API enablement. Clarity remained vulnerable to transient 429 rate limits, so polling was tuned to a separate 30-minute cadence and source-health/Executive trust logic now preserves a healthy state when Clarity’s latest poll is rate-limited but the last successful sync is still fresh.
 - 2026-04-06 frontend GA4 activation pass: updated live-connector counting so Executive now includes GA4 alongside Shopify, Triple Whale, Freshdesk, and Clarity (5/5 when healthy), and refreshed the UX / Behavior page copy so GA4 is treated as an active context layer for friction prioritization rather than a merely planned input.
+- 2026-04-06 command-center refinement pass: the operating model now explicitly penalizes action confidence when required sources degrade, labels affected actions as `Conditional` or `Trust-limited`, renders the top 3 actions as a canonical ranked strip plus expanded decision cards, and reframes Issue Radar vs Root Cause as queue/escalation versus adjudication/intervention pages. Local frontend build passed after the pass.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

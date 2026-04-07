@@ -1,6 +1,7 @@
 import { DiagnosticItem, IssueClusterItem, KPIDaily, RecommendationItem, SourceHealthItem } from './types'
 
 export type ActionLifecycle = 'open' | 'in_progress' | 'validated' | 'closed'
+export type ActionTrustState = 'trusted' | 'conditional' | 'trust_limited'
 
 export interface DecisionAction {
   id: string
@@ -11,9 +12,15 @@ export interface DecisionAction {
   lifecycle: ActionLifecycle
   impactWeekly: number
   confidence: number
+  baseConfidence: number
+  confidencePenalty: number
   financialImpactLabel: string
   signal: 'revenue' | 'conversion' | 'friction' | 'support' | 'trust'
   priorityScore: number
+  trustState: ActionTrustState
+  trustLabel: string
+  blockedBy: string[]
+  canonicalRank?: number
 }
 
 export interface ConfidenceInputs {
@@ -24,6 +31,7 @@ export interface ConfidenceInputs {
 }
 
 const LIFE_ORDER: ActionLifecycle[] = ['open', 'in_progress', 'validated', 'closed']
+const CORE_SOURCES = ['shopify', 'triplewhale', 'freshdesk', 'clarity', 'ga4']
 
 export function impactFromConversion(sessions: number, conversionDeltaPctPoints: number, aov: number) {
   const conversionDelta = conversionDeltaPctPoints / 100
@@ -52,8 +60,54 @@ function lifecycleFromMetadata(metadata: Record<string, unknown> | undefined): A
   return LIFE_ORDER.includes(value as ActionLifecycle) ? (value as ActionLifecycle) : 'open'
 }
 
+function unhealthySources(sourceHealth: SourceHealthItem[], requiredSources: string[]) {
+  return requiredSources.filter((name) => sourceHealth.find((row) => row.source === name)?.derived_status !== 'healthy')
+}
+
+function trustStateFor(blockedBy: string[]) {
+  if (blockedBy.length >= 2) return 'trust_limited'
+  if (blockedBy.length === 1) return 'conditional'
+  return 'trusted'
+}
+
+function trustLabelFor(blockedBy: string[]) {
+  if (blockedBy.length >= 2) return `Trust-limited · depends on ${blockedBy.join(', ')}`
+  if (blockedBy.length === 1) return `Conditional · depends on ${blockedBy[0]}`
+  return 'Trusted'
+}
+
+function withTrust(action: Omit<DecisionAction, 'baseConfidence' | 'confidencePenalty' | 'trustState' | 'trustLabel' | 'blockedBy'>, sourceHealth: SourceHealthItem[], requiredSources: string[]): DecisionAction {
+  const blockedBy = unhealthySources(sourceHealth, requiredSources)
+  const penalty = blockedBy.length >= 2 ? 0.3 : blockedBy.length === 1 ? 0.15 : 0
+  const confidence = Math.max(0.15, Number((action.confidence - penalty).toFixed(2)))
+  const trustState = trustStateFor(blockedBy)
+  return {
+    ...action,
+    baseConfidence: action.confidence,
+    confidencePenalty: penalty,
+    confidence,
+    trustState,
+    trustLabel: trustLabelFor(blockedBy),
+    blockedBy,
+    priorityScore: Number((action.impactWeekly * confidence).toFixed(2)),
+  }
+}
+
 export function rankActions(actions: DecisionAction[]) {
-  return [...actions].sort((a, b) => b.priorityScore - a.priorityScore || b.impactWeekly - a.impactWeekly || b.confidence - a.confidence)
+  return [...actions]
+    .sort((a, b) => b.priorityScore - a.priorityScore || b.impactWeekly - a.impactWeekly || b.confidence - a.confidence)
+    .map((action, index) => ({ ...action, canonicalRank: index + 1 }))
+}
+
+export function summarizeTrust(sourceHealth: SourceHealthItem[]) {
+  const relevant = sourceHealth.filter((row) => CORE_SOURCES.includes(row.source))
+  const degraded = relevant.filter((row) => row.derived_status !== 'healthy')
+  return {
+    total: relevant.length,
+    healthy: relevant.length - degraded.length,
+    degraded: degraded.length,
+    degradedSources: degraded.map((row) => row.source),
+  }
 }
 
 export function topDiagnosticAction(
@@ -71,13 +125,7 @@ export function topDiagnosticAction(
   if (!recommendation && !diagnostic) return []
   const convDelta = Math.max(0.15, Math.abs(Number(diagnostic?.details_json?.conversion_change_pct || 0)) / 100)
   const impact = impactFromConversion(sessions, convDelta, aov) * 7
-  const confidence = confidenceScore({
-    sourceHealth,
-    requiredSources: ['shopify', 'triplewhale'],
-    sampleSize: sessions,
-    completeness: diagnostic ? Number(diagnostic.confidence || 0.6) : 0.55,
-  })
-  return [{
+  const action = withTrust({
     id: 'action-diagnostic-primary',
     title: recommendation?.title || diagnostic?.title || 'Address primary commercial drag',
     why: recommendation?.recommended_action || diagnostic?.summary || 'Primary evidence set suggests this is the top recoverable revenue constraint.',
@@ -85,11 +133,17 @@ export function topDiagnosticAction(
     sla: '48h',
     lifecycle: lifecycleFromMetadata(recommendation?.metadata_json),
     impactWeekly: impact,
-    confidence,
+    confidence: confidenceScore({
+      sourceHealth,
+      requiredSources: ['shopify', 'triplewhale'],
+      sampleSize: sessions,
+      completeness: diagnostic ? Number(diagnostic.confidence || 0.6) : 0.55,
+    }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'conversion',
-    priorityScore: impact * confidence,
-  }]
+    priorityScore: impact,
+  }, sourceHealth, ['shopify', 'triplewhale'])
+  return [action]
 }
 
 export function backlogAction(rows: KPIDaily[], sourceHealth: SourceHealthItem[]): DecisionAction[] {
@@ -99,13 +153,7 @@ export function backlogAction(rows: KPIDaily[], sourceHealth: SourceHealthItem[]
   const sessions = Number(latest.sessions || 0)
   const aov = Number(latest.average_order_value || 0)
   const impact = impactFromConversion(sessions * 0.18, Math.min(0.45, backlog / 1500), aov) * 7
-  const confidence = confidenceScore({
-    sourceHealth,
-    requiredSources: ['freshdesk', 'shopify'],
-    sampleSize: backlog,
-    completeness: backlog > 0 ? 0.85 : 0.5,
-  })
-  return [{
+  const action = withTrust({
     id: 'action-support-backlog',
     title: 'Reduce support backlog before it suppresses conversion',
     why: `Open backlog is ${backlog}, which increases purchase hesitation and repeat-contact drag.`,
@@ -113,11 +161,17 @@ export function backlogAction(rows: KPIDaily[], sourceHealth: SourceHealthItem[]
     sla: '24h',
     lifecycle: 'open',
     impactWeekly: impact,
-    confidence,
+    confidence: confidenceScore({
+      sourceHealth,
+      requiredSources: ['freshdesk', 'shopify'],
+      sampleSize: backlog,
+      completeness: backlog > 0 ? 0.85 : 0.5,
+    }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'support',
-    priorityScore: impact * confidence,
-  }]
+    priorityScore: impact,
+  }, sourceHealth, ['freshdesk', 'shopify'])
+  return [action]
 }
 
 export function issueAction(issue: IssueClusterItem | undefined, latest: KPIDaily | undefined, sourceHealth: SourceHealthItem[]): DecisionAction[] {
@@ -125,13 +179,7 @@ export function issueAction(issue: IssueClusterItem | undefined, latest: KPIDail
   const burden = Number(issue.details_json?.tickets_per_100_orders_by_theme || issue.details_json?.tickets_per_100_orders || 8)
   const convDelta = Math.min(0.6, Math.max(0.12, burden / 100))
   const impact = impactFromConversion(Number(latest.sessions || 0) * 0.35, convDelta, Number(latest.average_order_value || 0)) * 7
-  const confidence = confidenceScore({
-    sourceHealth,
-    requiredSources: ['freshdesk', 'clarity', 'ga4'],
-    sampleSize: Number(issue.details_json?.priority_score || 100),
-    completeness: Number(issue.confidence || 0.6),
-  })
-  return [{
+  const action = withTrust({
     id: `action-issue-${issue.id}`,
     title: issue.title,
     why: String(issue.details_json?.priority_reason_summary || 'High-friction issue is creating revenue drag.'),
@@ -139,18 +187,23 @@ export function issueAction(issue: IssueClusterItem | undefined, latest: KPIDail
     sla: '72h',
     lifecycle: lifecycleFromMetadata(issue.details_json as Record<string, unknown>),
     impactWeekly: impact,
-    confidence,
+    confidence: confidenceScore({
+      sourceHealth,
+      requiredSources: ['freshdesk', 'clarity', 'ga4'],
+      sampleSize: Number(issue.details_json?.priority_score || 100),
+      completeness: Number(issue.confidence || 0.6),
+    }),
     financialImpactLabel: `${currency(impact)}/week`,
     signal: 'friction',
-    priorityScore: impact * confidence,
-  }]
+    priorityScore: impact,
+  }, sourceHealth, ['freshdesk', 'clarity', 'ga4'])
+  return [action]
 }
 
 export function trustAction(sourceHealth: SourceHealthItem[], latest: KPIDaily | undefined): DecisionAction[] {
-  const unhealthy = sourceHealth.filter((row) => ['shopify', 'triplewhale', 'freshdesk', 'clarity', 'ga4'].includes(row.source) && row.derived_status !== 'healthy')
+  const unhealthy = sourceHealth.filter((row) => CORE_SOURCES.includes(row.source) && row.derived_status !== 'healthy')
   if (!unhealthy.length || !latest) return []
   const impact = impactFromConversion(Number(latest.sessions || 0), 0.1, Number(latest.average_order_value || 0)) * 7
-  const confidence = 0.4
   return [{
     id: 'action-data-trust',
     title: 'Restore data trust before changing spend or UX',
@@ -159,10 +212,15 @@ export function trustAction(sourceHealth: SourceHealthItem[], latest: KPIDaily |
     sla: '4h',
     lifecycle: 'open',
     impactWeekly: impact,
-    confidence,
+    confidence: 0.4,
+    baseConfidence: 0.4,
+    confidencePenalty: 0,
     financialImpactLabel: `${currency(impact)}/week at risk`,
     signal: 'trust',
-    priorityScore: impact * confidence,
+    priorityScore: Number((impact * 0.4).toFixed(2)),
+    trustState: 'trusted',
+    trustLabel: 'Trusted',
+    blockedBy: [],
   }]
 }
 

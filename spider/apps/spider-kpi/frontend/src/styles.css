@@ -169,7 +169,8 @@ a { color: inherit; }
 
 .scope-note,
 .scope-banner,
-.stale-banner {
+.stale-banner,
+.trust-banner {
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.03);
   border-radius: 18px;
@@ -177,7 +178,8 @@ a { color: inherit; }
   color: var(--muted);
 }
 
-.scope-banner {
+.scope-banner,
+.trust-banner {
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -187,8 +189,26 @@ a { color: inherit; }
 
 .scope-banner strong,
 .scope-banner span,
-.scope-banner small {
+.scope-banner small,
+.trust-banner strong,
+.trust-banner span,
+.trust-banner small {
   display: block;
+}
+
+.trust-banner p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.trust-banner-healthy {
+  border-color: rgba(57, 208, 143, 0.28);
+  background: rgba(57, 208, 143, 0.06);
+}
+
+.trust-banner-degraded {
+  border-color: rgba(255, 109, 122, 0.32);
+  background: rgba(255, 109, 122, 0.07);
 }
 
 .intraday-banner {
@@ -310,6 +330,57 @@ a { color: inherit; }
 
 .decision-item {
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+
+.canonical-actions-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.canonical-action {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px 16px 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+}
+
+.canonical-action p,
+.canonical-order-item p {
+  color: var(--muted);
+}
+
+.canonical-action small,
+.canonical-order-item small {
+  color: var(--muted);
+  display: block;
+}
+
+.canonical-rank {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 28px;
+  font-weight: 800;
+  color: rgba(255,255,255,0.16);
+}
+
+.canonical-order-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.canonical-order-item {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255,255,255,0.03);
+}
+
+.decision-secondary-list {
+  margin-top: 14px;
 }
 
 .decision-meta-grid {
@@ -490,6 +561,6 @@ th {
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
-  .kpi-grid, .two-col, .three-col, .summary-grid, .compare-values { grid-template-columns: 1fr; }
-  .toolbar, .scope-banner { flex-direction: column; align-items: flex-start; }
+  .kpi-grid, .two-col, .three-col, .summary-grid, .compare-values, .canonical-actions-grid, .canonical-order-strip { grid-template-columns: 1fr; }
+  .toolbar, .scope-banner, .trust-banner { flex-direction: column; align-items: flex-start; }
 }
