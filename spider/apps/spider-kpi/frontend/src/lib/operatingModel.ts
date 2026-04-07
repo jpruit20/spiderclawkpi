@@ -96,6 +96,21 @@ function withTrust(action: Omit<DecisionAction, 'baseConfidence' | 'confidencePe
   }
 }
 
+export function frictionRankingScore(input: {
+  impact: number
+  confidence: number
+  sourceHealth: SourceHealthItem[]
+  usesClarity: boolean
+  corroborated: boolean
+}) {
+  const { impact, confidence, sourceHealth, usesClarity, corroborated } = input
+  const clarityHealthy = sourceHealth.find((row) => row.source === 'clarity')?.derived_status === 'healthy'
+  if (usesClarity && !clarityHealthy && !corroborated) {
+    return Number((impact * Math.min(confidence, 0.15) * 0.05).toFixed(2))
+  }
+  return Number((impact * confidence).toFixed(2))
+}
+
 export function rankActions(actions: DecisionAction[]) {
   return [...actions]
     .sort((a, b) => b.priorityScore - a.priorityScore || b.impactWeekly - a.impactWeekly || b.confidence - a.confidence)

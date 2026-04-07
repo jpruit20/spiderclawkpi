@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { confidenceScore, currency, impactFromConversion } from '../lib/operatingModel'
+import { confidenceScore, currency, frictionRankingScore, impactFromConversion } from '../lib/operatingModel'
 import { FreshdeskTicketItem, IssueRadarResponse, KPIDaily, SourceHealthItem } from '../lib/types'
 
 function normalizeDate(value?: string) {
@@ -74,6 +74,14 @@ export function FrictionMap() {
         sampleSize: row.count * 100,
         completeness: linkedIssue ? Number(linkedIssue.confidence || 0.65) : 0.6,
       })
+      const corroborated = Boolean(linkedIssue)
+      const rankingScore = frictionRankingScore({
+        impact,
+        confidence,
+        sourceHealth,
+        usesClarity: true,
+        corroborated,
+      })
       return {
         theme: row.theme,
         open: row.open,
@@ -81,10 +89,12 @@ export function FrictionMap() {
         traffic: recentOrders,
         impact,
         confidence,
+        corroborated,
+        rankingScore,
         owner: linkedIssue?.owner_team || 'Product + CX',
         why: linkedIssue ? String(linkedIssue.details_json?.priority_reason_summary || 'Linked issue cluster is rising.') : 'Support burden indicates recurring friction worth fixing.',
       }
-    }).sort((a, b) => (b.impact * b.confidence) - (a.impact * a.confidence)).slice(0, 5)
+    }).sort((a, b) => b.rankingScore - a.rankingScore).slice(0, 5)
   }, [tickets, issues, recentRows, recentOrders, latestAov, sourceHealth])
 
   const telemetry = {
@@ -128,6 +138,7 @@ export function FrictionMap() {
                       <span className="badge badge-good">{currency(item.impact)}/week</span>
                       <span className="badge badge-neutral">confidence {item.confidence.toFixed(2)}</span>
                       {clarityDegraded ? <span className="badge badge-warn">Clarity degraded</span> : null}
+                      {clarityDegraded && !item.corroborated ? <span className="badge badge-warn">needs corroboration</span> : null}
                     </div>
                   </div>
                   <p>{item.why}</p>
