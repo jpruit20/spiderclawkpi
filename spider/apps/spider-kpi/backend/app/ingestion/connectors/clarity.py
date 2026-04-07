@@ -27,6 +27,25 @@ def _clarity_url() -> str:
     return base
 
 
+def _extract_clarity_records(body: Any) -> list[Any]:
+    if isinstance(body, list):
+        rows: list[Any] = []
+        for item in body:
+            if isinstance(item, dict):
+                info = item.get('information')
+                if isinstance(info, list):
+                    rows.extend(info)
+                else:
+                    rows.append(item)
+        return rows
+
+    if isinstance(body, dict):
+        records = body.get('records') or body.get('rows') or body.get('information') or []
+        return records if isinstance(records, list) else [records]
+
+    return []
+
+
 def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
     configured = bool(settings.clarity_api_token and settings.clarity_base_url)
     upsert_source_config(
@@ -54,16 +73,16 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
         )
         response.raise_for_status()
         body = response.json()
-        records = body.get('records') or body.get('rows') or []
+        records = _extract_clarity_records(body)
         run.metadata_json = {
             **(run.metadata_json or {}),
             'project_id': settings.clarity_project_id,
             'request_url': response.url,
-            'sample': records[:3] if isinstance(records, list) else body,
+            'sample': records[:3] if records else body,
         }
-        finish_sync_run(db, run, status='success', records_processed=len(records) if isinstance(records, list) else 1)
+        finish_sync_run(db, run, status='success', records_processed=len(records))
         db.commit()
-        return {'ok': True, 'records_processed': len(records) if isinstance(records, list) else 1, 'project_id': settings.clarity_project_id}
+        return {'ok': True, 'records_processed': len(records), 'project_id': settings.clarity_project_id}
     except Exception as exc:
         finish_sync_run(db, run, status='failed', error_message=str(exc))
         db.commit()
