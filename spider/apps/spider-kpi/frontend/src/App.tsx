@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
@@ -30,6 +30,8 @@ export function App() {
         <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
+        <Route path="/division/product-engineering" element={withBoundary('Division Index', <DepartmentViews />)} />
+        <Route path="/division/product-enginering" element={<Navigate to="/division/product-engineering" replace />} />
         <Route path="/departments" element={withBoundary('Division Index', <DepartmentViews />)} />
         <Route path="/revenue" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
         <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />

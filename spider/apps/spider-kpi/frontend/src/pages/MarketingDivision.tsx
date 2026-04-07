@@ -100,10 +100,12 @@ export function MarketingDivision() {
   ]
   const topFriction = issues?.highest_business_risk?.[0] || issues?.clusters?.[0]
   const frictionItems = [
-    { label: 'Highest drop-off path', text: topFriction?.title || 'Awaiting ranked friction source', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
-    { label: 'Rage-click pages', text: clarityDegraded ? 'Clarity data degraded — insights have reduced confidence' : 'Use Friction Map for rage-click page detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
-    { label: 'Dead-click clusters', text: clarityDegraded ? 'Clarity data degraded — dead-click clusters are currently low-confidence' : 'Use Friction Map for dead-click cluster detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
+    { label: 'Highest drop-off path', text: topFriction?.title || 'Awaiting ranked friction source', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence', corroborated: Boolean(topFriction) },
+    { label: 'Rage-click pages', text: clarityDegraded ? 'Clarity data degraded — insights have reduced confidence' : 'Use Friction Map for rage-click page detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence', corroborated: false },
+    { label: 'Dead-click clusters', text: clarityDegraded ? 'Clarity data degraded — dead-click clusters are currently low-confidence' : 'Use Friction Map for dead-click cluster detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence', corroborated: false },
   ]
+  const campaignBreakdownAvailable = false
+  const landingPageBreakdownAvailable = false
   const actions = [
     conversion < priorConversion ? `Conversion is down ${formatDeltaPct(compareValue(conversion, priorConversion, 'Conversion').deltaPct)}. Fix the top high-traffic friction path before adding more spend.` : 'Conversion is not the main drag right now; preserve funnel changes and focus on scaling efficient traffic.',
     mer < priorMer ? `MER softened to ${mer.toFixed(2)}. Reallocate spend away from lower-efficiency traffic until channel mix recovers.` : `MER is holding at ${mer.toFixed(2)}. Keep scale pressure on the best-performing channels.`,
@@ -150,12 +152,12 @@ export function MarketingDivision() {
                 </div>
               ))}
             </div>
-            <small>PDP and checkout intermediate stages are currently modeled estimates from available KPI fields, not event-perfect counts.</small>
+            <small><strong>Estimated funnel — intermediate stages are modeled.</strong> PDP and checkout stages are not event-perfect counts from a canonical funnel event feed yet.</small>
           </Card>
           <div className="three-col">
             <Card title="Page-level friction">
               <div className="stack-list compact">
-                {frictionItems.map((item, idx) => <div className="list-item status-warn" key={idx}><strong>{item.label}</strong><p>{item.text}</p><small>{item.confidence}</small></div>)}
+                {frictionItems.map((item, idx) => <div className="list-item status-warn" key={idx}><strong>{item.label}</strong><p>{item.text}</p><small>{item.confidence}{clarityDegraded && !item.corroborated ? ' · Will not drive top-ranked actions without non-Clarity corroboration' : ''}</small></div>)}
               </div>
             </Card>
             <Card title="What’s working">
@@ -169,6 +171,18 @@ export function MarketingDivision() {
                 <div className="list-item status-bad"><strong>WHAT’S NOT</strong><p>{conversion < priorConversion ? 'Conversion is down versus the selected comparison window.' : 'Conversion is not currently the primary regression.'}</p></div>
                 <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[0]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
                 <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[1]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
+              </div>
+            </Card>
+          </div>
+          <div className="two-col two-col-equal">
+            <Card title="Campaign-level breakdown">
+              <div className="stack-list compact">
+                <div className="list-item status-warn"><strong>{campaignBreakdownAvailable ? 'Campaign breakdown available' : 'Campaign-level breakdown unavailable'}</strong><p>{campaignBreakdownAvailable ? 'Campaign conversion and efficiency rows would render here.' : 'Current backend does not expose campaign-level marketing performance yet.'}</p><small>{campaignBreakdownAvailable ? 'Live campaign table' : 'Awaiting source feed / backend model.'}</small></div>
+              </div>
+            </Card>
+            <Card title="Landing page by source">
+              <div className="stack-list compact">
+                <div className="list-item status-warn"><strong>{landingPageBreakdownAvailable ? 'Landing page breakdown available' : 'Landing page performance by source unavailable'}</strong><p>{landingPageBreakdownAvailable ? 'Landing pages by source/medium would render here.' : 'Current backend does not expose landing-page-by-source performance yet.'}</p><small>{landingPageBreakdownAvailable ? 'Live landing page table' : 'Awaiting GA4/source feed and backend model.'}</small></div>
               </div>
             </Card>
           </div>
