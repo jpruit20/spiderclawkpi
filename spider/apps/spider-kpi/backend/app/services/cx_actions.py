@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models import CXAction, FreshdeskAgentDaily, FreshdeskTicket, KPIDaily
@@ -16,6 +16,48 @@ KPI_OWNER = {
     'escalation_rate': 'Jeremiah',
     'queue_concentration_pct': 'Jeremiah',
 }
+
+
+def ensure_cx_action_storage(db: Session) -> None:
+    inspector = inspect(db.bind)
+    if inspector.has_table('cx_actions'):
+        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_cx_actions_active_dedup_key ON cx_actions (dedup_key) WHERE status IN ('open','in_progress')"))
+        return
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS cx_actions (
+            id VARCHAR(36) PRIMARY KEY,
+            trigger_kpi VARCHAR(64) NOT NULL,
+            trigger_condition VARCHAR(128) NOT NULL,
+            dedup_key VARCHAR(255) NOT NULL,
+            owner VARCHAR(128) NOT NULL,
+            co_owner VARCHAR(128),
+            escalation_owner VARCHAR(128),
+            title VARCHAR(255) NOT NULL,
+            required_action TEXT NOT NULL,
+            priority VARCHAR(32) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'open',
+            evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+            opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            resolved_at TIMESTAMPTZ NULL,
+            auto_close_rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+            snapshot_timestamp TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """))
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_trigger_kpi ON cx_actions (trigger_kpi)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_dedup_key ON cx_actions (dedup_key)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_owner ON cx_actions (owner)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_co_owner ON cx_actions (co_owner)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_escalation_owner ON cx_actions (escalation_owner)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_priority ON cx_actions (priority)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_status ON cx_actions (status)",
+        "CREATE INDEX IF NOT EXISTS ix_cx_actions_snapshot_timestamp ON cx_actions (snapshot_timestamp)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_cx_actions_active_dedup_key ON cx_actions (dedup_key) WHERE status IN ('open','in_progress')",
+    ]:
+        db.execute(text(sql))
+    db.commit()
 
 
 def _normalize_date(value: datetime | None) -> str | None:
@@ -168,6 +210,7 @@ def _build_action(metric_key: str, data: dict[str, Any], snapshot: dict[str, Any
 
 
 def evaluateCustomerExperienceActions(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
+    ensure_cx_action_storage(db)
     snapshot = snapshot or _compute_snapshot(db)
     if snapshot is None:
         return []
@@ -220,6 +263,7 @@ def evaluateCustomerExperienceActions(db: Session, snapshot: dict[str, Any] | No
 
 
 def evaluateActionClosure(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
+    ensure_cx_action_storage(db)
     snapshot = snapshot or _compute_snapshot(db)
     if snapshot is None:
         return []
@@ -247,6 +291,7 @@ def evaluateActionClosure(db: Session, snapshot: dict[str, Any] | None = None) -
 
 
 def seedCustomerExperienceActions(db: Session) -> list[CXAction]:
+    ensure_cx_action_storage(db)
     snapshot = _compute_snapshot(db)
     if snapshot is None:
         return []
