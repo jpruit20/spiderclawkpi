@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Optional
+import uuid
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -328,6 +329,27 @@ class DriverDiagnostic(TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     root_cause: Mapped[Optional[str]] = mapped_column(Text)
     details_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class CXAction(TimestampMixin, Base):
+    __tablename__ = "cx_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trigger_kpi: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    trigger_condition: Mapped[str] = mapped_column(String(128), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    owner: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    co_owner: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    escalation_owner: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    required_action: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    evidence: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    auto_close_rule: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    snapshot_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class Alert(TimestampMixin, Base):

@@ -1,6 +1,7 @@
 from app.models.entities import (
     Alert,
     CommunityMessage,
+    CXAction,
     DriverDiagnostic,
     FreshdeskAgentDaily,
     FreshdeskGroupsDaily,
@@ -31,6 +32,7 @@ from app.models.entities import (
 __all__ = [
     "Alert",
     "CommunityMessage",
+    "CXAction",
     "DriverDiagnostic",
     "FreshdeskAgentDaily",
     "FreshdeskGroupsDaily",

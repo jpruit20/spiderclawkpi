@@ -192,6 +192,26 @@ export interface SupportOverviewResponse {
   rows: KPIDaily[]
 }
 
+export interface CXActionItem {
+  id: string
+  trigger_kpi: string
+  trigger_condition: string
+  dedup_key: string
+  owner: string
+  co_owner?: string | null
+  escalation_owner?: string | null
+  title: string
+  required_action: string
+  priority: 'low' | 'medium' | 'high' | 'critical'
+  status: 'open' | 'in_progress' | 'resolved'
+  evidence: any[]
+  opened_at: string
+  updated_at: string
+  resolved_at?: string | null
+  auto_close_rule: Record<string, any>
+  snapshot_timestamp: string
+}
+
 export type KpiDisplayMode = 'latest_complete_day' | 'today_intraday' | 'selected_range_summary'
 export type IntradayStatus = 'live' | 'partial' | 'delayed' | 'unavailable'
 export type RangeOption = 7 | 14 | 30 | 90

@@ -119,6 +119,33 @@ class TelemetrySummaryOut(BaseModel):
     top_issue_patterns: list[dict[str, Any]]
 
 
+class CXActionOut(BaseModel):
+    id: str
+    trigger_kpi: str
+    trigger_condition: str
+    dedup_key: str
+    owner: str
+    co_owner: Optional[str] = None
+    escalation_owner: Optional[str] = None
+    title: str
+    required_action: str
+    priority: str
+    status: str
+    evidence: list[Any]
+    opened_at: datetime
+    updated_at: datetime
+    resolved_at: Optional[datetime] = None
+    auto_close_rule: dict[str, Any]
+    snapshot_timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CXActionUpdateIn(BaseModel):
+    status: str
+
+
 class OverviewResponse(BaseModel):
     latest_kpi: Optional[KPIDailyOut] = None
     daily_series: list[KPIDailyOut]

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { FreshdeskAgentDailyItem, FreshdeskTicketItem, IssueClusterItem, KPIDaily, SupportOverviewResponse } from '../lib/types'
+import { CXActionItem, FreshdeskAgentDailyItem, FreshdeskTicketItem, IssueClusterItem, KPIDaily, SupportOverviewResponse } from '../lib/types'
 
 type KpiStatus = 'green' | 'yellow' | 'red'
 type ActionStatus = 'open' | 'in_progress' | 'resolved'
@@ -128,6 +128,7 @@ export function CustomerExperienceDivision() {
   const [agents, setAgents] = useState<FreshdeskAgentDailyItem[]>([])
   const [tickets, setTickets] = useState<FreshdeskTicketItem[]>([])
   const [issues, setIssues] = useState<IssueClusterItem[]>([])
+  const [persistedActions, setPersistedActions] = useState<CXActionItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -137,17 +138,19 @@ export function CustomerExperienceDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [supportPayload, agentsPayload, ticketsPayload, issuesPayload] = await Promise.all([
+        const [supportPayload, agentsPayload, ticketsPayload, issuesPayload, actionsPayload] = await Promise.all([
           api.supportOverview(),
           api.supportAgents(),
           api.supportTickets(),
           api.issues(),
+          api.cxActions(),
         ])
         if (cancelled) return
         setSupport(supportPayload)
         setAgents(agentsPayload || [])
         setTickets(ticketsPayload || [])
         setIssues(issuesPayload.clusters || [])
+        setPersistedActions(actionsPayload || [])
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load customer experience division')
       } finally {
@@ -331,61 +334,26 @@ export function CustomerExperienceDivision() {
   const headerMetrics = metrics.slice(0, 4)
   const gridMetrics = metrics.slice(1)
 
-  const actions = useMemo<ActionItem[]>(() => {
-    const items = gridMetrics
-      .filter((metric) => metric.status !== 'green' && metric.triggerCondition)
-      .filter((metric) => metric.criticalImmediate || metric.consecutiveBadDays >= 2)
-      .map((metric) => {
-        const escalate = metric.status === 'red' && metric.consecutiveBadDays > 3
-        const needsKyle = productLinked && (metric.key === 'reopen_rate' || metric.key === 'escalation_rate' || metric.key === 'avg_close_time')
-        const priority: ActionItem['priority'] = metric.criticalImmediate ? 'critical' : metric.status === 'red' ? 'high' : 'medium'
-        const titles: Record<KpiKey, string> = {
-          open_backlog: 'Reduce active queue backlog',
-          aged_tickets_24h: 'Clear aged ticket queue',
-          avg_close_time: 'Reduce slow resolution cycle',
-          reopen_rate: 'Fix repeat-contact driver',
-          escalation_rate: 'Reduce escalation driver',
-          queue_concentration_pct: 'Rebalance assignment load',
-        }
-        const actionsMap: Record<KpiKey, string> = {
-          open_backlog: 'Redistribute queue work immediately and clear the oldest open backlog first.',
-          aged_tickets_24h: 'Assign a same-day clear-down on aged tickets >24h and stop new tickets from aging into the bucket.',
-          avg_close_time: 'Review slow categories and rebalance work away from the slowest closure path.',
-          reopen_rate: 'Audit repeat-contact tickets and fix the unresolved root cause instead of closing prematurely.',
-          escalation_rate: 'Identify escalation-heavy themes and remove the top escalation driver inside the next 48h.',
-          queue_concentration_pct: 'Shift assignment away from the overloaded rep and rebalance queue ownership rules.',
-        }
-        const dueDate = priority === 'critical' ? `${snapshotDate} EOD` : priority === 'high' ? '24h' : '48h'
-        const dedupKey = `${metric.key}:${metric.triggerCondition}`
-        return {
-          dedupKey,
-          triggerKpi: metric.key,
-          triggerCondition: metric.triggerCondition!,
-          title: titles[metric.key],
-          owner: metric.owner,
-          coOwner: needsKyle ? 'Kyle' : undefined,
-          escalationOwner: escalate ? 'Joseph' : undefined,
-          requiredAction: actionsMap[metric.key],
-          dueDate,
-          priority,
-          status: 'open' as ActionStatus,
-          autoCloseRule: `${metric.label} must recover below threshold for 2 consecutive daily snapshots.`,
-          evidence: [
-            `${metric.label} current ${metric.current.toFixed(1)} vs target ${metric.target.toFixed(1)}`,
-            `${metric.consecutiveBadDays} consecutive daily breaches`,
-            metric.key === 'queue_concentration_pct' ? `Top rep share ${metric.current.toFixed(1)}%` : `7d trend ${metric.trend7d.toFixed(1)}%`,
-          ],
-          consecutiveBadDays: metric.consecutiveBadDays,
-          triggerSnapshot: snapshotTimestamp,
-          priorityScore: (priority === 'critical' ? 100 : priority === 'high' ? 70 : 40) + metric.consecutiveBadDays * 5 + (escalate ? 20 : 0),
-        }
-      })
-    const deduped = new Map<string, ActionItem>()
-    items.forEach((item) => deduped.set(item.dedupKey, item))
-    return Array.from(deduped.values()).sort((a, b) => b.priorityScore - a.priorityScore)
-  }, [gridMetrics, productLinked, snapshotDate, snapshotTimestamp])
+  const actions = useMemo<ActionItem[]>(() => persistedActions.map((item) => ({
+    dedupKey: item.dedup_key,
+    triggerKpi: item.trigger_kpi as KpiKey,
+    triggerCondition: item.trigger_condition,
+    title: item.title,
+    owner: item.owner,
+    coOwner: item.co_owner || undefined,
+    escalationOwner: item.escalation_owner || undefined,
+    requiredAction: item.required_action,
+    dueDate: item.priority === 'critical' ? `${snapshotDate} EOD` : item.priority === 'high' ? '24h' : item.priority === 'medium' ? '48h' : '72h',
+    priority: item.priority === 'low' ? 'medium' : item.priority,
+    status: item.status as ActionStatus,
+    autoCloseRule: typeof item.auto_close_rule === 'object' ? JSON.stringify(item.auto_close_rule) : String(item.auto_close_rule),
+    evidence: (item.evidence || []).map((entry) => typeof entry === 'string' ? entry : JSON.stringify(entry)),
+    consecutiveBadDays: 0,
+    triggerSnapshot: item.snapshot_timestamp,
+    priorityScore: (item.priority === 'critical' ? 100 : item.priority === 'high' ? 70 : item.priority === 'medium' ? 40 : 20) + (item.escalation_owner ? 20 : 0),
+  })).sort((a, b) => b.priorityScore - a.priorityScore), [persistedActions, snapshotDate])
 
-  const todayFocus = actions.slice(0, 3)
+  const todayFocus = actions.filter((item) => item.status !== 'resolved').slice(0, 3)
 
   const insights = useMemo(() => {
     const out: { text: string; evidence: string[] }[] = []

@@ -21,6 +21,7 @@ from app.models import (
     TWSummaryIntraday,
 )
 from app.services.issue_radar import build_issue_radar
+from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
 from app.services.source_health import refresh_source_health_alerts, start_sync_run, finish_sync_run, upsert_source_config
 
 logger = logging.getLogger(__name__)
@@ -445,6 +446,8 @@ def recompute_diagnostics(db: Session) -> None:
         previous = row
 
     refresh_source_health_alerts(db)
+    evaluateCustomerExperienceActions(db)
+    evaluateActionClosure(db)
     db.commit()
 
 

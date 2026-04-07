@@ -1,14 +1,15 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
 from app.compute.kpis import get_data_quality
-from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
-from app.schemas.overview import AlertOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
+from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
+from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
+from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
 from app.services.issue_radar import build_issue_radar
 from app.services.telemetry import summarize_telemetry
 from app.services.overview import build_kpi_payload, build_overview
@@ -101,6 +102,32 @@ def get_sources(db: Session = Depends(db_session)):
 @router.get("/telemetry/summary", response_model=TelemetrySummaryOut)
 def telemetry_summary(db: Session = Depends(db_session)):
     return summarize_telemetry(db)
+
+
+@router.get("/cx/actions", response_model=list[CXActionOut])
+def get_cx_actions(status: str | None = None, db: Session = Depends(db_session)):
+    evaluateCustomerExperienceActions(db)
+    evaluateActionClosure(db)
+    db.commit()
+    query = select(CXAction).order_by(desc(CXAction.updated_at))
+    if status:
+        query = query.where(CXAction.status == status)
+    return db.execute(query).scalars().all()
+
+
+@router.post("/cx/actions/{action_id}/update", response_model=CXActionOut)
+def update_cx_action(action_id: str, payload: CXActionUpdateIn, db: Session = Depends(db_session)):
+    action = db.execute(select(CXAction).where(CXAction.id == action_id)).scalar_one_or_none()
+    if action is None:
+        raise HTTPException(status_code=404, detail='Action not found')
+    if payload.status not in {'open', 'in_progress', 'resolved'}:
+        raise HTTPException(status_code=400, detail='Invalid status')
+    action.status = payload.status
+    action.updated_at = datetime.now(timezone.utc)
+    action.resolved_at = datetime.now(timezone.utc) if payload.status == 'resolved' else None
+    db.commit()
+    db.refresh(action)
+    return action
 
 
 @router.get("/data-quality", response_model=DataQualityOut)

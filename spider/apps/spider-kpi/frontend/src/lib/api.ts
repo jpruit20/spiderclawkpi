@@ -1,4 +1,5 @@
 import type {
+  CXActionItem,
   DataQualityResponse,
   DiagnosticItem,
   FreshdeskAgentDailyItem,
@@ -119,5 +120,14 @@ export const api = {
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),
   supportTickets: (signal?: AbortSignal) => request<FreshdeskTicketItem[]>('/api/support/tickets', { signal }),
   issues: (signal?: AbortSignal) => request<IssueRadarResponse>('/api/issues', { signal }),
+  cxActions: (status?: string, signal?: AbortSignal) => request<CXActionItem[]>(`/api/cx/actions${status ? `?status=${encodeURIComponent(status)}` : ''}`, { signal }),
+  updateCxAction: (id: string, status: 'open' | 'in_progress' | 'resolved') => fetch(`${API_BASE}/api/cx/actions/${id}/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  }).then(async (response) => {
+    if (!response.ok) throw new ApiError(`API error ${response.status} for /api/cx/actions/${id}/update`, response.status, `/api/cx/actions/${id}/update`)
+    return response.json() as Promise<CXActionItem>
+  }),
   dataQuality: (signal?: AbortSignal) => request<DataQualityResponse>('/api/data-quality', { signal }),
 }
