@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
@@ -79,6 +79,6 @@ async def serve_frontend(full_path: str):
     }
 
 
-@app.get('/debug/ga4', dependencies=[require_auth])
+@app.get('/debug/ga4', dependencies=[Depends(require_auth)])
 async def debug_ga4_direct():
     return ga4_debug_self_check()
