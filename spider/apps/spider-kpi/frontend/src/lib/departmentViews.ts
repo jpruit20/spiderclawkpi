@@ -213,48 +213,6 @@ export function buildDepartmentViews(input: {
       ],
     },
     {
-      key: 'jeremiah',
-      leader: 'Jeremiah',
-      department: 'Customer Experience',
-      summary: 'Queue balance, burden, and closure speed with named owner accountability.',
-      whatsWorking: [
-        avgFrt <= 6 ? `First response time is inside a manageable band at ${hours(avgFrt)}.` : '',
-        backlog < 150 ? `Backlog is contained at ${backlog}.` : '',
-      ].filter(Boolean),
-      whatsNot: [
-        overloadedShare > 40 ? `${leadAgent?.[0] || 'One rep'} is carrying ${overloadedShare.toFixed(1)}% of recent volume.` : '',
-        avgResolution > 24 ? `Average close time is slow at ${hours(avgResolution)}.` : '',
-        avgReopen > 8 ? `Reopen rate is elevated at ${pct(avgReopen)}.` : '',
-        unresolvedAged > 50 ? `${unresolvedAged} unresolved tickets remain aged / open.` : '',
-      ].filter(Boolean),
-      actions: [
-        {
-          title: overloadedShare > 40 ? 'Rebalance ticket ownership immediately' : 'Prevent queue imbalance before backlog grows',
-          severity: overloadedShare > 40 || avgResolution > 24 ? 'critical' : 'high',
-          impact: `${currency((Math.max(backlog, 1) * Math.max(aov, 1)) * 0.08)}/week at risk`,
-          owner: 'Jeremiah',
-          sla: '24h',
-          whatToDo: overloadedShare > 40
-            ? `Shift intake away from ${leadAgent?.[0] || 'the overloaded rep'}, pull underused reps onto the queue, and review aged unresolved tickets by owner.`
-            : 'Audit queue ownership, rebalance assignment rules, and clear aged unresolved tickets before backlog converts into repeat contacts.',
-          evidence: ['freshdesk', telemetryPresent ? 'aws_telemetry' : 'support tickets'],
-        },
-      ],
-      highLevelKpis: [
-        { label: 'tickets/day', value: currentRowsPerDay(recentSupport, 'tickets_created') },
-        { label: 'tickets/100 orders', value: avgBurden.toFixed(2) },
-        { label: 'FRT', value: hours(avgFrt) },
-        { label: 'close time', value: hours(avgResolution) },
-        { label: 'backlog', value: String(backlog) },
-        { label: 'reopen rate', value: pct(avgReopen) },
-      ],
-      lowLevelSignals: [
-        `Rep coverage in view: Jeremiah, Miles, Bodhi${supportAgents.length ? '' : ' (awaiting named Freshdesk enrichment)'}`,
-        overloadedShare > 40 ? 'Queue imbalance rule triggered (>40% rolling volume on one rep).' : 'No >40% queue imbalance rule triggered.',
-        telemetryPresent ? 'Telemetry correlation can now be used to connect support burden to product/device failure patterns.' : 'Telemetry correlation layer not yet live; support still partially blind to device-level root causes.',
-      ],
-    },
-    {
       key: 'kyle',
       leader: 'Kyle',
       department: 'New product design / engineering / continuation improvements',
