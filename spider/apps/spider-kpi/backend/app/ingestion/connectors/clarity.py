@@ -12,6 +12,21 @@ settings = get_settings()
 TIMEOUT_SECONDS = 45
 
 
+def _clarity_url() -> str:
+    explicit = (settings.clarity_endpoint or '').strip()
+    if explicit:
+        if explicit.startswith('http://') or explicit.startswith('https://'):
+            return explicit.rstrip('/')
+        return f"https://{explicit.lstrip('/')}".rstrip('/')
+
+    base = settings.clarity_base_url.rstrip('/')
+    if base.endswith('/project-live-insights'):
+        return base
+    if base.endswith('/api/v1'):
+        return f'{base}/project-live-insights'
+    return base
+
+
 def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
     configured = bool(settings.clarity_api_token and settings.clarity_base_url)
     upsert_source_config(
@@ -30,7 +45,7 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
     db.commit()
 
     try:
-        url = settings.clarity_base_url.rstrip('/')
+        url = _clarity_url()
         response = requests.get(
             url,
             params={'numOfDays': max(1, min(days, 3)), 'dimension1': 'URL'},
@@ -43,6 +58,7 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
         run.metadata_json = {
             **(run.metadata_json or {}),
             'project_id': settings.clarity_project_id,
+            'request_url': response.url,
             'sample': records[:3] if isinstance(records, list) else body,
         }
         finish_sync_run(db, run, status='success', records_processed=len(records) if isinstance(records, list) else 1)

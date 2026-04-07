@@ -85,7 +85,8 @@ class Settings(BaseSettings):
 
     clarity_project_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('CLARITY_PROJECT_ID', 'MICROSOFT_CLARITY_PROJECT_ID'))
     clarity_api_token: Optional[str] = Field(default=None, validation_alias=AliasChoices('CLARITY_API_TOKEN', 'CLARITY_API_KEY', 'MICROSOFT_CLARITY_API_TOKEN', 'MICROSOFT_CLARITY_API_KEY'))
-    clarity_base_url: str = Field(default='https://www.clarity.ms/export-data/api/v1', validation_alias=AliasChoices('CLARITY_BASE_URL', 'MICROSOFT_CLARITY_BASE_URL'))
+    clarity_base_url: str = Field(default='https://www.clarity.ms/export-data/api/v1/project-live-insights', validation_alias=AliasChoices('CLARITY_BASE_URL', 'MICROSOFT_CLARITY_BASE_URL'))
+    clarity_endpoint: Optional[str] = Field(default=None, validation_alias=AliasChoices('CLARITY_ENDPOINT', 'MICROSOFT_CLARITY_ENDPOINT'))
 
     freshdesk_domain: Optional[str] = None
     freshdesk_api_key: Optional[str] = None
