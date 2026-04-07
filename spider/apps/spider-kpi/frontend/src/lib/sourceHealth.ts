@@ -1,6 +1,6 @@
 import { SourceHealthItem } from './types'
 
-export const ACTIVE_CONNECTORS = new Set(['shopify', 'triplewhale', 'freshdesk'])
+export const ACTIVE_CONNECTORS = new Set(['shopify', 'triplewhale', 'freshdesk', 'ga4', 'clarity'])
 export const SCAFFOLDED = new Set(['discord', 'facebook', 'google_reviews', 'reddit', 'reviews'])
 
 export function isTruthfullyHealthy(row: SourceHealthItem) {

@@ -18,6 +18,13 @@ GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
 TIMEOUT_SECONDS = 45
 
 
+def _normalized_ga4_private_key() -> str:
+    raw = (settings.ga4_private_key or '').strip()
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1]
+    return raw.replace('\\n', '\n').strip()
+
+
 def _issue_service_account_token() -> str:
     now = int(time.time())
     payload = {
@@ -27,7 +34,7 @@ def _issue_service_account_token() -> str:
         'exp': now + 3600,
         'iat': now,
     }
-    assertion = jwt.encode(payload, settings.ga4_private_key.replace('\\n', '\n'), algorithm='RS256')
+    assertion = jwt.encode(payload, _normalized_ga4_private_key(), algorithm='RS256')
     response = requests.post(
         GOOGLE_TOKEN_URL,
         data={
