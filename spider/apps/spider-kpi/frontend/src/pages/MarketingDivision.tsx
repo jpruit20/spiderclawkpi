@@ -81,7 +81,29 @@ export function MarketingDivision() {
   const contributionProxy = grossProfitProxy - adSpend
   const priorContributionProxy = priorGrossProfitProxy - priorAdSpend
 
+  const addToCartRate = currentRows.length ? currentRows.reduce((sum, row) => sum + Number(row.add_to_cart_rate || 0), 0) / currentRows.length : 0
+  const priorAddToCartRate = priorRows.length ? priorRows.reduce((sum, row) => sum + Number(row.add_to_cart_rate || 0), 0) / priorRows.length : 0
+  const pdpViewsEstimate = sessions * 0.62
+  const priorPdpViewsEstimate = priorSessions * 0.62
+  const addToCartEstimate = pdpViewsEstimate * (addToCartRate / 100)
+  const priorAddToCartEstimate = priorPdpViewsEstimate * (priorAddToCartRate / 100)
+  const checkoutEstimate = addToCartEstimate * 0.58
+  const priorCheckoutEstimate = priorAddToCartEstimate * 0.58
+  const purchaseEstimate = orders
+  const priorPurchaseEstimate = priorOrders
+  const funnel = [
+    { label: 'Sessions', volume: sessions, prior: priorSessions, conversion: 100, dropoff: 0, trend: compareValue(sessions, priorSessions, 'Sessions').deltaPct },
+    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, conversion: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - (pdpViewsEstimate / sessions)) * 100 : 0, trend: compareValue(pdpViewsEstimate, priorPdpViewsEstimate, 'PDP').deltaPct },
+    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, conversion: pdpViewsEstimate ? (addToCartEstimate / pdpViewsEstimate) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - (addToCartEstimate / pdpViewsEstimate)) * 100 : 0, trend: compareValue(addToCartEstimate, priorAddToCartEstimate, 'ATC').deltaPct },
+    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, conversion: addToCartEstimate ? (checkoutEstimate / addToCartEstimate) * 100 : 0, dropoff: addToCartEstimate ? (1 - (checkoutEstimate / addToCartEstimate)) * 100 : 0, trend: compareValue(checkoutEstimate, priorCheckoutEstimate, 'Checkout').deltaPct },
+    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, conversion: checkoutEstimate ? (purchaseEstimate / checkoutEstimate) * 100 : 0, dropoff: checkoutEstimate ? (1 - (purchaseEstimate / checkoutEstimate)) * 100 : 0, trend: compareValue(purchaseEstimate, priorPurchaseEstimate, 'Purchase').deltaPct },
+  ]
   const topFriction = issues?.highest_business_risk?.[0] || issues?.clusters?.[0]
+  const frictionItems = [
+    { label: 'Highest drop-off path', text: topFriction?.title || 'Awaiting ranked friction source', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
+    { label: 'Rage-click pages', text: clarityDegraded ? 'Clarity data degraded — insights have reduced confidence' : 'Use Friction Map for rage-click page detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
+    { label: 'Dead-click clusters', text: clarityDegraded ? 'Clarity data degraded — dead-click clusters are currently low-confidence' : 'Use Friction Map for dead-click cluster detail', confidence: clarityDegraded ? 'Reduced confidence' : 'Normal confidence' },
+  ]
   const actions = [
     conversion < priorConversion ? `Conversion is down ${formatDeltaPct(compareValue(conversion, priorConversion, 'Conversion').deltaPct)}. Fix the top high-traffic friction path before adding more spend.` : 'Conversion is not the main drag right now; preserve funnel changes and focus on scaling efficient traffic.',
     mer < priorMer ? `MER softened to ${mer.toFixed(2)}. Reallocate spend away from lower-efficiency traffic until channel mix recovers.` : `MER is holding at ${mer.toFixed(2)}. Keep scale pressure on the best-performing channels.`,
@@ -109,17 +131,53 @@ export function MarketingDivision() {
               </div>
             </div>
           ) : null}
-          <div className="four-col">
-            <Card title="Revenue"><div className="hero-metric hero-metric-sm">{currency(revenue)}</div><small>Prior {currency(priorRevenue)} · {currency(revenue - priorRevenue)} · {formatDeltaPct(compareValue(revenue, priorRevenue, 'Revenue').deltaPct)}</small></Card>
-            <Card title="Sessions"><div className="hero-metric hero-metric-sm">{sessions.toFixed(0)}</div><small>Prior {priorSessions.toFixed(0)} · {formatDeltaPct(compareValue(sessions, priorSessions, 'Sessions').deltaPct)}</small></Card>
-            <Card title="Conversion"><div className="hero-metric hero-metric-sm">{conversion.toFixed(2)}%</div><small>Prior {priorConversion.toFixed(2)}% · {formatDeltaPct(compareValue(conversion, priorConversion, 'Conversion').deltaPct)}</small></Card>
-            <Card title="MER"><div className="hero-metric hero-metric-sm">{mer.toFixed(2)}</div><small>Prior {priorMer.toFixed(2)} · {formatDeltaPct(compareValue(mer, priorMer, 'MER').deltaPct)}</small></Card>
+          <div className="five-col">
+            <Card title="Revenue"><div className="hero-metric hero-metric-sm">{currency(revenue)}</div><small>Prior {currency(priorRevenue)} · {formatDeltaPct(compareValue(revenue, priorRevenue, 'Revenue').deltaPct)}</small></Card>
+            <Card title="Conversion rate"><div className="hero-metric hero-metric-sm">{conversion.toFixed(2)}%</div><small>Prior {priorConversion.toFixed(2)}%</small></Card>
+            <Card title="AOV"><div className="hero-metric hero-metric-sm">{currency(aov)}</div><small>Prior {currency(priorAov)}</small></Card>
+            <Card title="Sessions"><div className="hero-metric hero-metric-sm">{sessions.toFixed(0)}</div><small>Prior {priorSessions.toFixed(0)}</small></Card>
+            <Card title="MER"><div className="hero-metric hero-metric-sm">{mer.toFixed(2)}</div><small>Prior {priorMer.toFixed(2)}</small></Card>
           </div>
+          <Card title="Funnel">
+            <div className="five-col">
+              {funnel.map((step) => (
+                <div className="list-item" key={step.label}>
+                  <strong>{step.label}</strong>
+                  <p>{Math.round(step.volume).toLocaleString()}</p>
+                  <small>Conversion {step.conversion.toFixed(1)}%</small>
+                  <small>Drop-off {step.dropoff.toFixed(1)}%</small>
+                  <small>Trend {formatDeltaPct(step.trend)}</small>
+                </div>
+              ))}
+            </div>
+            <small>PDP and checkout intermediate stages are currently modeled estimates from available KPI fields, not event-perfect counts.</small>
+          </Card>
           <div className="three-col">
-            <Card title="What’s working"><div className="stack-list compact"><div className="list-item status-good"><p>{mer >= priorMer ? 'Channel efficiency is not deteriorating versus the comparison period.' : 'Efficient-channel mix needs attention.'}</p></div><div className="list-item status-good"><p>{aov >= priorAov ? 'AOV is holding or improving.' : 'AOV is softer than the comparison period.'}</p></div></div></Card>
-            <Card title="What’s not working"><div className="stack-list compact"><div className="list-item status-bad"><p>{conversion < priorConversion ? 'Conversion is down versus the selected comparison window.' : 'Conversion is not currently the primary regression.'}</p></div><div className="list-item status-bad"><p>{clarityDegraded ? 'Clarity-based friction evidence is degraded by rate limiting.' : (topFriction?.title ? `Top friction risk: ${topFriction.title}` : 'No ranked friction risk returned.')}</p></div></div></Card>
-            <Card title="What to do"><div className="stack-list compact">{actions.map((item, idx) => <div className="list-item status-warn" key={idx}><p>{item}</p></div>)}</div></Card>
+            <Card title="Page-level friction">
+              <div className="stack-list compact">
+                {frictionItems.map((item, idx) => <div className="list-item status-warn" key={idx}><strong>{item.label}</strong><p>{item.text}</p><small>{item.confidence}</small></div>)}
+              </div>
+            </Card>
+            <Card title="What’s working">
+              <div className="stack-list compact">
+                <div className="list-item status-good"><p>{mer >= priorMer ? 'Channel efficiency is not deteriorating versus the comparison period.' : 'Efficient-channel mix needs attention.'}</p></div>
+                <div className="list-item status-good"><p>{aov >= priorAov ? 'AOV is holding or improving.' : 'AOV is softer than the comparison period.'}</p></div>
+              </div>
+            </Card>
+            <Card title="What’s not / What to do">
+              <div className="stack-list compact">
+                <div className="list-item status-bad"><strong>WHAT’S NOT</strong><p>{conversion < priorConversion ? 'Conversion is down versus the selected comparison window.' : 'Conversion is not currently the primary regression.'}</p></div>
+                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[0]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
+                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[1]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
+              </div>
+            </Card>
           </div>
+          <Card title="Marketing drill-downs">
+            <div className="stack-list compact">
+              <div className="list-item status-muted"><strong>View friction details</strong><p><a href="/friction">Open Friction Map</a></p></div>
+              <div className="list-item status-muted"><strong>View root cause</strong><p><a href="/root-cause">Open Root Cause</a></p></div>
+            </div>
+          </Card>
         </>
       ) : null}
     </div>

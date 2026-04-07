@@ -51,6 +51,8 @@ export function RevenueEngine() {
   const aov = orders ? revenue / orders : 0
   const conversion = sessions ? (orders / sessions) * 100 : 0
   const adSpend = sum(currentRows, 'ad_spend')
+  const discountsAvailable = false
+  const discounts = null
   const grossProfitProxy = revenue - refunds
   const grossMarginProxy = revenue ? (grossProfitProxy / revenue) * 100 : 0
   const contributionProxy = grossProfitProxy - adSpend
@@ -75,7 +77,7 @@ export function RevenueEngine() {
     <div className="page-grid">
       <div className="page-head">
         <h2>Financial / Revenue</h2>
-        <p>Management view for the selected date range: top-line revenue, prior-period comparison, margin proxies, efficiency, and channel-ready commercial context.</p>
+        <p>Management view for the selected date range with explicit labeling when a metric is only a proxy, estimate, or incomplete input.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
@@ -84,23 +86,47 @@ export function RevenueEngine() {
       {error ? <Card title="Revenue Engine Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
+          <Card title="Core financial block">
+            <div className="four-col">
+              <div className="list-item status-good"><strong>Revenue</strong><div className="hero-metric hero-metric-sm">{currency(revenue)}</div></div>
+              <div className="list-item status-muted"><strong>Prior-period revenue</strong><div className="hero-metric hero-metric-sm">{currency(priorRevenue)}</div></div>
+              <div className="list-item status-muted"><strong>Delta $</strong><div className="hero-metric hero-metric-sm">{currency(revenue - priorRevenue)}</div></div>
+              <div className="list-item status-muted"><strong>Delta %</strong><div className="hero-metric hero-metric-sm">{formatDeltaPct(revenueDelta.deltaPct)}</div></div>
+            </div>
+          </Card>
           <div className="four-col">
-            <Card title="Revenue"><div className="hero-metric hero-metric-sm">{currency(revenue)}</div><small>Prior {currency(priorRevenue)} · Δ {currency(revenue - priorRevenue)} · {formatDeltaPct(revenueDelta.deltaPct)}</small></Card>
-            <Card title="Gross profit proxy"><div className="hero-metric hero-metric-sm">{currency(grossProfitProxy)}</div><small>Revenue minus refunds · margin proxy {grossMarginProxy.toFixed(1)}%</small></Card>
-            <Card title="Contribution proxy"><div className="hero-metric hero-metric-sm">{currency(contributionProxy)}</div><small>Gross profit proxy minus ad spend · prior {currency(priorContributionProxy)}</small></Card>
-            <Card title="Refund / discount drag"><div className="hero-metric hero-metric-sm">{currency(refunds)}</div><small>Prior {currency(priorRefunds)} · ad spend {currency(adSpend)}</small></Card>
+            <Card title="Gross profit proxy"><div className="hero-metric hero-metric-sm">{currency(grossProfitProxy)}</div><small><strong>Proxy:</strong> revenue minus refunds only. Discounts / COGS not available here.</small></Card>
+            <Card title="Gross margin proxy"><div className="hero-metric hero-metric-sm">{grossMarginProxy.toFixed(1)}%</div><small><strong>Proxy:</strong> derived from gross profit proxy, not accounting margin.</small></Card>
+            <Card title="Contribution proxy"><div className="hero-metric hero-metric-sm">{currency(contributionProxy)}</div><small><strong>Proxy:</strong> gross profit proxy minus ad spend only.</small></Card>
+            <Card title="MER / efficiency"><div className="hero-metric hero-metric-sm">{adSpend ? (revenue / adSpend).toFixed(2) : '0.00'}</div><small>Orders {orders.toFixed(0)} · {formatDeltaPct(compareValue(adSpend ? (revenue / adSpend) : 0, priorRows.length === currentRows.length ? (priorAdSpend ? (priorRevenue / priorAdSpend) : 0) : null, 'MER').deltaPct)}</small></Card>
           </div>
           <div className="four-col">
             <Card title="Sessions"><div className="hero-metric hero-metric-sm">{sessions.toFixed(0)}</div><small>{formatDeltaPct(sessionsDelta.deltaPct)} vs prior</small></Card>
             <Card title="Conversion"><div className="hero-metric hero-metric-sm">{conversion.toFixed(2)}%</div><small>{formatDeltaPct(conversionDelta.deltaPct)} vs prior</small></Card>
             <Card title="AOV"><div className="hero-metric hero-metric-sm">{currency(aov)}</div><small>{formatDeltaPct(aovDelta.deltaPct)} vs prior</small></Card>
-            <Card title="MER / efficiency"><div className="hero-metric hero-metric-sm">{adSpend ? (revenue / adSpend).toFixed(2) : '0.00'}</div><small>Orders {orders.toFixed(0)} · {formatDeltaPct(compareValue(adSpend ? (revenue / adSpend) : 0, priorRows.length === currentRows.length ? (priorAdSpend ? (priorRevenue / priorAdSpend) : 0) : null, 'MER').deltaPct)}</small></Card>
+            <Card title="Orders"><div className="hero-metric hero-metric-sm">{orders.toFixed(0)}</div><small>{formatDeltaPct(ordersDelta.deltaPct)} vs prior</small></Card>
           </div>
-          <Card title="Financial management view">
+          <Card title="Financial composition">
             <div className="three-col">
-              <div className="list-item"><strong>Prior-period revenue</strong><p>{currency(priorRevenue)}</p><small>Selected comparison window</small></div>
-              <div className="list-item"><strong>Revenue delta</strong><p>{currency(revenue - priorRevenue)}</p><small>{formatDeltaPct(revenueDelta.deltaPct)} versus prior period</small></div>
-              <div className="list-item"><strong>Revenue by channel</strong><p>Pending explicit channel feed</p><small>Current backend does not yet expose channel split; page now reserves this management slot instead of hiding it.</small></div>
+              <div className="list-item"><strong>Revenue</strong><p>{currency(revenue)}</p><small>Selected period top line</small></div>
+              <div className="list-item"><strong>Refunds</strong><p>{currency(refunds)}</p><small>Returned from current source payload</small></div>
+              <div className="list-item status-warn"><strong>Discounts</strong><p>{discountsAvailable ? currency(discounts || 0) : 'Missing data'}</p><small>{discountsAvailable ? 'Discount component available' : 'Discount component not exposed by current backend payload.'}</small></div>
+              <div className="list-item"><strong>Ad spend</strong><p>{currency(adSpend)}</p><small>Current selected range spend</small></div>
+              <div className="list-item status-warn"><strong>Proxy profit calculation</strong><p>{currency(grossProfitProxy)}</p><small>Revenue - refunds only. Missing discounts/COGS.</small></div>
+              <div className="list-item status-warn"><strong>Contribution proxy</strong><p>{currency(contributionProxy)}</p><small>Proxy profit calculation - ad spend.</small></div>
+            </div>
+          </Card>
+          <Card title="Revenue by channel">
+            <div className="list-item status-warn">
+              <strong>Channel revenue unavailable</strong>
+              <p>Awaiting data source / backend feed for real revenue-by-channel reporting.</p>
+              <small>No fake or empty channel chart is shown.</small>
+            </div>
+          </Card>
+          <Card title="Diagnostic drill-downs">
+            <div className="stack-list compact">
+              <div className="list-item status-muted"><strong>View friction details</strong><p><a href="/friction">Open Friction Map</a></p></div>
+              <div className="list-item status-muted"><strong>View root cause</strong><p><a href="/root-cause">Open Root Cause</a></p></div>
             </div>
           </Card>
           <Card title="Revenue Trend">

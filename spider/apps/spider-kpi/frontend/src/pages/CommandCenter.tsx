@@ -94,6 +94,12 @@ export function CommandCenter() {
             </div>
           </div>
           <DecisionStack actions={actions} />
+          <Card title="Diagnostic drill-downs">
+            <div className="stack-list compact">
+              <div className="list-item status-muted"><strong>View friction details</strong><p><a href="/friction">Open Friction Map</a></p></div>
+              <div className="list-item status-muted"><strong>View root cause</strong><p><a href="/root-cause">Open Root Cause</a></p></div>
+            </div>
+          </Card>
         </>
       ) : null}
     </div>

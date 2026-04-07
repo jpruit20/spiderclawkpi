@@ -108,6 +108,7 @@ export function IssueRadar() {
               <div className="stack-list compact">
                 <div className="list-item status-muted"><strong>Ranked by</strong><p>Priority score, complaint burden, business-risk weighting, and trend acceleration.</p></div>
                 <div className="list-item status-muted"><strong>Hand-off</strong><p>Once a queue item is accepted, Root Cause should determine explanation, owner, and intervention framing.</p></div>
+                <div className="list-item status-muted"><strong>Drill-downs</strong><p><a href="/root-cause">View root cause</a> · <a href="/friction">View friction details</a></p></div>
               </div>
             </Card>
           </div>
