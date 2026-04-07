@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models import TelemetryDaily, TelemetrySession
@@ -22,7 +22,22 @@ def _severity_from_rate(rate: float, high: float, medium: float) -> str:
     return "low"
 
 
+def telemetry_tables_available(db: Session) -> bool:
+    inspector = inspect(db.bind)
+    return inspector.has_table('telemetry_daily') and inspector.has_table('telemetry_sessions')
+
+
 def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+    if not telemetry_tables_available(db):
+        return {
+            "latest": None,
+            "daily": [],
+            "firmware_health": [],
+            "grill_type_health": [],
+            "top_error_codes": [],
+            "top_issue_patterns": [],
+        }
+
     rows = db.execute(
         select(TelemetryDaily)
         .order_by(desc(TelemetryDaily.business_date))

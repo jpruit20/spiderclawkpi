@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import FreshdeskTicket, IssueCluster, IssueSignal, ShopifyOrderDaily, TelemetryDaily, TelemetrySession
 from app.services.source_health import upsert_source_config
+from app.services.telemetry import telemetry_tables_available
 
 THEMES: dict[str, list[str]] = {
     "shipping": [
@@ -254,7 +255,8 @@ def _priority_reason_summary(payload: dict[str, Any]) -> str:
 
 def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     upsert_source_config(db, "freshdesk", configured=True, sync_mode="poll", config_json={"source_type": "connector", "issue_radar_live": True})
-    telemetry_sessions_exist = db.execute(select(TelemetrySession.id).limit(1)).first() is not None
+    telemetry_ready = telemetry_tables_available(db)
+    telemetry_sessions_exist = telemetry_ready and (db.execute(select(TelemetrySession.id).limit(1)).first() is not None)
     upsert_source_config(db, "aws_telemetry", configured=telemetry_sessions_exist, sync_mode="pull", config_json={"source_type": "connector", "issue_radar_live": telemetry_sessions_exist})
     for source in SCAFFOLDED_SOURCES:
         upsert_source_config(db, source, configured=False, enabled=False, sync_mode="stub", config_json={"source_type": "connector", "issue_radar_live": False})
@@ -480,8 +482,8 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         reverse=True,
     )
 
-    telemetry_daily_rows = db.execute(select(TelemetryDaily).order_by(TelemetryDaily.business_date)).scalars().all()
-    telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all()
+    telemetry_daily_rows = db.execute(select(TelemetryDaily).order_by(TelemetryDaily.business_date)).scalars().all() if telemetry_ready else []
+    telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all() if telemetry_ready else []
     if telemetry_daily_rows and telemetry_sessions:
         latest = telemetry_daily_rows[-1]
         rising_disconnects = latest.disconnect_rate >= 0.12
