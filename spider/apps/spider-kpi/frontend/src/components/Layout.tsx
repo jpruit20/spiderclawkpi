@@ -13,17 +13,18 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="sidebar-summary">
-          <small>Start with the ranked action stack, then leader views, then revenue/funnel friction, then root cause and source health.</small>
+          <small>Keep company pages lean: command, financials, issue risk, and system health. Open divisions from their own routes.</small>
         </div>
         <nav className="nav">
+          <small className="nav-group-label">Company</small>
           <NavLink to="/">Command Center</NavLink>
-          <NavLink to="/division/customer-experience">Customer Experience</NavLink>
-          <NavLink to="/departments">Department Views</NavLink>
-          <NavLink to="/revenue">Revenue Engine</NavLink>
-          <NavLink to="/friction">Friction Map</NavLink>
+          <NavLink to="/revenue">Financial / Revenue</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
-          <NavLink to="/root-cause">Root Cause</NavLink>
           <NavLink to="/system-health">System Health</NavLink>
+          <small className="nav-group-label">Divisions</small>
+          <NavLink to="/division/customer-experience">Customer Experience</NavLink>
+          <NavLink to="/division/marketing">Marketing</NavLink>
+          <NavLink to="/departments">Division Index</NavLink>
         </nav>
         <div className="sidebar-foot">kpi.spidergrills.com</div>
       </aside>

@@ -92,6 +92,7 @@ export function FrictionMap() {
     clarity: sourceHealth.find((row) => row.source === 'clarity'),
     freshdesk: sourceHealth.find((row) => row.source === 'freshdesk'),
   }
+  const clarityDegraded = telemetry.clarity?.derived_status !== 'healthy'
 
   return (
     <div className="page-grid">
@@ -104,6 +105,14 @@ export function FrictionMap() {
       {error ? <Card title="Friction Map Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
+          {clarityDegraded ? (
+            <div className="trust-banner trust-banner-degraded">
+              <div>
+                <strong>Clarity degraded</strong>
+                <p>Clarity is rate-limited or stale. Friction conclusions that would normally depend on rage/dead click evidence are being shown with lower confidence.</p>
+              </div>
+            </div>
+          ) : null}
           <div className="three-col">
             <Card title="Telemetry Inputs"><div className="hero-metric">{Object.values(telemetry).filter((row) => row?.derived_status === 'healthy').length}/3</div><div className="state-message">GA4 + Clarity + Freshdesk feeding friction decisions</div></Card>
             <Card title="Priority Frictions"><div className="hero-metric">{frictionQueue.length}</div><div className="state-message">Ranked by impact × confidence</div></Card>
@@ -118,6 +127,7 @@ export function FrictionMap() {
                     <div className="inline-badges">
                       <span className="badge badge-good">{currency(item.impact)}/week</span>
                       <span className="badge badge-neutral">confidence {item.confidence.toFixed(2)}</span>
+                      {clarityDegraded ? <span className="badge badge-warn">Clarity degraded</span> : null}
                     </div>
                   </div>
                   <p>{item.why}</p>
@@ -130,7 +140,7 @@ export function FrictionMap() {
             <Card title="Data Trust Layer">
               <div className="stack-list compact">
                 {Object.entries(telemetry).map(([name, row]) => (
-                  <div className={`list-item status-${row?.derived_status === 'healthy' ? 'good' : 'warn'}`} key={name}>
+                  <div className={`list-item status-${row?.derived_status === 'healthy' ? 'good' : row?.derived_status === 'failed' ? 'bad' : 'warn'}`} key={name}>
                     <strong>{name}</strong>
                     <small>{row?.status_summary || 'Missing'}</small>
                   </div>

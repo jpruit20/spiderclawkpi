@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 
 const CommandCenter = lazy(() => import('./pages/CommandCenter').then((m) => ({ default: m.CommandCenter })))
 const CustomerExperienceDivision = lazy(() => import('./pages/CustomerExperienceDivision').then((m) => ({ default: m.CustomerExperienceDivision })))
+const MarketingDivision = lazy(() => import('./pages/MarketingDivision').then((m) => ({ default: m.MarketingDivision })))
 const DepartmentViews = lazy(() => import('./pages/DepartmentViews').then((m) => ({ default: m.DepartmentViews })))
 const RevenueEngine = lazy(() => import('./pages/RevenueEngine').then((m) => ({ default: m.RevenueEngine })))
 const FrictionMap = lazy(() => import('./pages/FrictionMap').then((m) => ({ default: m.FrictionMap })))
@@ -28,7 +29,8 @@ export function App() {
       <Routes>
         <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
-        <Route path="/departments" element={withBoundary('Department Operating Views', <DepartmentViews />)} />
+        <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
+        <Route path="/departments" element={withBoundary('Division Index', <DepartmentViews />)} />
         <Route path="/revenue" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
         <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />

@@ -1,6 +1,7 @@
 export interface KPIDaily {
   business_date: string
   revenue: number
+  refunds?: number
   orders: number
   average_order_value: number
   sessions: number

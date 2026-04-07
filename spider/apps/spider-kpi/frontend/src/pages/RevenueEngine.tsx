@@ -5,7 +5,7 @@ import { RangeToolbar } from '../components/RangeToolbar'
 import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
-import { currency, impactFromConversion } from '../lib/operatingModel'
+import { currency } from '../lib/operatingModel'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { KPIDaily } from '../lib/types'
 
@@ -45,32 +45,37 @@ export function RevenueEngine() {
   const currentRows = useMemo(() => filterRowsByRange(rows, range), [rows, range])
   const priorRows = useMemo(() => compareMode === 'same_day_last_week' ? sameDayLastWeekRows(rows, currentRows) : priorPeriodRows(rows, currentRows[0]?.business_date || '', currentRows.length), [compareMode, rows, currentRows])
   const revenue = sum(currentRows, 'revenue')
+  const refunds = sum(currentRows, 'refunds' as keyof KPIDaily)
   const sessions = sum(currentRows, 'sessions')
   const orders = sum(currentRows, 'orders')
   const aov = orders ? revenue / orders : 0
   const conversion = sessions ? (orders / sessions) * 100 : 0
+  const adSpend = sum(currentRows, 'ad_spend')
+  const grossProfitProxy = revenue - refunds
+  const grossMarginProxy = revenue ? (grossProfitProxy / revenue) * 100 : 0
+  const contributionProxy = grossProfitProxy - adSpend
   const priorRevenue = sum(priorRows, 'revenue')
+  const priorRefunds = sum(priorRows, 'refunds' as keyof KPIDaily)
   const priorSessions = sum(priorRows, 'sessions')
   const priorOrders = sum(priorRows, 'orders')
   const priorAov = priorOrders ? priorRevenue / priorOrders : 0
   const priorConversion = priorSessions ? (priorOrders / priorSessions) * 100 : 0
+  const priorAdSpend = sum(priorRows, 'ad_spend')
+  const priorGrossProfitProxy = priorRevenue - priorRefunds
+  const priorContributionProxy = priorGrossProfitProxy - priorAdSpend
   const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
   const sessionsDelta = compareValue(sessions, priorRows.length === currentRows.length ? priorSessions : null, 'Sessions')
   const ordersDelta = compareValue(orders, priorRows.length === currentRows.length ? priorOrders : null, 'Orders')
   const aovDelta = compareValue(aov, priorRows.length === currentRows.length ? priorAov : null, 'AOV')
   const conversionDelta = compareValue(conversion, priorRows.length === currentRows.length ? priorConversion : null, 'Conversion')
-  const impact = impactFromConversion(sessions, Math.max(0, Math.abs((conversionDelta.deltaPct || 0) * 0.1)), aov) * 7
-  const driverCards = [
-    { label: 'Traffic', delta: sessionsDelta.deltaPct, impact: impactFromConversion(sessions, 0.1, aov) * 7 },
-    { label: 'Conversion', delta: conversionDelta.deltaPct, impact: impactFromConversion(sessions, Math.max(0.1, Math.abs((conversionDelta.deltaPct || 0) * 0.1)), aov) * 7 },
-    { label: 'AOV', delta: aovDelta.deltaPct, impact: impactFromConversion(sessions * 0.4, 0.08, aov) * 7 },
-  ]
+  const grossProfitDelta = compareValue(grossProfitProxy, priorRows.length === currentRows.length ? priorGrossProfitProxy : null, 'Gross profit proxy')
+  const contributionDelta = compareValue(contributionProxy, priorRows.length === currentRows.length ? priorContributionProxy : null, 'Contribution proxy')
 
   return (
     <div className="page-grid">
       <div className="page-head">
-        <h2>Revenue Engine</h2>
-        <p>Show the revenue movement, the driver, and the weekly dollars recoverable from the next intervention.</p>
+        <h2>Financial / Revenue</h2>
+        <p>Management view for the selected date range: top-line revenue, prior-period comparison, margin proxies, efficiency, and channel-ready commercial context.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
@@ -79,20 +84,23 @@ export function RevenueEngine() {
       {error ? <Card title="Revenue Engine Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
-          <div className="three-col">
-            <Card title="Revenue Delta"><div className="hero-metric">{formatDeltaPct(revenueDelta.deltaPct)}</div><div className="state-message">{currency(revenue)} in scope</div></Card>
-            <Card title="Orders Delta"><div className="hero-metric">{formatDeltaPct(ordersDelta.deltaPct)}</div><div className="state-message">{orders.toFixed(0)} orders in scope</div></Card>
-            <Card title="Recoverable Impact"><div className="hero-metric">{currency(impact)}</div><div className="state-message">impact = sessions × conversion_delta × AOV (weeklyized)</div></Card>
+          <div className="four-col">
+            <Card title="Revenue"><div className="hero-metric hero-metric-sm">{currency(revenue)}</div><small>Prior {currency(priorRevenue)} · Δ {currency(revenue - priorRevenue)} · {formatDeltaPct(revenueDelta.deltaPct)}</small></Card>
+            <Card title="Gross profit proxy"><div className="hero-metric hero-metric-sm">{currency(grossProfitProxy)}</div><small>Revenue minus refunds · margin proxy {grossMarginProxy.toFixed(1)}%</small></Card>
+            <Card title="Contribution proxy"><div className="hero-metric hero-metric-sm">{currency(contributionProxy)}</div><small>Gross profit proxy minus ad spend · prior {currency(priorContributionProxy)}</small></Card>
+            <Card title="Refund / discount drag"><div className="hero-metric hero-metric-sm">{currency(refunds)}</div><small>Prior {currency(priorRefunds)} · ad spend {currency(adSpend)}</small></Card>
           </div>
-          <Card title="Driver Story">
+          <div className="four-col">
+            <Card title="Sessions"><div className="hero-metric hero-metric-sm">{sessions.toFixed(0)}</div><small>{formatDeltaPct(sessionsDelta.deltaPct)} vs prior</small></Card>
+            <Card title="Conversion"><div className="hero-metric hero-metric-sm">{conversion.toFixed(2)}%</div><small>{formatDeltaPct(conversionDelta.deltaPct)} vs prior</small></Card>
+            <Card title="AOV"><div className="hero-metric hero-metric-sm">{currency(aov)}</div><small>{formatDeltaPct(aovDelta.deltaPct)} vs prior</small></Card>
+            <Card title="MER / efficiency"><div className="hero-metric hero-metric-sm">{adSpend ? (revenue / adSpend).toFixed(2) : '0.00'}</div><small>Orders {orders.toFixed(0)} · {formatDeltaPct(compareValue(adSpend ? (revenue / adSpend) : 0, priorRows.length === currentRows.length ? (priorAdSpend ? (priorRevenue / priorAdSpend) : 0) : null, 'MER').deltaPct)}</small></Card>
+          </div>
+          <Card title="Financial management view">
             <div className="three-col">
-              {driverCards.map((card) => (
-                <div className="list-item" key={card.label}>
-                  <strong>{card.label}</strong>
-                  <p>{formatDeltaPct(card.delta)}</p>
-                  <small>Estimated weekly impact {currency(card.impact)}</small>
-                </div>
-              ))}
+              <div className="list-item"><strong>Prior-period revenue</strong><p>{currency(priorRevenue)}</p><small>Selected comparison window</small></div>
+              <div className="list-item"><strong>Revenue delta</strong><p>{currency(revenue - priorRevenue)}</p><small>{formatDeltaPct(revenueDelta.deltaPct)} versus prior period</small></div>
+              <div className="list-item"><strong>Revenue by channel</strong><p>Pending explicit channel feed</p><small>Current backend does not yet expose channel split; page now reserves this management slot instead of hiding it.</small></div>
             </div>
           </Card>
           <Card title="Revenue Trend">

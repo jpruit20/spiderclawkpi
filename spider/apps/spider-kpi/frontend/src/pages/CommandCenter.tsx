@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { DecisionStack } from '../components/DecisionStack'
-import { TrendChart } from '../components/TrendChart'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { compareValue, formatDeltaPct, priorPeriodRows } from '../lib/compare'
-import { backlogAction, currency, DecisionAction, issueAction, rankActions, summarizeLifecycle, summarizeTrust, topDiagnosticAction, trustAction } from '../lib/operatingModel'
+import { compareValue, priorPeriodRows } from '../lib/compare'
+import { backlogAction, currency, DecisionAction, issueAction, rankActions, summarizeTrust, topDiagnosticAction, trustAction } from '../lib/operatingModel'
 import { KPIDaily, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
@@ -48,6 +47,7 @@ export function CommandCenter() {
   const priorRows = useMemo(() => priorPeriodRows(rows, currentRows[0]?.business_date || '', currentRows.length), [rows, currentRows])
   const latest = currentRows.at(-1)
   const sourceHealth = overview?.source_health || []
+  const supportRows = support?.rows || []
   const revenue = sum(currentRows, 'revenue')
   const priorRevenue = sum(priorRows, 'revenue')
   const sessions = sum(currentRows, 'sessions')
@@ -56,7 +56,9 @@ export function CommandCenter() {
   const priorOrders = sum(priorRows, 'orders')
   const conv = sessions ? (orders / sessions) * 100 : 0
   const priorConv = priorSessions ? (priorOrders / priorSessions) * 100 : 0
-  const supportRows = support?.rows || []
+  const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
+  const convDelta = compareValue(conv, priorRows.length === currentRows.length ? priorConv : null, 'Conversion')
+
   const actions = useMemo(() => {
     const built: DecisionAction[] = [
       ...topDiagnosticAction(currentRows, sourceHealth, overview?.diagnostics || [], overview?.recommendations || []),
@@ -66,19 +68,14 @@ export function CommandCenter() {
     ]
     return rankActions(built).slice(0, 5)
   }, [currentRows, sourceHealth, overview, issues, latest, supportRows])
-  const topThree = actions.slice(0, 3)
-  const lifecycle = summarizeLifecycle(actions)
+
   const trust = summarizeTrust(sourceHealth)
-  const trustLimitedCount = actions.filter((action) => action.trustState === 'trust_limited').length
-  const conditionalCount = actions.filter((action) => action.trustState === 'conditional').length
-  const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
-  const convDelta = compareValue(conv, priorRows.length === currentRows.length ? priorConv : null, 'Conversion')
 
   return (
     <div className="page-grid">
       <div className="page-head">
         <h2>Command Center</h2>
-        <p>Canonical next actions first. If trust degrades, dependent actions visibly lose confidence.</p>
+        <p>Only the highest-priority risks and opportunities, with owner, action, impact, and SLA.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {loading ? <Card title="Command Center"><div className="state-message">Loading decision system…</div></Card> : null}
@@ -87,78 +84,16 @@ export function CommandCenter() {
         <>
           <div className={`trust-banner ${trust.degraded ? 'trust-banner-degraded' : 'trust-banner-healthy'}`}>
             <div>
-              <strong>{trust.degraded ? 'Trust degraded' : 'Trust healthy'}</strong>
-              <p>
-                {trust.degraded
-                  ? `${trust.degradedSources.join(', ')} is reducing decision confidence. Treat affected actions as conditional until trust is restored.`
-                  : `All ${trust.total}/${trust.total} core sources are healthy. Top actions can be treated as decision-grade.`}
-              </p>
+              <strong>{trust.degraded ? 'Decision confidence degraded' : 'Decision confidence healthy'}</strong>
+              <p>{trust.degraded ? `${trust.degradedSources.join(', ')} is limiting confidence on some ranked items.` : 'Core sources are healthy enough for decision-grade prioritization.'}</p>
             </div>
             <div className="inline-badges">
-              <span className="badge badge-neutral">core sources {trust.healthy}/{trust.total}</span>
-              <span className="badge badge-warn">conditional {conditionalCount}</span>
-              <span className="badge badge-bad">trust-limited {trustLimitedCount}</span>
+              <span className="badge badge-neutral">revenue {currency(revenue)}</span>
+              <span className="badge badge-neutral">revenue Δ {revenueDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
+              <span className="badge badge-neutral">conversion Δ {convDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
             </div>
           </div>
-
-          <div className="three-col">
-            <Card title="Revenue Direction">
-              <div className="hero-metric">{formatDeltaPct(revenueDelta.deltaPct)}</div>
-              <div className="state-message">{currency(revenue)} this week · impact baseline for prioritization</div>
-            </Card>
-            <Card title="Conversion Direction">
-              <div className="hero-metric">{formatDeltaPct(convDelta.deltaPct)}</div>
-              <div className="state-message">{conv.toFixed(2)}% current conversion · every action ties to recovered orders</div>
-            </Card>
-            <Card title="Action Lifecycle">
-              <div className="mini-metrics">
-                <small>open {lifecycle.open} · in progress {lifecycle.in_progress}</small>
-                <small>validated {lifecycle.validated} · closed {lifecycle.closed}</small>
-                <small>revenue recovered signal {currency(lifecycle.revenueRecovered)}/week</small>
-              </div>
-            </Card>
-          </div>
-
-          <Card title="Canonical decision order">
-            <div className="canonical-order-strip">
-              {topThree.map((action) => (
-                <div className={`canonical-order-item status-${action.trustState === 'trusted' ? 'good' : action.trustState === 'conditional' ? 'warn' : 'bad'}`} key={action.id}>
-                  <small>#{action.canonicalRank} {action.trustState === 'trusted' ? 'canonical' : action.trustState === 'conditional' ? 'conditional' : 'trust-limited'}</small>
-                  <strong>{action.title}</strong>
-                  <p>{action.financialImpactLabel} · owner {action.owner}</p>
-                </div>
-              ))}
-              {!topThree.length ? <div className="state-message">No top actions ranked yet.</div> : null}
-            </div>
-          </Card>
-
           <DecisionStack actions={actions} />
-
-          <div className="two-col two-col-equal">
-            <Card title="10-second decision view">
-              <div className="stack-list compact">
-                <div className="list-item status-good"><strong>Do now</strong><p>{actions[0]?.title || 'No action ranked yet.'}</p></div>
-                <div className={`list-item status-${actions[0]?.trustState === 'trusted' ? 'good' : actions[0]?.trustState === 'conditional' ? 'warn' : 'bad'}`}>
-                  <strong>Confidence gate</strong>
-                  <p>{actions[0]?.trustLabel || 'Need live inputs to rank next action.'}</p>
-                </div>
-                <div className="list-item status-muted"><strong>Financial impact</strong><p>{actions[0]?.financialImpactLabel || '$0/week'} · owner {actions[0]?.owner || 'TBD'} · SLA {actions[0]?.sla || 'n/a'}</p></div>
-              </div>
-            </Card>
-            <Card title="Trust Layer">
-              <div className="stack-list compact">
-                {sourceHealth.filter((row) => ['shopify','triplewhale','freshdesk','clarity','ga4'].includes(row.source)).map((row) => (
-                  <div className={`list-item status-${row.derived_status === 'healthy' ? 'good' : row.derived_status === 'failed' ? 'bad' : 'warn'}`} key={row.source}>
-                    <div className="item-head"><strong>{row.source}</strong><span className="badge badge-neutral">{row.derived_status}</span></div>
-                    <small>{row.status_summary}</small>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-          <Card title="Command Center Trend">
-            {currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'revenue', label: 'Revenue', color: '#6ea8ff', axisId: 'left' }, { key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'right' }]} /> : <div className="state-message">No KPI rows returned.</div>}
-          </Card>
         </>
       ) : null}
     </div>

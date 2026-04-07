@@ -150,9 +150,7 @@ def _derived_status(config: SourceConfig, latest_run: SourceSyncRun | None) -> t
     if latest_run.status == "failed":
         if latest_run.error_message and '429' in latest_run.error_message and config.last_success_at is not None:
             stale_minutes = _staleness_minutes(config.source_name, config.last_success_at)
-            threshold = STALE_MINUTES_BY_SOURCE.get(config.source_name, 240)
-            if stale_minutes is not None and stale_minutes <= threshold:
-                return "healthy", f"Latest poll was rate-limited, but last successful sync is still fresh ({stale_minutes} minutes old).", stale_minutes
+            return "degraded", f"Latest poll was rate-limited (429). Using last successful sync from {stale_minutes} minutes ago with reduced confidence.", stale_minutes
         return "failed", latest_run.error_message or "Latest sync failed.", None
 
     stale_minutes = _staleness_minutes(config.source_name, config.last_success_at)
@@ -216,9 +214,9 @@ def refresh_source_health_alerts(db: Session) -> None:
         status, summary, stale_minutes = _derived_status(config, latest_run)
         if status == "healthy":
             _upsert_source_alert(db, config, "low", "Source healthy", summary, status)
-        elif status in {"failed", "stale"}:
+        elif status in {"failed", "stale", "degraded"}:
             severity = "high" if status == "failed" else "medium"
-            title = "Source sync failed" if status == "failed" else "Source sync stale"
+            title = "Source sync failed" if status == "failed" else "Source rate-limited" if status == "degraded" else "Source sync stale"
             if stale_minutes is not None and status == "stale":
                 summary = f"{summary} Check scheduler, credentials, and upstream API health."
             _upsert_source_alert(db, config, severity, title, summary, status)

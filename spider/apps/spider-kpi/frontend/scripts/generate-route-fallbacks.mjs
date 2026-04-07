@@ -10,6 +10,7 @@ const indexPath = path.join(distDir, 'index.html')
 const routes = [
   'departments',
   'division/customer-experience',
+  'division/marketing',
   'revenue',
   'friction',
   'issues',

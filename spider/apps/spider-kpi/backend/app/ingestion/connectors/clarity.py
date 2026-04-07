@@ -84,6 +84,12 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
         db.commit()
         return {'ok': True, 'records_processed': len(records), 'project_id': settings.clarity_project_id}
     except Exception as exc:
-        finish_sync_run(db, run, status='failed', error_message=str(exc))
+        message = str(exc)
+        retry_after = None
+        if hasattr(exc, 'response') and getattr(exc, 'response', None) is not None:
+            retry_after = exc.response.headers.get('Retry-After')
+        if '429' in message and retry_after:
+            message = f'{message} | Retry-After: {retry_after}'
+        finish_sync_run(db, run, status='failed', error_message=message)
         db.commit()
-        return {'ok': False, 'message': str(exc), 'records_processed': 0}
+        return {'ok': False, 'message': message, 'records_processed': 0}
