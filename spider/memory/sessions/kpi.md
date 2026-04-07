@@ -32,17 +32,20 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
+- Apply the new telemetry Alembic migration and deploy backend changes to the KPI API host.
+- Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Decide whether to promote the impact/confidence/trust-penalty policy plus leader ownership mapping into backend/shared logic so action ranking becomes source-controlled instead of frontend-only.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
-- Promote the now-scaffolded Venom / telemetry event contract into a shared backend/config policy once connector work starts.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
 - 2026-04-07 department operating-system pass: added a new frontend Department Views route that derives leader-specific operating views for Joseph, Bailey, Jeremiah, Kyle, Conor, and David from existing KPI/support/issue/source-health endpoints instead of replacing the current dashboard architecture.
 - 2026-04-07 command-center action model now includes severity, recommended action, and evidence sources, and the decision stack renders those explicitly alongside owner/SLA/impact/confidence.
 - 2026-04-07 source health now explicitly calls out AWS / Venom telemetry-health visibility gaps so product-reliability insights remain trust-limited instead of implied.
+- 2026-04-07 frontend deploy completed via GitHub -> Vercel by pushing commits `b6f5bec` and follow-up hotfix `c673f81`; production `kpi.spidergrills.com` now serves `/departments` successfully after adding that route to the static SPA fallback generator.
+- 2026-04-07 backend AWS/Venom foundation pass: added telemetry session/daily schema, `aws_telemetry` connector scaffolding (URL or local-path ingestion), derived telemetry metrics, source-health registration, issue-radar integration, overview telemetry payload, and `/api/telemetry/summary` endpoint. This is architecture-complete but still depends on real AWS export credentials/path plus migration + backend deploy.
 - Support / CX `Response Performance` now uses `supportAgents` daily rollups for selected-range agent FRT/resolution semantics instead of inheriting created-in-range ticket filtering.
 - Freshdesk agent-name enrichment is being added at ingestion/mart rebuild time so Support / CX agent tables show human-readable names instead of responder IDs.
 - Replaced the separate `spider-kpi/` Vercel auth shell from manual OAuth redirects to an embedded-app pattern using App Bridge-authenticated backend requests, server-side session-token verification, and Shopify token exchange.

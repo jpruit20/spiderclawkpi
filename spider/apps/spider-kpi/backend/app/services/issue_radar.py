@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import FreshdeskTicket, IssueCluster, IssueSignal, ShopifyOrderDaily
+from app.models import FreshdeskTicket, IssueCluster, IssueSignal, ShopifyOrderDaily, TelemetryDaily, TelemetrySession
 from app.services.source_health import upsert_source_config
 
 THEMES: dict[str, list[str]] = {
@@ -104,7 +104,7 @@ PRODUCT_PATTERNS = {
 }
 SEVERITY_WEIGHT = {"high": 1.5, "medium": 1.0, "low": 0.6}
 IMPACT_WEIGHT = {"conversion": 1.5, "aov": 1.3, "support_burden": 1.0}
-LIVE_SOURCES = ["freshdesk"]
+LIVE_SOURCES = ["freshdesk", "aws_telemetry"]
 SCAFFOLDED_SOURCES = ["reddit", "discord", "facebook", "google_reviews", "reviews"]
 UNKNOWN_CONFIDENCE_THRESHOLD = 0.4
 
@@ -254,6 +254,8 @@ def _priority_reason_summary(payload: dict[str, Any]) -> str:
 
 def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     upsert_source_config(db, "freshdesk", configured=True, sync_mode="poll", config_json={"source_type": "connector", "issue_radar_live": True})
+    telemetry_sessions_exist = db.execute(select(TelemetrySession.id).limit(1)).first() is not None
+    upsert_source_config(db, "aws_telemetry", configured=telemetry_sessions_exist, sync_mode="pull", config_json={"source_type": "connector", "issue_radar_live": telemetry_sessions_exist})
     for source in SCAFFOLDED_SOURCES:
         upsert_source_config(db, source, configured=False, enabled=False, sync_mode="stub", config_json={"source_type": "connector", "issue_radar_live": False})
     db.commit()
@@ -478,7 +480,76 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         reverse=True,
     )
 
-    source_breakdown = [{"source": "freshdesk", "live": True, "signals": len(signals), "clusters": len(clusters)}]
+    telemetry_daily_rows = db.execute(select(TelemetryDaily).order_by(TelemetryDaily.business_date)).scalars().all()
+    telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all()
+    if telemetry_daily_rows and telemetry_sessions:
+        latest = telemetry_daily_rows[-1]
+        rising_disconnects = latest.disconnect_rate >= 0.12
+        unstable_temp = latest.temp_stability_score <= 0.78
+        high_override = latest.manual_override_rate >= 0.18
+        if rising_disconnects or unstable_temp or high_override:
+            if rising_disconnects and unstable_temp:
+                telemetry_theme = "telemetry_reliability"
+                telemetry_title = "Telemetry Reliability Drop"
+                telemetry_summary = "Disconnect rate and temperature stability both indicate a product reliability issue."
+            elif rising_disconnects:
+                telemetry_theme = "disconnect_cluster"
+                telemetry_title = "Disconnect Cluster"
+                telemetry_summary = "Disconnect rate is elevated across recent connected sessions."
+            elif unstable_temp:
+                telemetry_theme = "temp_instability"
+                telemetry_title = "Temperature Instability"
+                telemetry_summary = "Temperature stability score is below target and suggests control/performance drift."
+            else:
+                telemetry_theme = "manual_override_spike"
+                telemetry_title = "Manual Override Spike"
+                telemetry_summary = "Manual override rate is elevated, suggesting the product is not holding course automatically."
+
+            firmware_counter = Counter((row.firmware_version or "unknown") for row in telemetry_sessions)
+            grill_counter = Counter((row.grill_type or "unknown") for row in telemetry_sessions)
+            telemetry_details = {
+                "theme": telemetry_theme,
+                "source": "aws_telemetry",
+                "disconnect_rate": round(latest.disconnect_rate, 4),
+                "temp_stability_score": round(latest.temp_stability_score, 4),
+                "manual_override_rate": round(latest.manual_override_rate, 4),
+                "firmware_health_score": round(latest.firmware_health_score, 4),
+                "session_reliability_score": round(latest.session_reliability_score, 4),
+                "affected_firmware_versions": [name for name, _ in firmware_counter.most_common(5)],
+                "affected_grill_types": [name for name, _ in grill_counter.most_common(5)],
+                "recommended_action": "Slice failures by firmware and grill type, then prioritize the dominant failure cohort.",
+                "priority_reason_summary": telemetry_summary,
+                "priority_score": round(max(latest.disconnect_rate * 100 * 2.2, (1 - latest.temp_stability_score) * 100 * 1.8, latest.manual_override_rate * 100 * 1.6), 2),
+                "trend_label": "rising",
+                "impact_type": ["support_burden", "conversion"],
+            }
+            telemetry_cluster = IssueCluster(
+                cluster_key=f"aws_telemetry:{telemetry_theme}",
+                title=telemetry_title,
+                source_count=1,
+                severity="high" if (latest.disconnect_rate >= 0.18 or latest.temp_stability_score <= 0.7) else "medium",
+                confidence=0.82,
+                owner_team="Product / Firmware",
+                status="open",
+                details_json=telemetry_details,
+            )
+            db.add(telemetry_cluster)
+            clusters.append(telemetry_cluster)
+            telemetry_signal = IssueSignal(
+                business_date=datetime.now(timezone.utc).date(),
+                signal_type="telemetry_issue",
+                severity=telemetry_cluster.severity,
+                confidence=0.82,
+                source="aws_telemetry",
+                title=f"Telemetry issue: {telemetry_title}",
+                summary=telemetry_summary,
+                metadata_json=telemetry_details,
+            )
+            db.add(telemetry_signal)
+            signals.append(telemetry_signal)
+
+    source_breakdown = [{"source": "freshdesk", "live": True, "signals": len([s for s in signals if s.source == 'freshdesk']), "clusters": len([c for c in clusters if str(c.cluster_key).startswith('freshdesk:')])}]
+    source_breakdown.append({"source": "aws_telemetry", "live": telemetry_sessions_exist, "signals": len([s for s in signals if s.source == 'aws_telemetry']), "clusters": len([c for c in clusters if str(c.cluster_key).startswith('aws_telemetry:')])})
     source_breakdown.extend({"source": source, "live": False, "signals": 0, "clusters": 0} for source in SCAFFOLDED_SOURCES)
     trend_heatmap = [
         {"theme": payload["theme"], "points": payload["daily_series"]}

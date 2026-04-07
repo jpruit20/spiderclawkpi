@@ -110,6 +110,15 @@ class DataQualityOut(BaseModel):
     missing_data: list[dict[str, Any]]
 
 
+class TelemetrySummaryOut(BaseModel):
+    latest: Optional[dict[str, Any]] = None
+    daily: list[dict[str, Any]]
+    firmware_health: list[dict[str, Any]]
+    grill_type_health: list[dict[str, Any]]
+    top_error_codes: list[dict[str, Any]]
+    top_issue_patterns: list[dict[str, Any]]
+
+
 class OverviewResponse(BaseModel):
     latest_kpi: Optional[KPIDailyOut] = None
     daily_series: list[KPIDailyOut]
@@ -117,3 +126,4 @@ class OverviewResponse(BaseModel):
     diagnostics: list[DiagnosticOut]
     recommendations: list[RecommendationOut]
     source_health: list[SourceHealthOut]
+    telemetry: Optional[TelemetrySummaryOut] = None

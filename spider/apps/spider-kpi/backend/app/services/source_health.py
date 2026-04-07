@@ -13,6 +13,7 @@ STALE_MINUTES_BY_SOURCE = {
     "ga4": 240,
     "clarity": 240,
     "freshdesk": 360,
+    "aws_telemetry": 360,
     "decision-engine": 180,
 }
 SOURCE_TYPES = {
@@ -21,6 +22,7 @@ SOURCE_TYPES = {
     "ga4": "connector",
     "clarity": "connector",
     "freshdesk": "connector",
+    "aws_telemetry": "connector",
     "decision-engine": "compute",
 }
 

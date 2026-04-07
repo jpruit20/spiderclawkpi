@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import sync_ga4
@@ -40,7 +41,7 @@ def run_seed() -> None:
     try:
         existing_live_configs = db.execute(
             select(SourceConfig).where(
-                SourceConfig.source_name.in_(["shopify", "triplewhale", "ga4", "clarity", "freshdesk"])
+                SourceConfig.source_name.in_(["shopify", "triplewhale", "ga4", "clarity", "freshdesk", "aws_telemetry"])
             )
         ).scalars().all()
         if any(
@@ -68,6 +69,8 @@ def run_syncs() -> None:
             any_success = _successful_result(sync_freshdesk(db, days=7)) or any_success
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
+        if not _already_running(db, "aws_telemetry"):
+            any_success = _successful_result(sync_aws_telemetry(db)) or any_success
         latest_clarity_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "clarity")

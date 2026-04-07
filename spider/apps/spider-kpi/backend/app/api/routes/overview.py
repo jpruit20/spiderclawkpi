@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session
 from app.compute.kpis import get_data_quality
 from app.models import Alert, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
-from app.schemas.overview import AlertOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut
+from app.schemas.overview import AlertOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
 from app.services.issue_radar import build_issue_radar
+from app.services.telemetry import summarize_telemetry
 from app.services.overview import build_kpi_payload, build_overview
 from app.services.source_health import get_source_health
 
@@ -95,6 +96,11 @@ def get_support_tickets(db: Session = Depends(db_session)):
 @router.get("/source-health", response_model=list[SourceHealthOut])
 def get_sources(db: Session = Depends(db_session)):
     return get_source_health(db)
+
+
+@router.get("/telemetry/summary", response_model=TelemetrySummaryOut)
+def telemetry_summary(db: Session = Depends(db_session)):
+    return summarize_telemetry(db)
 
 
 @router.get("/data-quality", response_model=DataQualityOut)

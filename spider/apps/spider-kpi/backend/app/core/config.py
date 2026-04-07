@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     freshdesk_api_key: Optional[str] = None
     freshdesk_api_user: Optional[str] = None
 
+    aws_telemetry_url: Optional[str] = None
+    aws_telemetry_local_path: Optional[str] = None
+    aws_telemetry_api_token: Optional[str] = None
+
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 30
     historical_start_date: str = "2024-01-01"

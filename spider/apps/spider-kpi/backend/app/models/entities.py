@@ -225,6 +225,54 @@ class FreshdeskGroupsDaily(TimestampMixin, Base):
     unresolved_tickets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class TelemetrySession(TimestampMixin, Base):
+    __tablename__ = "telemetry_sessions"
+    __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_sessions_source_event_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    device_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    grill_type: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    target_temp: Mapped[Optional[float]] = mapped_column(Float)
+    session_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    session_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    session_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    disconnect_events: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    manual_overrides: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_codes_json: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    actual_temp_time_series: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    fan_output_time_series: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    temp_stability_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    time_to_stabilization_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    firmware_health_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    session_reliability_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    manual_override_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    cook_success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class TelemetryDaily(TimestampMixin, Base):
+    __tablename__ = "telemetry_daily"
+    __table_args__ = (UniqueConstraint("business_date", name="uq_telemetry_daily_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    connected_users: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cook_success_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    disconnect_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    temp_stability_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    avg_time_to_stabilization_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    manual_override_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    firmware_health_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    session_reliability_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    error_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+
 class KPIDaily(TimestampMixin, Base):
     __tablename__ = "kpi_daily"
     __table_args__ = (UniqueConstraint("business_date", name="uq_kpi_daily_date"),)

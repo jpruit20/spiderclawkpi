@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Alert, DriverDiagnostic, KPIDaily, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
 from app.services.source_health import get_source_health
+from app.services.telemetry import summarize_telemetry
 
 
 def is_incomplete_kpi_day(row: KPIDaily | None) -> bool:
@@ -91,4 +92,5 @@ def build_overview(db: Session) -> dict:
         "diagnostics": diagnostics,
         "recommendations": recommendations,
         "source_health": get_source_health(db),
+        "telemetry": summarize_telemetry(db),
     }
