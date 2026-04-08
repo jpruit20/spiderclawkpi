@@ -226,6 +226,27 @@ class FreshdeskGroupsDaily(TimestampMixin, Base):
     unresolved_tickets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class TelemetryStreamEvent(TimestampMixin, Base):
+    __tablename__ = "telemetry_stream_events"
+    __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_stream_events_source_event_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    sample_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    stream_event_name: Mapped[Optional[str]] = mapped_column(String(64))
+    engaged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    grill_type: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    target_temp: Mapped[Optional[float]] = mapped_column(Float)
+    current_temp: Mapped[Optional[float]] = mapped_column(Float)
+    heating: Mapped[Optional[bool]] = mapped_column(Boolean)
+    intensity: Mapped[Optional[float]] = mapped_column(Float)
+    rssi: Mapped[Optional[float]] = mapped_column(Float)
+    error_codes_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class TelemetrySession(TimestampMixin, Base):
     __tablename__ = "telemetry_sessions"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_sessions_source_event_id"),)

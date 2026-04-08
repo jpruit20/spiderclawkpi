@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Spider KPI DynamoDB Streams -> Lambda -> KPI telemetry store
+
+Parameters:
+  DynamoTableName:
+    Type: String
+    Default: sg_device_shadows
+  StreamArn:
+    Type: String
+  KpiDatabaseUrl:
+    Type: String
+    NoEcho: true
+  LambdaSecurityGroupIds:
+    Type: CommaDelimitedList
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+  AwsRegion:
+    Type: String
+    Default: us-east-2
+
+Resources:
+  TelemetryStreamLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: TelemetryStreamReadWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:ListStreams
+                Resource: !Ref StreamArn
+
+  TelemetryStreamLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: spider-kpi-telemetry-stream
+      Runtime: python3.12
+      Handler: app.streaming.lambda_handler.handler
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt TelemetryStreamLambdaRole.Arn
+      Code:
+        S3Bucket: REPLACE_ME
+        S3Key: REPLACE_ME
+      Environment:
+        Variables:
+          KPI_DATABASE_URL: !Ref KpiDatabaseUrl
+          AWS_REGION: !Ref AwsRegion
+      VpcConfig:
+        SecurityGroupIds: !Ref LambdaSecurityGroupIds
+        SubnetIds: !Ref LambdaSubnetIds
+
+  TelemetryStreamMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !Ref StreamArn
+      FunctionName: !Ref TelemetryStreamLambda
+      StartingPosition: LATEST
+      BatchSize: 100
+      MaximumRetryAttempts: 3
+      BisectBatchOnFunctionError: true
+      Enabled: true
+
+Outputs:
+  LambdaName:
+    Value: !Ref TelemetryStreamLambda
+  LambdaRoleArn:
+    Value: !GetAtt TelemetryStreamLambdaRole.Arn
