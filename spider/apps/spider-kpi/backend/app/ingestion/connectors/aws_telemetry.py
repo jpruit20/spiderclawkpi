@@ -265,9 +265,17 @@ def _build_samples(records: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
         })
     for device_samples in grouped.values():
         device_samples.sort(key=lambda item: item['sample_time'])
+    retained_samples = [sample for device_samples in grouped.values() for sample in device_samples]
+    distinct_engaged_devices = len({sample['device_id'] for sample in retained_samples if sample.get('engaged')})
+    oldest_sample = min((sample['sample_time'] for sample in retained_samples), default=None)
+    newest_sample = max((sample['sample_time'] for sample in retained_samples), default=None)
     return grouped, {
         'devices_observed': len(grouped),
-        'samples_retained': sum(len(device_samples) for device_samples in grouped.values()),
+        'distinct_devices_observed': len(grouped),
+        'distinct_engaged_devices_observed': distinct_engaged_devices,
+        'oldest_sample_timestamp_seen': oldest_sample.isoformat() if oldest_sample else None,
+        'newest_sample_timestamp_seen': newest_sample.isoformat() if newest_sample else None,
+        'samples_retained': len(retained_samples),
         'excluded_records': sum(excluded_counter.values()),
         'excluded_breakdown': dict(excluded_counter),
         'invalid_records': invalid_records,
@@ -500,6 +508,10 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             'records_loaded': len(records),
             'sessions_derived': len(sessions),
             'devices_observed': derivation_stats.get('devices_observed'),
+            'distinct_devices_observed': derivation_stats.get('distinct_devices_observed'),
+            'distinct_engaged_devices_observed': derivation_stats.get('distinct_engaged_devices_observed'),
+            'oldest_sample_timestamp_seen': derivation_stats.get('oldest_sample_timestamp_seen'),
+            'newest_sample_timestamp_seen': derivation_stats.get('newest_sample_timestamp_seen'),
             'samples_retained': derivation_stats.get('samples_retained'),
             'excluded_records': derivation_stats.get('excluded_records'),
             'excluded_breakdown': derivation_stats.get('excluded_breakdown'),
@@ -512,6 +524,13 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             'raw_rows_scanned': read_stats.get('raw_rows_scanned'),
             'recent_rows_after_cutoff': read_stats.get('recent_rows_after_cutoff'),
             'cutoff_ms': read_stats.get('cutoff_ms'),
+            'max_record_cap_hit': len(records) >= max_records,
+            'session_gap_timeout_minutes': settings.aws_telemetry_session_gap_minutes or DEFAULT_SESSION_GAP_MINUTES,
+            'coverage_summary': (
+                f"Observed {derivation_stats.get('distinct_devices_observed') or 0} devices "
+                f"({derivation_stats.get('distinct_engaged_devices_observed') or 0} engaged) from a bounded direct DynamoDB read; "
+                f"scan truncated={bool(read_stats.get('scan_truncated'))}, max_record_cap_hit={len(records) >= max_records}."
+            ),
             'days_materialized': len(daily),
             'max_records': max_records,
             'sample_source': 'dynamodb' if settings.aws_telemetry_dynamodb_table else 'url' if settings.aws_telemetry_url else 'local_path',

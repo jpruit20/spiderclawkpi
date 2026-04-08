@@ -233,6 +233,10 @@ export interface TelemetryCollectionMetadata {
   days_materialized?: number
   max_records?: number
   devices_observed?: number
+  distinct_devices_observed?: number
+  distinct_engaged_devices_observed?: number
+  oldest_sample_timestamp_seen?: string | null
+  newest_sample_timestamp_seen?: string | null
   samples_retained?: number
   excluded_records?: number
   excluded_breakdown?: Record<string, number>
@@ -244,6 +248,9 @@ export interface TelemetryCollectionMetadata {
   scan_truncated?: boolean
   raw_rows_scanned?: number
   recent_rows_after_cutoff?: number
+  max_record_cap_hit?: boolean
+  session_gap_timeout_minutes?: number
+  coverage_summary?: string
 }
 
 export interface TelemetryConfidence {

@@ -115,13 +115,17 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         .limit(1)
     ).scalars().first()
     metadata = latest_run.metadata_json if latest_run else {}
+    max_record_cap_hit = bool(metadata.get('max_record_cap_hit'))
+    scan_truncated = bool(metadata.get('scan_truncated'))
+    distinct_devices = metadata.get('distinct_devices_observed') or 0
+    distinct_engaged_devices = metadata.get('distinct_engaged_devices_observed') or 0
     confidence = {
-        "global_completeness": "proxy",
+        "global_completeness": "proxy" if (max_record_cap_hit or scan_truncated or distinct_devices <= 1) else "estimated",
         "session_derivation": "estimated",
         "disconnect_detection": "proxy",
         "cook_success": "estimated",
         "manual_override": "unavailable" if all((item.manual_overrides or 0) == 0 for item in sessions) else "proxy",
-        "reason": "Direct DynamoDB reads from sg_device_shadows are bounded and device-keyed; fleet-wide recency is not globally indexed.",
+        "reason": metadata.get('coverage_summary') or "Direct DynamoDB reads from sg_device_shadows are bounded and device-keyed; fleet-wide recency is not globally indexed.",
     }
 
     return {
@@ -168,6 +172,10 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             "days_materialized": metadata.get('days_materialized'),
             "max_records": metadata.get('max_records'),
             "devices_observed": metadata.get('devices_observed'),
+            "distinct_devices_observed": metadata.get('distinct_devices_observed'),
+            "distinct_engaged_devices_observed": metadata.get('distinct_engaged_devices_observed'),
+            "oldest_sample_timestamp_seen": metadata.get('oldest_sample_timestamp_seen'),
+            "newest_sample_timestamp_seen": metadata.get('newest_sample_timestamp_seen'),
             "samples_retained": metadata.get('samples_retained'),
             "excluded_records": metadata.get('excluded_records'),
             "excluded_breakdown": metadata.get('excluded_breakdown'),
@@ -179,6 +187,9 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             "scan_truncated": metadata.get('scan_truncated'),
             "raw_rows_scanned": metadata.get('raw_rows_scanned'),
             "recent_rows_after_cutoff": metadata.get('recent_rows_after_cutoff'),
+            "max_record_cap_hit": metadata.get('max_record_cap_hit'),
+            "session_gap_timeout_minutes": metadata.get('session_gap_timeout_minutes'),
+            "coverage_summary": metadata.get('coverage_summary'),
         },
         "confidence": confidence,
     }
