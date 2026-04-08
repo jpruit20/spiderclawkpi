@@ -76,13 +76,6 @@ export function CustomerExperienceDivision() {
   const insights = snapshot?.insights || []
   const snapshotTimestamp = snapshot?.snapshot_timestamp || 'n/a'
 
-  const sampleSnapshot = useMemo(() => ({
-    snapshot_timestamp: snapshotTimestamp,
-    kpis: gridMetrics.map((item) => ({ key: item.key, current: item.current, target: item.target, status: item.status, owner: item.owner })),
-    today_focus: todayFocus.map((item) => ({ title: item.title, owner: item.owner, priority: item.priority, due_date: actionDueDate(item) })),
-    actions: actions.map((item) => ({ dedup_key: item.dedup_key, status: item.status, escalation_owner: item.escalation_owner || null, co_owner: item.co_owner || null })),
-  }), [snapshotTimestamp, gridMetrics, todayFocus, actions])
-
   return (
     <div className="page-grid">
       <div className="page-head">
@@ -193,9 +186,6 @@ export function CustomerExperienceDivision() {
             </div>
           </Card>
 
-          <Card title="Sample Snapshot Output">
-            <pre className="code-block">{JSON.stringify(sampleSnapshot, null, 2)}</pre>
-          </Card>
         </>
       ) : null}
     </div>
