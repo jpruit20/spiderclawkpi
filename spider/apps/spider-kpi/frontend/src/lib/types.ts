@@ -232,6 +232,18 @@ export interface TelemetryCollectionMetadata {
   sessions_derived?: number
   days_materialized?: number
   max_records?: number
+  devices_observed?: number
+  samples_retained?: number
+  excluded_records?: number
+  excluded_breakdown?: Record<string, number>
+  invalid_records?: number
+  duplicate_samples?: number
+  sessions_merged_away?: number
+  short_sessions_filtered?: number
+  pages_scanned?: number | null
+  scan_truncated?: boolean
+  raw_rows_scanned?: number
+  recent_rows_after_cutoff?: number
 }
 
 export interface TelemetryConfidence {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -144,7 +144,7 @@ def _csv_tokens(value: str | None) -> set[str]:
     return {token.strip().lower() for token in (value or '').split(',') if token.strip()}
 
 
-def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
+def _load_records_from_dynamodb(max_records: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import boto3
     from botocore.config import Config
 
@@ -178,12 +178,26 @@ def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
     rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
     cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
     recent_rows = [item for item in rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
-    return (recent_rows or rows)[:max_records]
+    bounded_rows = (recent_rows or rows)[:max_records]
+    return bounded_rows, {
+        'pages_scanned': pages,
+        'scan_truncated': bool(last_evaluated_key),
+        'raw_rows_scanned': len(rows),
+        'recent_rows_after_cutoff': len(recent_rows),
+        'cutoff_ms': cutoff_ms,
+    }
 
 
-def _load_records(max_records: int) -> list[dict[str, Any]]:
+def _load_records(max_records: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if settings.aws_telemetry_local_path or settings.aws_telemetry_url:
-        return _load_records_from_file()[:max_records]
+        rows = _load_records_from_file()[:max_records]
+        return rows, {
+            'pages_scanned': None,
+            'scan_truncated': False,
+            'raw_rows_scanned': len(rows),
+            'recent_rows_after_cutoff': len(rows),
+            'cutoff_ms': None,
+        }
     return _load_records_from_dynamodb(max_records)
 
 
@@ -209,18 +223,30 @@ def _is_test_device(device_id: str | None, reported: dict[str, Any]) -> bool:
     return any(token in blob for token in prefixes)
 
 
-def _build_samples(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _build_samples(records: list[dict[str, Any]]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    excluded_counter: Counter[str] = Counter()
+    invalid_records = 0
+    duplicate_samples = 0
+    sample_keys: set[tuple[str, int]] = set()
     for record in records:
         device_id = record.get('device_id')
         reported = _reported_state(record)
         if not device_id or not isinstance(reported, dict):
+            invalid_records += 1
             continue
         if _is_test_device(str(device_id), reported):
+            excluded_counter['test_device'] += 1
             continue
         sample_time = _dt_from_epoch_ms(record.get('sample_time'))
         if not sample_time:
+            invalid_records += 1
             continue
+        sample_key = (str(device_id), _as_int(record.get('sample_time'), 0))
+        if sample_key in sample_keys:
+            duplicate_samples += 1
+            continue
+        sample_keys.add(sample_key)
         heat = ((reported.get('heat') or {}).get('t2') or {}) if isinstance(reported.get('heat'), dict) else {}
         grouped[str(device_id)].append({
             'device_id': str(device_id),
@@ -239,7 +265,14 @@ def _build_samples(records: list[dict[str, Any]]) -> dict[str, list[dict[str, An
         })
     for device_samples in grouped.values():
         device_samples.sort(key=lambda item: item['sample_time'])
-    return grouped
+    return grouped, {
+        'devices_observed': len(grouped),
+        'samples_retained': sum(len(device_samples) for device_samples in grouped.values()),
+        'excluded_records': sum(excluded_counter.values()),
+        'excluded_breakdown': dict(excluded_counter),
+        'invalid_records': invalid_records,
+        'duplicate_samples': duplicate_samples,
+    }
 
 
 def _stability_score(values: list[float], target_temp: float | None) -> float:
@@ -282,10 +315,12 @@ def _merge_adjacent_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, A
     return merged
 
 
-def _derive_sessions(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped = _build_samples(records)
+def _derive_sessions(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    grouped, sample_stats = _build_samples(records)
     sessions: list[dict[str, Any]] = []
     gap = timedelta(minutes=settings.aws_telemetry_session_gap_minutes or DEFAULT_SESSION_GAP_MINUTES)
+    filtered_short_sessions = 0
+    merged_session_count = 0
 
     for device_id, samples in grouped.items():
         active: list[dict[str, Any]] = []
@@ -302,10 +337,20 @@ def _derive_sessions(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             active.append(sample)
         if active:
             device_sessions.append(_finalize_session(device_id, active))
-        for session in _merge_adjacent_sessions(device_sessions):
+        merged_sessions = _merge_adjacent_sessions(device_sessions)
+        merged_session_count += max(0, len(device_sessions) - len(merged_sessions))
+        for session in merged_sessions:
             if session['session_duration_seconds'] >= max(0, settings.aws_telemetry_min_session_seconds or 0):
                 sessions.append(session)
-    return sessions
+            else:
+                filtered_short_sessions += 1
+    return sessions, {
+        **sample_stats,
+        'sessions_before_merge': None,
+        'sessions_merged_away': merged_session_count,
+        'short_sessions_filtered': filtered_short_sessions,
+        'sessions_final': len(sessions),
+    }
 
 
 def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -392,8 +437,8 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
     db.commit()
 
     try:
-        records = _load_records(max_records)
-        sessions = _derive_sessions(records)
+        records, read_stats = _load_records(max_records)
+        sessions, derivation_stats = _derive_sessions(records)
         db.execute(delete(TelemetrySession))
         db.execute(delete(TelemetryDaily))
         db.flush()
@@ -454,6 +499,19 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             **(run.metadata_json or {}),
             'records_loaded': len(records),
             'sessions_derived': len(sessions),
+            'devices_observed': derivation_stats.get('devices_observed'),
+            'samples_retained': derivation_stats.get('samples_retained'),
+            'excluded_records': derivation_stats.get('excluded_records'),
+            'excluded_breakdown': derivation_stats.get('excluded_breakdown'),
+            'invalid_records': derivation_stats.get('invalid_records'),
+            'duplicate_samples': derivation_stats.get('duplicate_samples'),
+            'sessions_merged_away': derivation_stats.get('sessions_merged_away'),
+            'short_sessions_filtered': derivation_stats.get('short_sessions_filtered'),
+            'pages_scanned': read_stats.get('pages_scanned'),
+            'scan_truncated': read_stats.get('scan_truncated'),
+            'raw_rows_scanned': read_stats.get('raw_rows_scanned'),
+            'recent_rows_after_cutoff': read_stats.get('recent_rows_after_cutoff'),
+            'cutoff_ms': read_stats.get('cutoff_ms'),
             'days_materialized': len(daily),
             'max_records': max_records,
             'sample_source': 'dynamodb' if settings.aws_telemetry_dynamodb_table else 'url' if settings.aws_telemetry_url else 'local_path',
