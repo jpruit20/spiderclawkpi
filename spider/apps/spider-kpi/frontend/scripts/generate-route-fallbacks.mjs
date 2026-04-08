@@ -13,6 +13,8 @@ const routes = [
   'division/marketing',
   'division/product-engineering',
   'division/product-enginering',
+  'division/operations',
+  'division/production-manufacturing',
   'revenue',
   'friction',
   'issues',

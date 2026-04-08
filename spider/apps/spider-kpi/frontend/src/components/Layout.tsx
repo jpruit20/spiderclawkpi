@@ -24,6 +24,9 @@ export function Layout({ children }: { children: ReactNode }) {
           <small className="nav-group-label">Divisions</small>
           <NavLink to="/division/customer-experience">Customer Experience</NavLink>
           <NavLink to="/division/marketing">Marketing</NavLink>
+          <NavLink to="/division/product-engineering">Product / Engineering</NavLink>
+          <NavLink to="/division/operations">Operations</NavLink>
+          <NavLink to="/division/production-manufacturing">Production / Manufacturing</NavLink>
           <NavLink to="/departments">Division Index</NavLink>
         </nav>
         <div className="sidebar-foot">kpi.spidergrills.com</div>
