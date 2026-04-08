@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { currency } from '../lib/operatingModel'
-import { IssueClusterItem, IssueRadarResponse } from '../lib/types'
+import { currency, frictionRankingScore } from '../lib/operatingModel'
+import { IssueClusterItem, IssueRadarResponse, SourceHealthItem } from '../lib/types'
 
 function ClusterList({ title, rows, mode = 'queue' }: { title: string; rows: IssueClusterItem[]; mode?: 'queue' | 'evidence' }) {
   return (
@@ -44,6 +44,7 @@ export function IssueRadar() {
     live_sources: [],
     scaffolded_sources: [],
   })
+  const [sourceHealth, setSourceHealth] = useState<SourceHealthItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -53,8 +54,11 @@ export function IssueRadar() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.issues()
-        if (!cancelled) setData(payload)
+        const [payload, sourcePayload] = await Promise.all([api.issues(), api.sourceHealth()])
+        if (!cancelled) {
+          setData(payload)
+          setSourceHealth(sourcePayload)
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load issues')
       } finally {
@@ -67,10 +71,23 @@ export function IssueRadar() {
     }
   }, [])
 
-  const sortedClusters = useMemo(
-    () => [...data.clusters].sort((a, b) => Number(b.details_json?.priority_score || 0) - Number(a.details_json?.priority_score || 0)),
-    [data.clusters],
-  )
+  const sortedClusters = useMemo(() => {
+    return [...data.clusters]
+      .map((item) => {
+        const source = String(item.details_json?.source || '').toLowerCase()
+        const usesClarity = source === 'clarity'
+        const corroborated = Number(item.source_count || 0) > 1 || source !== 'clarity'
+        const rankingScore = frictionRankingScore({
+          impact: Number(item.details_json?.priority_score || 0) * 12,
+          confidence: Number(item.confidence || 0.6),
+          sourceHealth,
+          usesClarity,
+          corroborated,
+        })
+        return { ...item, __rankingScore: rankingScore }
+      })
+      .sort((a, b) => Number(b.__rankingScore || 0) - Number(a.__rankingScore || 0))
+  }, [data.clusters, sourceHealth])
   const topThree = sortedClusters.slice(0, 3)
   const actionItems = [
     topThree[0] ? `Escalate now: ${topThree[0].title}. ${String(topThree[0].details_json?.priority_reason_summary || '')}` : 'No priority cluster returned yet; verify connector health and issue normalization.',
