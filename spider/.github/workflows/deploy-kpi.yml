@@ -56,7 +56,7 @@ jobs:
     name: Deploy KPI Backend (Droplet)
     runs-on: ubuntu-latest
     needs: frontend-vercel
-    if: ${{ secrets.KPI_DROPLET_HOST != '' && secrets.KPI_DROPLET_USER != '' && secrets.KPI_DROPLET_SSH_KEY != '' }}
+    if: ${{ secrets.DO_KPI_HOST != '' && secrets.DO_KPI_USER != '' && secrets.DO_KPI_SSH_KEY != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,13 +64,13 @@ jobs:
       - name: Setup SSH key
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.KPI_DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DO_KPI_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${{ secrets.KPI_DROPLET_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${{ secrets.DO_KPI_PORT || '22' }}" -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Deploy backend on droplet
         run: |
-          ssh ${{ secrets.KPI_DROPLET_USER }}@${{ secrets.KPI_DROPLET_HOST }} <<'EOF'
+          ssh -p "${{ secrets.DO_KPI_PORT || '22' }}" ${{ secrets.DO_KPI_USER }}@${{ secrets.DO_KPI_HOST }} <<'EOF'
           set -euo pipefail
           cd /opt/spiderclawkpi/spider/apps/spider-kpi
           git fetch origin
@@ -93,6 +93,6 @@ jobs:
     name: Backend deploy skipped
     runs-on: ubuntu-latest
     needs: frontend-vercel
-    if: ${{ secrets.KPI_DROPLET_HOST == '' || secrets.KPI_DROPLET_USER == '' || secrets.KPI_DROPLET_SSH_KEY == '' }}
+    if: ${{ secrets.DO_KPI_HOST == '' || secrets.DO_KPI_USER == '' || secrets.DO_KPI_SSH_KEY == '' }}
     steps:
       - run: echo 'Backend deploy secrets are not configured; backend production deploy skipped.'
