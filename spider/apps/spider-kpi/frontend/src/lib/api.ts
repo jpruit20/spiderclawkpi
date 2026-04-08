@@ -23,7 +23,7 @@ function resolveApiBase() {
   if (typeof window !== 'undefined') {
     const { hostname, origin } = window.location
     if (hostname === 'kpi.spidergrills.com') {
-      return ''
+      return 'https://api-kpi.spidergrills.com'
     }
     if (configured && configured === origin) {
       return ''
