@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     aws_telemetry_url: Optional[str] = None
     aws_telemetry_local_path: Optional[str] = None
     aws_telemetry_api_token: Optional[str] = None
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region: Optional[str] = None
+    aws_telemetry_dynamodb_table: Optional[str] = None
+    aws_telemetry_lookback_hours: int = 24 * 30
+    aws_telemetry_session_gap_minutes: int = 20
 
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 30
