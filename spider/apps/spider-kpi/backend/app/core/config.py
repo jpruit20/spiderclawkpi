@@ -137,6 +137,8 @@ class Settings(BaseSettings):
     aws_telemetry_lookback_hours: int = 24 * 30
     aws_telemetry_session_gap_minutes: int = 20
     aws_telemetry_max_scan_pages: int = 10
+    aws_telemetry_target_devices_per_sync: int = 25
+    aws_telemetry_scan_segments: int = 8
     aws_telemetry_min_session_seconds: int = 300
     aws_telemetry_merge_gap_seconds: int = 180
     aws_telemetry_test_device_prefixes: str = 'test,qa,dev,demo,stage,staging'

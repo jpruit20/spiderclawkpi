@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import TelemetryDaily, TelemetrySession
+from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession
 from app.services.source_health import finish_sync_run, refresh_source_health_alerts, start_sync_run, upsert_source_config
 
 settings = get_settings()
@@ -156,35 +156,72 @@ def _load_records_from_dynamodb(max_records: int) -> tuple[list[dict[str, Any]],
         config=Config(connect_timeout=5, read_timeout=30, retries={'max_attempts': 2}),
     )
     projection = 'device_id, sample_time, device_data'
-
-    rows: list[dict[str, Any]] = []
-    last_evaluated_key = None
-    pages = 0
+    target_devices = max(1, settings.aws_telemetry_target_devices_per_sync or 1)
+    total_segments = max(1, settings.aws_telemetry_scan_segments or 1)
     max_pages = max(1, settings.aws_telemetry_max_scan_pages or DEFAULT_MAX_SCAN_PAGES)
-    while len(rows) < max_records and pages < max_pages:
-        params = {
-            'TableName': settings.aws_telemetry_dynamodb_table,
-            'ProjectionExpression': projection,
-            'Limit': min(1000, max_records - len(rows)),
-        }
-        if last_evaluated_key:
-            params['ExclusiveStartKey'] = last_evaluated_key
-        response = client.scan(**params)
-        rows.extend(_normalize_record(item) for item in response.get('Items', []))
-        last_evaluated_key = response.get('LastEvaluatedKey')
-        pages += 1
-        if not last_evaluated_key:
-            break
-    rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
+    per_device_cap = max(1, max_records // target_devices)
     cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
-    recent_rows = [item for item in rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
-    bounded_rows = (recent_rows or rows)[:max_records]
+
+    rows_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    segment_keys: dict[int, Any] = {}
+    pages = 0
+    raw_rows_scanned = 0
+
+    while pages < max_pages:
+        progressed = False
+        for segment in range(total_segments):
+            if pages >= max_pages:
+                break
+            params = {
+                'TableName': settings.aws_telemetry_dynamodb_table,
+                'ProjectionExpression': projection,
+                'Limit': min(250, max_records),
+                'Segment': segment,
+                'TotalSegments': total_segments,
+            }
+            if segment in segment_keys and segment_keys[segment]:
+                params['ExclusiveStartKey'] = segment_keys[segment]
+            response = client.scan(**params)
+            items = [_normalize_record(item) for item in response.get('Items', [])]
+            raw_rows_scanned += len(items)
+            pages += 1
+            progressed = progressed or bool(items)
+            for item in items:
+                device_id = str(item.get('device_id') or '')
+                if not device_id:
+                    continue
+                rows_by_device[device_id].append(item)
+                rows_by_device[device_id].sort(key=lambda row: _as_int(row.get('sample_time'), 0), reverse=True)
+                if len(rows_by_device[device_id]) > per_device_cap:
+                    rows_by_device[device_id] = rows_by_device[device_id][:per_device_cap]
+            segment_keys[segment] = response.get('LastEvaluatedKey')
+            distinct_devices = len(rows_by_device)
+            retained_count = sum(len(bucket) for bucket in rows_by_device.values())
+            if distinct_devices >= target_devices and retained_count >= min(max_records, target_devices):
+                break
+        if not progressed:
+            break
+        distinct_devices = len(rows_by_device)
+        retained_count = sum(len(bucket) for bucket in rows_by_device.values())
+        if distinct_devices >= target_devices and retained_count >= min(max_records, target_devices):
+            break
+
+    candidate_rows = [row for bucket in rows_by_device.values() for row in bucket]
+    candidate_rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
+    recent_rows = [item for item in candidate_rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
+    bounded_rows = (recent_rows or candidate_rows)[:max_records]
+    scan_truncated = any(bool(value) for value in segment_keys.values())
     return bounded_rows, {
         'pages_scanned': pages,
-        'scan_truncated': bool(last_evaluated_key),
-        'raw_rows_scanned': len(rows),
+        'scan_truncated': scan_truncated,
+        'raw_rows_scanned': raw_rows_scanned,
         'recent_rows_after_cutoff': len(recent_rows),
         'cutoff_ms': cutoff_ms,
+        'max_records_per_sync': max_records,
+        'target_devices_per_sync': target_devices,
+        'max_pages_scanned': max_pages,
+        'scan_strategy': 'segmented-diversity-bounded-latest-per-device',
+        'per_device_sample_cap': per_device_cap,
     }
 
 
@@ -269,6 +306,7 @@ def _build_samples(records: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
     distinct_engaged_devices = len({sample['device_id'] for sample in retained_samples if sample.get('engaged')})
     oldest_sample = min((sample['sample_time'] for sample in retained_samples), default=None)
     newest_sample = max((sample['sample_time'] for sample in retained_samples), default=None)
+    sample_count_distribution = sorted((len(device_samples) for device_samples in grouped.values()), reverse=True)
     return grouped, {
         'devices_observed': len(grouped),
         'distinct_devices_observed': len(grouped),
@@ -280,6 +318,8 @@ def _build_samples(records: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
         'excluded_breakdown': dict(excluded_counter),
         'invalid_records': invalid_records,
         'duplicate_samples': duplicate_samples,
+        'per_device_sample_count_distribution': sample_count_distribution[:25],
+        'observed_device_ids': sorted(grouped.keys())[:200],
     }
 
 
@@ -503,6 +543,29 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
                 error_rate=round(values['error_sessions'] / max(total_sessions, 1), 4),
             ))
 
+        prior_success = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == SOURCE_NAME, SourceSyncRun.status == 'success')
+            .order_by(SourceSyncRun.started_at.desc())
+            .limit(5)
+        ).scalars().all()
+        previous_metadata = prior_success[1].metadata_json if len(prior_success) > 1 else {}
+        current_devices = set(derivation_stats.get('observed_device_ids') or [])
+        prior_devices = set((previous_metadata or {}).get('observed_device_ids') or [])
+        coverage_improvement_vs_last_run = {
+            'distinct_device_delta': len(current_devices) - len(prior_devices),
+            'new_devices_vs_last_run': len(current_devices - prior_devices),
+        }
+        estimated_device_diversity_score = round(min(1.0, (derivation_stats.get('distinct_devices_observed') or 0) / max(1, read_stats.get('target_devices_per_sync') or 1)), 3)
+        rolling_window = [
+            {
+                'started_at': item.started_at.isoformat() if item.started_at else None,
+                'distinct_devices_observed': (item.metadata_json or {}).get('distinct_devices_observed', 0),
+                'new_devices_vs_last_run': ((item.metadata_json or {}).get('coverage_improvement_vs_last_run') or {}).get('new_devices_vs_last_run', 0),
+            }
+            for item in prior_success
+        ]
+
         run.metadata_json = {
             **(run.metadata_json or {}),
             'records_loaded': len(records),
@@ -517,6 +580,8 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             'excluded_breakdown': derivation_stats.get('excluded_breakdown'),
             'invalid_records': derivation_stats.get('invalid_records'),
             'duplicate_samples': derivation_stats.get('duplicate_samples'),
+            'per_device_sample_count_distribution': derivation_stats.get('per_device_sample_count_distribution'),
+            'observed_device_ids': derivation_stats.get('observed_device_ids'),
             'sessions_merged_away': derivation_stats.get('sessions_merged_away'),
             'short_sessions_filtered': derivation_stats.get('short_sessions_filtered'),
             'pages_scanned': read_stats.get('pages_scanned'),
@@ -525,10 +590,18 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             'recent_rows_after_cutoff': read_stats.get('recent_rows_after_cutoff'),
             'cutoff_ms': read_stats.get('cutoff_ms'),
             'max_record_cap_hit': len(records) >= max_records,
+            'max_records_per_sync': read_stats.get('max_records_per_sync'),
+            'target_devices_per_sync': read_stats.get('target_devices_per_sync'),
+            'max_pages_scanned': read_stats.get('max_pages_scanned'),
+            'scan_strategy': read_stats.get('scan_strategy'),
+            'per_device_sample_cap': read_stats.get('per_device_sample_cap'),
             'session_gap_timeout_minutes': settings.aws_telemetry_session_gap_minutes or DEFAULT_SESSION_GAP_MINUTES,
+            'estimated_device_diversity_score': estimated_device_diversity_score,
+            'coverage_improvement_vs_last_run': coverage_improvement_vs_last_run,
+            'rolling_window_observed_devices': rolling_window,
             'coverage_summary': (
                 f"Observed {derivation_stats.get('distinct_devices_observed') or 0} devices "
-                f"({derivation_stats.get('distinct_engaged_devices_observed') or 0} engaged) from a bounded direct DynamoDB read; "
+                f"({derivation_stats.get('distinct_engaged_devices_observed') or 0} engaged) using {read_stats.get('scan_strategy')} under bounded limits; "
                 f"scan truncated={bool(read_stats.get('scan_truncated'))}, max_record_cap_hit={len(records) >= max_records}."
             ),
             'days_materialized': len(daily),
