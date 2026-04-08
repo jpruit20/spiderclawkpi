@@ -45,10 +45,23 @@ export function ProductEngineeringDivision() {
     buildNumericKpi({ key: 'product_distinct_engaged_devices_observed', currentValue: collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildNumericKpi({ key: 'product_sessions_derived', currentValue: slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildNumericKpi({ key: 'product_median_session_duration_minutes', currentValue: slice ? slice.median_session_duration_seconds / 60 : null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildTextKpi({ key: 'product_low_rssi_session_risk', currentValue: slice ? (sampleReliability === 'low' ? `${Math.round(slice.low_rssi_session_rate * 100)}% of ${slice.sessions_derived} observed session(s) show low RSSI risk. ${limitedSampleNote}` : `${Math.round(slice.low_rssi_session_rate * 100)}% of observed sessions show low RSSI risk`) : null, targetValue: 'Low observed low-RSSI risk', owner: 'Kyle', status: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'red' : 'yellow', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildTextKpi({ key: 'product_error_vector_presence', currentValue: slice ? (sampleReliability === 'low' ? `${Math.round(slice.error_vector_presence_rate * 100)}% of ${slice.sessions_derived} observed session(s) show non-zero error vectors. ${limitedSampleNote}` : `${Math.round(slice.error_vector_presence_rate * 100)}% of observed sessions show non-zero error vectors`) : null, targetValue: 'Low observed error-vector presence', owner: 'Kyle', status: (slice?.error_vector_presence_rate || 0) > 0 ? 'yellow' : 'green', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_low_rssi_session_risk', currentValue: slice ? (sampleReliability === 'low' ? `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of ${slice.sessions_derived} observed session(s); potential impact on control stability. ${limitedSampleNote}` : `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of observed sessions; potential impact on control stability.`) : null, targetValue: 'Low observed low-RSSI risk', owner: 'Kyle', status: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'red' : 'yellow', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_error_vector_presence', currentValue: slice ? (sampleReliability === 'low' ? `Observed non-zero error vectors in ${errorPct}% of ${slice.sessions_derived} observed session(s). ${limitedSampleNote}` : `Observed non-zero error vectors in ${errorPct}% of observed sessions.`) : null, targetValue: 'Low observed error-vector presence', owner: 'Kyle', status: (slice?.error_vector_presence_rate || 0) > 0 ? 'yellow' : 'green', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: collection?.scan_truncated || collection?.max_record_cap_hit ? 'red' : 'yellow', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
   ], [collection, slice, snapshotTimestamp, boundedTruthState, reliabilityTruthState, sampleSize, sampleScope, sampleReliability, limitedSampleNote])
+
+  const lowRssiPct = Math.round((slice?.low_rssi_session_rate || 0) * 100)
+  const errorPct = Math.round((slice?.error_vector_presence_rate || 0) * 100)
+  const reliabilityPct = latest ? Math.round(latest.session_reliability_score * 100) : 0
+  const tempStabilityPct = latest ? Math.round(latest.temp_stability_score * 100) : 0
+  const medianMinutes = slice ? Number((slice.median_session_duration_seconds / 60).toFixed(1)) : 0
+  const lowRssiRisk = lowRssiPct >= 75
+  const tempInstability = tempStabilityPct <= 40
+  const shortSessionPattern = medianMinutes > 0 && medianMinutes < 20
+  const errorPattern = errorPct >= 10
+  const combinedConnectivityControlHypothesis = lowRssiRisk && tempInstability
+  const dominantFirmware = telemetry?.firmware_health?.[0] || null
+  const dominantModel = telemetry?.grill_type_health?.[0] || null
 
   const blockedStates: Record<string, BlockedStateOutput> = {
     product_coverage_quality: buildBlockedState({
@@ -66,12 +79,12 @@ export function ProductEngineeringDivision() {
       triggerKpi: kpis[4],
       triggerCondition: 'observed low RSSI or reliability risk in current slice',
       owner: 'Kyle',
-      requiredAction: sampleSize < 3 ? 'Investigate the observed low-signal slice further before scaling the conclusion beyond the current observed sample.' : 'Review the observed low-signal and reliability slice by firmware/model before treating the issue as fleet-wide.',
-      priority: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'critical' : 'high',
-      evidence: ['telemetry slice snapshot', 'firmware cohort summary', 'model cohort summary'],
+      requiredAction: sampleSize < 3 ? `Query the observed slice for sessions where RSSI proxy < -75 dBm and firmware = ${dominantFirmware?.key || 'current cohort'} and model = ${dominantModel?.key || 'current cohort'}; inspect whether low signal coincides with stability loss before scaling the conclusion.` : `Query recent sessions where RSSI proxy < -75 dBm by firmware/model and compare stability loss against stronger-signal cohorts before prioritizing a product fix.`,
+      priority: lowRssiRisk ? 'critical' : 'high',
+      evidence: [`low_rssi_session_rate=${lowRssiPct}%`, `temp_stability_score=${tempStabilityPct}%`, `firmware=${dominantFirmware?.key || 'n/a'}`, `model=${dominantModel?.key || 'n/a'}`],
       dueDate: '24h',
       snapshotTimestamp,
-      baseRankingScore: Math.round((slice?.low_rssi_session_rate || 0) * 100) + 55,
+      baseRankingScore: lowRssiPct + (combinedConnectivityControlHypothesis ? 30 : 0) + 35,
       scope: 'observed_slice',
       confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
     }),
@@ -80,12 +93,12 @@ export function ProductEngineeringDivision() {
       triggerKpi: kpis[5],
       triggerCondition: 'error-vector presence observed in derived session slice',
       owner: 'Kyle',
-      requiredAction: sampleSize < 3 ? 'Investigate the observed error-vector slice further before scaling the conclusion beyond the current observed sample.' : 'Inspect the observed error-vector cohort and compare firmware/model concentration before escalating to firmware remediation.',
-      priority: (slice?.error_vector_presence_rate || 0) > 0 ? 'high' : 'medium',
-      evidence: ['telemetry error vectors', 'top error codes', 'firmware cohorts'],
+      requiredAction: sampleSize < 3 ? `Pull the observed session(s) with non-zero error vectors and compare firmware = ${dominantFirmware?.key || 'current cohort'} against other visible cohorts before treating this as a firmware issue.` : 'Inspect error-vector-bearing sessions by firmware/model concentration and isolate the dominant reproducible cohort before escalating remediation.',
+      priority: errorPattern ? 'high' : 'medium',
+      evidence: [`error_vector_presence_rate=${errorPct}%`, `top_error_codes=${(telemetry?.top_error_codes || []).map((row) => row.code).join(',') || 'none'}`, `firmware=${dominantFirmware?.key || 'n/a'}`],
       dueDate: '48h',
       snapshotTimestamp,
-      baseRankingScore: Math.round((slice?.error_vector_presence_rate || 0) * 100) + 45,
+      baseRankingScore: errorPct + 25,
       scope: 'observed_slice',
       confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
     }),
@@ -95,7 +108,7 @@ export function ProductEngineeringDivision() {
       triggerCondition: 'coverage summary indicates bounded/truncated read',
       owner: 'Joseph',
       coOwner: 'Kyle',
-      requiredAction: 'Use telemetry for observed-slice prioritization only; do not convert bounded slice findings into full-fleet claims.',
+      requiredAction: 'Keep telemetry conclusions scoped to the observed slice; do not generalize to fleet-level product action until a broader sample confirms the pattern.',
       priority: 'critical',
       evidence: [collection?.coverage_summary || 'bounded telemetry coverage'],
       dueDate: 'now',
@@ -106,6 +119,36 @@ export function ProductEngineeringDivision() {
       confidence: 'low',
     }),
   ]).slice(0, 5)
+
+  const insights = [
+    {
+      key: 'connectivity-risk',
+      title: 'Connectivity degradation may be contributing to control instability',
+      observed: `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of the slice and temperature stability at ${tempStabilityPct}%.`,
+      strength: combinedConnectivityControlHypothesis ? 'high within slice' : lowRssiRisk ? 'medium within slice' : 'low',
+      scope: 'observed_slice',
+      uncertainty: sampleReliability === 'low' ? 'Insufficient sample to treat this as fleet-representative.' : 'Still bounded by observed slice only.',
+      rankScore: lowRssiPct + (combinedConnectivityControlHypothesis ? 30 : 0),
+    },
+    {
+      key: 'cohort-uncertainty',
+      title: 'Observed firmware/model cohort shows a reliability concern, but uncertainty remains high',
+      observed: `Firmware ${dominantFirmware?.key || 'n/a'} and model ${dominantModel?.key || 'n/a'} each show failure in the current observed cohort (n=${dominantFirmware?.sessions || 0}).`,
+      strength: dominantFirmware?.sessions ? 'early warning' : 'none',
+      scope: 'observed_slice',
+      uncertainty: `Insufficient sample to confirm cohort-level issue${dominantFirmware?.key ? ` for firmware ${dominantFirmware.key}` : ''}.`,
+      rankScore: (dominantFirmware?.failure_rate || 0) * 100,
+    },
+    {
+      key: 'session-stability',
+      title: 'Observed session stability is weak in the current slice',
+      observed: `Median observed session duration is ${medianMinutes} min and session reliability is ${reliabilityPct}%.`,
+      strength: shortSessionPattern || reliabilityPct <= 60 ? 'medium within slice' : 'low',
+      scope: 'observed_slice',
+      uncertainty: sampleReliability === 'low' ? 'Directional only because the slice is thin and bounded.' : 'Still bounded to current observed slice.',
+      rankScore: (100 - reliabilityPct) + (shortSessionPattern ? 15 : 0),
+    },
+  ].sort((a, b) => b.rankScore - a.rankScore)
 
   return (
     <div className="page-grid">
@@ -135,6 +178,19 @@ export function ProductEngineeringDivision() {
               <div className="stack-list compact">
                 <div className="list-item status-neutral"><strong>device slice</strong><p>Distinct devices observed: {collection?.distinct_devices_observed ?? 0} · engaged devices: {collection?.distinct_engaged_devices_observed ?? 0}</p></div>
                 <div className="list-item status-neutral"><strong>session slice</strong><p>Sessions derived: {slice?.sessions_derived ?? 0} · average duration: {slice ? (slice.average_session_duration_seconds / 60).toFixed(1) : '0.0'} min · median duration: {slice ? (slice.median_session_duration_seconds / 60).toFixed(1) : '0.0'} min</p><small><strong>sample scope:</strong> {sampleScope} · <strong>sample reliability:</strong> {sampleReliability}</small></div>
+              </div>
+            </Card>
+          </div>
+          <div className="two-col">
+            <Card title="Observed insights">
+              <div className="stack-list compact">
+                {insights.map((insight) => <div className={`list-item status-${insight.rankScore >= 100 ? 'bad' : insight.rankScore >= 50 ? 'warn' : 'neutral'}`} key={insight.key}><strong>{insight.title}</strong><p>{insight.observed}</p><small><strong>signal:</strong> {insight.strength} · <strong>scope:</strong> {insight.scope}</small><small><strong>uncertainty:</strong> {insight.uncertainty}</small></div>)}
+              </div>
+            </Card>
+            <Card title="Derived patterns">
+              <div className="stack-list compact">
+                <div className="list-item status-warn"><strong>Combined-signal hypothesis</strong><p>{combinedConnectivityControlHypothesis ? `Observed low RSSI proxy (${lowRssiPct}%) and low temp stability (${tempStabilityPct}%) together; connectivity degradation may be contributing to temperature instability.` : 'No strong combined connectivity + control instability hypothesis triggered in the current slice.'}</p></div>
+                <div className="list-item status-neutral"><strong>Cohort uncertainty</strong><p>{`Failure observed in firmware ${dominantFirmware?.key || 'n/a'} and model ${dominantModel?.key || 'n/a'} (n=${dominantFirmware?.sessions || 0}); insufficient sample to confirm cohort-level issue.`}</p></div>
               </div>
             </Card>
           </div>
