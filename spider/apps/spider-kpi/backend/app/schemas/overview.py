@@ -117,6 +117,9 @@ class TelemetrySummaryOut(BaseModel):
     grill_type_health: list[dict[str, Any]]
     top_error_codes: list[dict[str, Any]]
     top_issue_patterns: list[dict[str, Any]]
+    slice_snapshot: Optional[dict[str, Any]] = None
+    collection_metadata: Optional[dict[str, Any]] = None
+    confidence: Optional[dict[str, Any]] = None
 
 
 class CXActionOut(BaseModel):
