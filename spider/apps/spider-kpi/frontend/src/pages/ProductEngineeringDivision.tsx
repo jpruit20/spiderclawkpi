@@ -35,16 +35,20 @@ export function ProductEngineeringDivision() {
   const confidence = telemetry?.confidence || null
   const boundedTruthState = latest ? 'proxy' : 'blocked'
   const reliabilityTruthState = latest ? 'estimated' : 'blocked'
+  const sampleSize = Math.max(collection?.distinct_devices_observed || 0, slice?.sessions_derived || 0)
+  const sampleScope = `${collection?.distinct_devices_observed || 0} device(s), ${collection?.samples_retained || 0} samples, bounded scan`
+  const sampleReliability: KPIObject['sample_reliability'] = sampleSize <= 1 || collection?.scan_truncated || collection?.max_record_cap_hit ? 'low' : sampleSize < 10 ? 'medium' : 'high'
+  const limitedSampleNote = sampleReliability === 'low' ? 'Limited sample — directional only' : null
 
   const kpis: KPIObject[] = useMemo(() => [
-    buildNumericKpi({ key: 'product_distinct_devices_observed', currentValue: collection?.distinct_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'product_distinct_engaged_devices_observed', currentValue: collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'product_sessions_derived', currentValue: slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'product_median_session_duration_minutes', currentValue: slice ? slice.median_session_duration_seconds / 60 : null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'product_low_rssi_session_rate', currentValue: slice ? slice.low_rssi_session_rate * 100 : null, targetValue: 15, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'product_error_vector_presence_rate', currentValue: slice ? slice.error_vector_presence_rate * 100 : null, targetValue: 5, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: collection?.scan_truncated || collection?.max_record_cap_hit ? 'red' : 'yellow', truthState: boundedTruthState, lastUpdated: snapshotTimestamp }),
-  ], [collection, slice, snapshotTimestamp, boundedTruthState, reliabilityTruthState])
+    buildNumericKpi({ key: 'product_distinct_devices_observed', currentValue: collection?.distinct_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_distinct_engaged_devices_observed', currentValue: collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_sessions_derived', currentValue: slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_median_session_duration_minutes', currentValue: slice ? slice.median_session_duration_seconds / 60 : null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_low_rssi_session_risk', currentValue: slice ? (sampleReliability === 'low' ? `${Math.round(slice.low_rssi_session_rate * 100)}% of ${slice.sessions_derived} observed session(s) show low RSSI risk. ${limitedSampleNote}` : `${Math.round(slice.low_rssi_session_rate * 100)}% of observed sessions show low RSSI risk`) : null, targetValue: 'Low observed low-RSSI risk', owner: 'Kyle', status: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'red' : 'yellow', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_error_vector_presence', currentValue: slice ? (sampleReliability === 'low' ? `${Math.round(slice.error_vector_presence_rate * 100)}% of ${slice.sessions_derived} observed session(s) show non-zero error vectors. ${limitedSampleNote}` : `${Math.round(slice.error_vector_presence_rate * 100)}% of observed sessions show non-zero error vectors`) : null, targetValue: 'Low observed error-vector presence', owner: 'Kyle', status: (slice?.error_vector_presence_rate || 0) > 0 ? 'yellow' : 'green', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: collection?.scan_truncated || collection?.max_record_cap_hit ? 'red' : 'yellow', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+  ], [collection, slice, snapshotTimestamp, boundedTruthState, reliabilityTruthState, sampleSize, sampleScope, sampleReliability, limitedSampleNote])
 
   const blockedStates: Record<string, BlockedStateOutput> = {
     product_coverage_quality: buildBlockedState({
@@ -62,24 +66,28 @@ export function ProductEngineeringDivision() {
       triggerKpi: kpis[4],
       triggerCondition: 'observed low RSSI or reliability risk in current slice',
       owner: 'Kyle',
-      requiredAction: 'Review the observed low-signal and reliability slice by firmware/model before treating the issue as fleet-wide.',
+      requiredAction: sampleSize < 3 ? 'Investigate the observed low-signal slice further before scaling the conclusion beyond the current observed sample.' : 'Review the observed low-signal and reliability slice by firmware/model before treating the issue as fleet-wide.',
       priority: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'critical' : 'high',
       evidence: ['telemetry slice snapshot', 'firmware cohort summary', 'model cohort summary'],
       dueDate: '24h',
       snapshotTimestamp,
       baseRankingScore: Math.round((slice?.low_rssi_session_rate || 0) * 100) + 55,
+      scope: 'observed_slice',
+      confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
     }),
     actionFromKpi({
       id: 'product-review-error-slice',
       triggerKpi: kpis[5],
       triggerCondition: 'error-vector presence observed in derived session slice',
       owner: 'Kyle',
-      requiredAction: 'Inspect the observed error-vector cohort and compare firmware/model concentration before escalating to firmware remediation.',
+      requiredAction: sampleSize < 3 ? 'Investigate the observed error-vector slice further before scaling the conclusion beyond the current observed sample.' : 'Inspect the observed error-vector cohort and compare firmware/model concentration before escalating to firmware remediation.',
       priority: (slice?.error_vector_presence_rate || 0) > 0 ? 'high' : 'medium',
       evidence: ['telemetry error vectors', 'top error codes', 'firmware cohorts'],
       dueDate: '48h',
       snapshotTimestamp,
       baseRankingScore: Math.round((slice?.error_vector_presence_rate || 0) * 100) + 45,
+      scope: 'observed_slice',
+      confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
     }),
     actionFromKpi({
       id: 'product-bound-coverage-warning',
@@ -94,6 +102,8 @@ export function ProductEngineeringDivision() {
       snapshotTimestamp,
       baseRankingScore: collection?.scan_truncated || collection?.max_record_cap_hit ? 95 : 40,
       blockedState: blockedStates.product_coverage_quality,
+      scope: 'observed_slice',
+      confidence: 'low',
     }),
   ]).slice(0, 5)
 
@@ -109,7 +119,7 @@ export function ProductEngineeringDivision() {
       {!loading && !error ? (
         <>
           <div className="three-col">
-            <Card title="Telemetry health / coverage snapshot"><div className="hero-metric">{collection?.distinct_devices_observed ?? 0}</div><div className="state-message">distinct devices observed · truth {confidence?.global_completeness || 'unknown'}</div></Card>
+            <Card title="Telemetry health / coverage snapshot"><div className="hero-metric">{collection?.distinct_devices_observed ?? 0}</div><div className="state-message">distinct devices observed · truth {confidence?.global_completeness || 'unknown'} · sample {sampleReliability}</div></Card>
             <Card title="Observed device and session slice"><div className="hero-metric">{slice?.sessions_derived ?? 0}</div><div className="state-message">derived sessions · median {(slice?.median_session_duration_seconds || 0 / 60).toFixed ? ((slice?.median_session_duration_seconds || 0) / 60).toFixed(1) : 0} min</div></Card>
             <Card title="Reliability indicators"><div className="hero-metric">{latest ? `${(latest.session_reliability_score * 100).toFixed(0)}%` : '—'}</div><div className="state-message">observed slice reliability score</div></Card>
           </div>
@@ -124,7 +134,7 @@ export function ProductEngineeringDivision() {
             <Card title="Observed device and session slice">
               <div className="stack-list compact">
                 <div className="list-item status-neutral"><strong>device slice</strong><p>Distinct devices observed: {collection?.distinct_devices_observed ?? 0} · engaged devices: {collection?.distinct_engaged_devices_observed ?? 0}</p></div>
-                <div className="list-item status-neutral"><strong>session slice</strong><p>Sessions derived: {slice?.sessions_derived ?? 0} · average duration: {slice ? (slice.average_session_duration_seconds / 60).toFixed(1) : '0.0'} min · median duration: {slice ? (slice.median_session_duration_seconds / 60).toFixed(1) : '0.0'} min</p></div>
+                <div className="list-item status-neutral"><strong>session slice</strong><p>Sessions derived: {slice?.sessions_derived ?? 0} · average duration: {slice ? (slice.average_session_duration_seconds / 60).toFixed(1) : '0.0'} min · median duration: {slice ? (slice.median_session_duration_seconds / 60).toFixed(1) : '0.0'} min</p><small><strong>sample scope:</strong> {sampleScope} · <strong>sample reliability:</strong> {sampleReliability}</small></div>
               </div>
             </Card>
           </div>
@@ -138,8 +148,8 @@ export function ProductEngineeringDivision() {
             </Card>
             <Card title="Reliability indicators from observed data">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>low signal risk proxy</strong><p>{slice ? `${(slice.low_rssi_session_rate * 100).toFixed(1)}% of observed sessions show low RSSI risk` : 'No slice returned'}</p><small><strong>truth_state:</strong> estimated</small></div>
-                <div className="list-item status-warn"><strong>error-vector presence rate</strong><p>{slice ? `${(slice.error_vector_presence_rate * 100).toFixed(1)}% of observed sessions show non-zero error vectors` : 'No slice returned'}</p><small><strong>truth_state:</strong> estimated</small></div>
+                <div className="list-item status-warn"><strong>low signal risk proxy</strong><p>{kpis[4]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[4]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[4]?.sample_reliability || 'n/a'}</small></div>
+                <div className="list-item status-warn"><strong>error-vector presence rate</strong><p>{kpis[5]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[5]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[5]?.sample_reliability || 'n/a'}</small></div>
                 <div className="list-item status-neutral"><strong>target temp distribution</strong><p>{slice?.target_temp_distribution?.map((row) => `${row.target_temp}°:${row.count}`).join(' · ') || 'No target-temp distribution returned.'}</p></div>
               </div>
             </Card>

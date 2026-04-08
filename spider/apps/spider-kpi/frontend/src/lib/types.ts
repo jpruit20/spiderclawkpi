@@ -17,6 +17,9 @@ export interface KPIObject {
   status: KPIStatus
   truth_state: KPITruthState
   last_updated: string
+  sample_size?: number | null
+  sample_scope?: string | null
+  sample_reliability?: 'low' | 'medium' | 'high' | null
 }
 
 export interface ActionObject {
@@ -32,6 +35,8 @@ export interface ActionObject {
   evidence: string[]
   due_date: string
   snapshot_timestamp: string
+  scope?: 'observed_slice' | 'fleet_wide'
+  confidence?: 'low' | 'medium' | 'high'
 }
 
 export interface BlockedStateOutput {

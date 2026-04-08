@@ -49,6 +49,8 @@ export function CommandCenter() {
   const latest = currentRows.at(-1)
   const sourceHealth = overview?.source_health || []
   const telemetryLatest = overview?.telemetry?.latest || null
+  const telemetrySampleSize = Math.max(overview?.telemetry?.collection_metadata?.distinct_devices_observed || 0, overview?.telemetry?.slice_snapshot?.sessions_derived || 0)
+  const telemetrySampleReliability = telemetrySampleSize <= 1 || overview?.telemetry?.collection_metadata?.scan_truncated || overview?.telemetry?.collection_metadata?.max_record_cap_hit ? 'low' : telemetrySampleSize < 10 ? 'medium' : 'high'
   const supportRows = support?.rows || []
   const revenue = sum(currentRows, 'revenue')
   const priorRevenue = sum(priorRows, 'revenue')
@@ -69,8 +71,8 @@ export function CommandCenter() {
     buildNumericKpi({ key: 'command_center_support_backlog', currentValue: Number(supportRows.at(-1)?.open_backlog || 0), targetValue: 100, priorValue: null, owner: 'Jeremiah', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
     buildTextKpi({ key: 'command_center_top_issue', currentValue: issues?.clusters?.[0]?.title || 'No cluster returned', targetValue: 'No high-risk issue', owner: issues?.clusters?.[0]?.owner_team || 'TBD', status: issues?.clusters?.[0] ? 'red' : 'yellow', truthState: truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy'), lastUpdated: snapshotTimestamp }),
     buildTextKpi({ key: 'command_center_data_trust', currentValue: trust.degraded ? `Degraded: ${trust.degradedSources.join(', ')}` : 'Healthy', targetValue: 'Healthy', owner: 'Joseph', status: trust.degraded ? 'red' : 'green', truthState: truthStateFromSource(sourceHealth, ['shopify', 'triplewhale', 'freshdesk', 'clarity', 'ga4'], 'canonical'), lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'command_center_telemetry_reliability', currentValue: telemetryLatest ? `disconnect ${(telemetryLatest.disconnect_rate * 100).toFixed(1)}% / reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'Telemetry unavailable', targetValue: 'Low disconnect / high reliability', owner: 'Kyle', status: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'red' : telemetryLatest ? 'yellow' : 'red', truthState: telemetryLatest ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp }),
-  ], [revenue, priorRevenue, conv, priorConv, supportRows, issues, sourceHealth, snapshotTimestamp, telemetryLatest])
+    buildTextKpi({ key: 'command_center_telemetry_reliability', currentValue: telemetryLatest ? (telemetrySampleReliability === 'low' ? `Early warning signal: reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}% in limited sample` : `disconnect ${(telemetryLatest.disconnect_rate * 100).toFixed(1)}% / reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%`) : 'Telemetry unavailable', targetValue: 'Low disconnect / high reliability', owner: 'Kyle', status: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'red' : telemetryLatest ? 'yellow' : 'red', truthState: telemetryLatest ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp, sampleSize: telemetrySampleSize, sampleScope: overview?.telemetry?.collection_metadata?.coverage_summary || null, sampleReliability: telemetrySampleReliability }),
+  ], [revenue, priorRevenue, conv, priorConv, supportRows, issues, sourceHealth, snapshotTimestamp, telemetryLatest, telemetrySampleSize, telemetrySampleReliability, overview])
 
   const blockedStates: Record<string, BlockedStateOutput> = {
     command_center_data_trust: buildBlockedState({
@@ -145,15 +147,17 @@ export function CommandCenter() {
       triggerCondition: telemetryLatest ? 'telemetry reliability below target' : 'truth_state = blocked',
       owner: 'Kyle',
       coOwner: 'Joseph',
-      requiredAction: telemetryLatest ? 'Review telemetry reliability before deprioritizing product / firmware intervention.' : 'Unblock telemetry summary before assuming product reliability is stable.',
+      requiredAction: telemetryLatest ? (telemetrySampleReliability === 'low' ? 'Treat telemetry as an early warning signal and investigate further before scaling the conclusion.' : 'Review telemetry reliability before deprioritizing product / firmware intervention.') : 'Unblock telemetry summary before assuming product reliability is stable.',
       priority: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'critical' : 'high',
       evidence: ['aws_telemetry', 'overview telemetry', 'issue radar'],
       dueDate: '24h',
       snapshotTimestamp,
-      baseRankingScore: telemetryLatest ? Math.round((1 - telemetryLatest.session_reliability_score) * 100) + 40 : 50,
+      baseRankingScore: telemetryLatest ? Math.round((1 - telemetryLatest.session_reliability_score) * 100) + (telemetrySampleReliability === 'low' ? 15 : 40) : 50,
       blockedState: blockedStates.command_center_telemetry_reliability,
+      scope: 'observed_slice',
+      confidence: telemetrySampleReliability === 'low' ? 'low' : telemetrySampleReliability === 'medium' ? 'medium' : 'high',
     }),
-  ]).slice(0, 5), [kpis, revenueDelta.deltaPct, issues, supportRows, trust, snapshotTimestamp, telemetryLatest])
+  ]).slice(0, 5), [kpis, revenueDelta.deltaPct, issues, supportRows, trust, snapshotTimestamp, telemetryLatest, telemetrySampleReliability])
 
   return (
     <div className="page-grid">
@@ -177,6 +181,7 @@ export function CommandCenter() {
               <span className="badge badge-neutral">conversion Δ {convDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
               <span className="badge badge-neutral">telemetry {telemetryLatest ? `${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'blocked'}</span>
               <span className="badge badge-neutral">telemetry truth {overview?.telemetry?.confidence?.global_completeness || 'unknown'}</span>
+              <span className="badge badge-neutral">telemetry sample {telemetrySampleReliability}</span>
             </div>
           </div>
           <DecisionStack actions={actions} />

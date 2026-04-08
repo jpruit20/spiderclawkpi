@@ -3,6 +3,7 @@ import { ActionObject, BlockedStateOutput, KPIObject, KPIStatus, KPITrend, KPITr
 
 export type RankedActionObject = ActionObject & {
   truth_state: KPITruthState
+  sample_reliability?: KPIObject['sample_reliability']
   ranking_score: number
   ranking_reason: string
   can_top_rank: boolean
@@ -42,6 +43,9 @@ export function buildNumericKpi(input: {
   lastUpdated: string
   comparisonBasis?: KPIObject['delta']['comparison_basis']
   thresholds?: { greenAtOrAbove?: number; yellowAtOrAbove?: number }
+  sampleSize?: number | null
+  sampleScope?: string | null
+  sampleReliability?: KPIObject['sample_reliability']
 }): KPIObject {
   const comparison = compareValue(input.currentValue ?? 0, input.priorValue ?? null, input.key)
   return {
@@ -59,6 +63,9 @@ export function buildNumericKpi(input: {
     status: statusFromNumeric(input.currentValue, input.targetValue, input.thresholds),
     truth_state: input.truthState,
     last_updated: input.lastUpdated,
+    sample_size: input.sampleSize ?? null,
+    sample_scope: input.sampleScope ?? null,
+    sample_reliability: input.sampleReliability ?? null,
   }
 }
 
@@ -70,6 +77,9 @@ export function buildTextKpi(input: {
   status: KPIStatus
   truthState: KPITruthState
   lastUpdated: string
+  sampleSize?: number | null
+  sampleScope?: string | null
+  sampleReliability?: KPIObject['sample_reliability']
 }): KPIObject {
   return {
     key: input.key,
@@ -86,6 +96,9 @@ export function buildTextKpi(input: {
     status: input.status,
     truth_state: input.truthState,
     last_updated: input.lastUpdated,
+    sample_size: input.sampleSize ?? null,
+    sample_scope: input.sampleScope ?? null,
+    sample_reliability: input.sampleReliability ?? null,
   }
 }
 
@@ -101,6 +114,15 @@ export function truthStateFromSource(sourceHealth: SourceHealthItem[], requiredS
   if (missing.length) return 'blocked'
   const degraded = rows.some((row) => row && row.derived_status !== 'healthy')
   return degraded ? 'degraded' : fallback
+}
+
+export function sampleReliabilityMultiplier(sampleReliability: KPIObject['sample_reliability']) {
+  switch (sampleReliability) {
+    case 'high': return 1
+    case 'medium': return 0.8
+    case 'low': return 0.45
+    default: return 0.7
+  }
 }
 
 export function truthStateMultiplier(truthState: KPITruthState) {
@@ -122,21 +144,24 @@ export function canTopRank(truthState: KPITruthState) {
 export function enforceActionContract(actions: RankedActionObject[]) {
   return [...actions]
     .map((action) => {
-      const multiplier = truthStateMultiplier(action.truth_state)
+      const multiplier = truthStateMultiplier(action.truth_state) * sampleReliabilityMultiplier(action.sample_reliability ?? null)
       const ranking_score = Number((action.ranking_score * multiplier).toFixed(2))
       const blockedOptimization = action.truth_state === 'blocked' && !action.required_action.toLowerCase().includes('unblock')
-      const can_top_rank = canTopRank(action.truth_state) && !blockedOptimization
+      const lowSampleConfidence = action.sample_reliability === 'low'
+      const can_top_rank = canTopRank(action.truth_state) && !blockedOptimization && !lowSampleConfidence
       return {
         ...action,
         ranking_score: can_top_rank ? ranking_score : -1,
         can_top_rank,
         ranking_reason: blockedOptimization
           ? 'blocked KPI may only emit unblock actions'
-          : action.truth_state === 'degraded'
-            ? 'degraded KPI ranking suppressed by truth-state enforcement'
-            : action.truth_state === 'blocked'
-              ? 'blocked KPI can only rank unblock actions below optimization actions'
-              : action.ranking_reason,
+          : lowSampleConfidence
+            ? 'limited sample — directional only; keep as early warning, not top-ranked decision'
+            : action.truth_state === 'degraded'
+              ? 'degraded KPI ranking suppressed by truth-state enforcement'
+              : action.truth_state === 'blocked'
+                ? 'blocked KPI can only rank unblock actions below optimization actions'
+                : action.ranking_reason,
       }
     })
     .sort((a, b) => b.ranking_score - a.ranking_score)
@@ -157,6 +182,8 @@ export function actionFromKpi(input: {
   escalationOwner?: string
   baseRankingScore: number
   blockedState?: BlockedStateOutput
+  scope?: ActionObject['scope']
+  confidence?: ActionObject['confidence']
 }): RankedActionObject {
   return {
     id: input.id,
@@ -171,7 +198,10 @@ export function actionFromKpi(input: {
     evidence: input.evidence,
     due_date: input.dueDate,
     snapshot_timestamp: input.snapshotTimestamp,
+    scope: input.scope,
+    confidence: input.confidence,
     truth_state: input.triggerKpi.truth_state,
+    sample_reliability: input.triggerKpi.sample_reliability,
     ranking_score: input.baseRankingScore,
     ranking_reason: 'base ranking derived from business impact before truth-state enforcement',
     can_top_rank: canTopRank(input.triggerKpi.truth_state),
