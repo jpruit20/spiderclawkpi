@@ -1,0 +1,98 @@
+name: Deploy KPI Frontend and Backend
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/spider-kpi/**'
+      - '.github/workflows/deploy-kpi.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-kpi-master
+  cancel-in-progress: true
+
+jobs:
+  frontend-vercel:
+    name: Deploy KPI Frontend (Vercel)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/spider-kpi/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/spider-kpi/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Deploy to Vercel Production
+        if: ${{ secrets.VERCEL_TOKEN != '' && secrets.VERCEL_ORG_ID != '' && secrets.VERCEL_PROJECT_ID != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npm install -g vercel@latest
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      - name: Frontend deploy notice
+        if: ${{ secrets.VERCEL_TOKEN == '' || secrets.VERCEL_ORG_ID == '' || secrets.VERCEL_PROJECT_ID == '' }}
+        run: echo 'Vercel secrets are not configured; build completed but production deploy was skipped.'
+
+  backend-droplet:
+    name: Deploy KPI Backend (Droplet)
+    runs-on: ubuntu-latest
+    needs: frontend-vercel
+    if: ${{ secrets.KPI_DROPLET_HOST != '' && secrets.KPI_DROPLET_USER != '' && secrets.KPI_DROPLET_SSH_KEY != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.KPI_DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.KPI_DROPLET_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy backend on droplet
+        run: |
+          ssh ${{ secrets.KPI_DROPLET_USER }}@${{ secrets.KPI_DROPLET_HOST }} <<'EOF'
+          set -euo pipefail
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          git fetch origin
+          git checkout master
+          git pull --ff-only origin master
+          if [ -x .venv/bin/pip ]; then
+            .venv/bin/pip install -r backend/requirements.txt
+          fi
+          if [ -x .venv/bin/alembic ]; then
+            cd backend
+            ../.venv/bin/alembic upgrade head
+            cd ..
+          fi
+          sudo systemctl restart spider-kpi.service
+          sudo systemctl is-active spider-kpi.service
+          curl -fsS http://127.0.0.1:8000/health
+          EOF
+
+  backend-missing-secrets:
+    name: Backend deploy skipped
+    runs-on: ubuntu-latest
+    needs: frontend-vercel
+    if: ${{ secrets.KPI_DROPLET_HOST == '' || secrets.KPI_DROPLET_USER == '' || secrets.KPI_DROPLET_SSH_KEY == '' }}
+    steps:
+      - run: echo 'Backend deploy secrets are not configured; backend production deploy skipped.'
