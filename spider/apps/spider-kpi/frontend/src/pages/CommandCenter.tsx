@@ -176,6 +176,7 @@ export function CommandCenter() {
               <span className="badge badge-neutral">revenue Δ {revenueDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
               <span className="badge badge-neutral">conversion Δ {convDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
               <span className="badge badge-neutral">telemetry {telemetryLatest ? `${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'blocked'}</span>
+              <span className="badge badge-neutral">telemetry truth {overview?.telemetry?.confidence?.global_completeness || 'unknown'}</span>
             </div>
           </div>
           <DecisionStack actions={actions} />

@@ -57,14 +57,10 @@ export function IssueRadar() {
       setError(null)
       try {
         const [payload, sourcePayload, telemetryPayload] = await Promise.all([api.issues(), api.sourceHealth(), api.telemetrySummary()])
-         if (!cancelled) {
-           setData(payload)
-           setSourceHealth(sourcePayload)
-+          setTelemetry(telemetryPayload)
-         }
         if (!cancelled) {
           setData(payload)
           setSourceHealth(sourcePayload)
+          setTelemetry(telemetryPayload)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load issues')

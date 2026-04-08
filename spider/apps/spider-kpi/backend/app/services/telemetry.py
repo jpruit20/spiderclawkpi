@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import desc, inspect, select
 from sqlalchemy.orm import Session
 
-from app.models import TelemetryDaily, TelemetrySession
+from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -108,6 +108,22 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             })
         return sorted(payload, key=lambda item: (item["severity"] == "high", item["health_score"], -item["sessions"]), reverse=True)
 
+    latest_run = db.execute(
+        select(SourceSyncRun)
+        .where(SourceSyncRun.source_name == 'aws_telemetry', SourceSyncRun.status == 'success')
+        .order_by(desc(SourceSyncRun.started_at))
+        .limit(1)
+    ).scalars().first()
+    metadata = latest_run.metadata_json if latest_run else {}
+    confidence = {
+        "global_completeness": "proxy",
+        "session_derivation": "estimated",
+        "disconnect_detection": "proxy",
+        "cook_success": "estimated",
+        "manual_override": "unavailable" if all((item.manual_overrides or 0) == 0 for item in sessions) else "proxy",
+        "reason": "Direct DynamoDB reads from sg_device_shadows are bounded and device-keyed; fleet-wide recency is not globally indexed.",
+    }
+
     return {
         "latest": {
             "business_date": latest.business_date,
@@ -142,4 +158,15 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         "grill_type_health": _health_payload(grill_types)[:10],
         "top_error_codes": [{"code": code, "count": count} for code, count in error_codes.most_common(10)],
         "top_issue_patterns": [{"pattern": key, "count": count} for key, count in issue_patterns.most_common(10)],
+        "collection_metadata": {
+            "source": "sg_device_shadows",
+            "region": metadata.get('region'),
+            "table": metadata.get('table'),
+            "sample_source": metadata.get('sample_source'),
+            "records_loaded": metadata.get('records_loaded'),
+            "sessions_derived": metadata.get('sessions_derived'),
+            "days_materialized": metadata.get('days_materialized'),
+            "max_records": metadata.get('max_records'),
+        },
+        "confidence": confidence,
     }

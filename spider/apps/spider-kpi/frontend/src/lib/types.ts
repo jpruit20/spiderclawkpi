@@ -223,6 +223,26 @@ export interface TelemetryErrorCodeRow {
   count: number
 }
 
+export interface TelemetryCollectionMetadata {
+  source?: string
+  region?: string
+  table?: string
+  sample_source?: string
+  records_loaded?: number
+  sessions_derived?: number
+  days_materialized?: number
+  max_records?: number
+}
+
+export interface TelemetryConfidence {
+  global_completeness: string
+  session_derivation: string
+  disconnect_detection: string
+  cook_success: string
+  manual_override: string
+  reason: string
+}
+
 export interface TelemetrySummary {
   latest?: TelemetryLatestSummary | null
   daily: Array<Record<string, any>>
@@ -230,6 +250,8 @@ export interface TelemetrySummary {
   grill_type_health: TelemetryHealthRow[]
   top_error_codes: TelemetryErrorCodeRow[]
   top_issue_patterns: TelemetryPatternRow[]
+  collection_metadata?: TelemetryCollectionMetadata
+  confidence?: TelemetryConfidence
 }
 
 export interface OverviewResponse {
