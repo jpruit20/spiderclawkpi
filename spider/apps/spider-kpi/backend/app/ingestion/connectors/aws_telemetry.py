@@ -141,17 +141,16 @@ def _load_records_from_file() -> list[dict[str, Any]]:
 
 def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
     import boto3
+    from botocore.config import Config
 
     client = boto3.client(
         'dynamodb',
         region_name=settings.aws_region,
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
+        config=Config(connect_timeout=5, read_timeout=30, retries={'max_attempts': 2}),
     )
-    cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
     projection = 'device_id, sample_time, device_data'
-    expr_names = {'#st': 'sample_time'}
-    expr_values = {':cutoff': {'N': str(cutoff_ms)}}
 
     rows: list[dict[str, Any]] = []
     last_evaluated_key = None
@@ -159,9 +158,6 @@ def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
         params = {
             'TableName': settings.aws_telemetry_dynamodb_table,
             'ProjectionExpression': projection,
-            'FilterExpression': '#st >= :cutoff',
-            'ExpressionAttributeNames': expr_names,
-            'ExpressionAttributeValues': expr_values,
             'Limit': min(1000, max_records - len(rows)),
         }
         if last_evaluated_key:
@@ -171,7 +167,10 @@ def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
         last_evaluated_key = response.get('LastEvaluatedKey')
         if not last_evaluated_key:
             break
-    return rows[:max_records]
+    rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
+    cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
+    recent_rows = [item for item in rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
+    return (recent_rows or rows)[:max_records]
 
 
 def _load_records(max_records: int) -> list[dict[str, Any]]:
@@ -299,7 +298,7 @@ def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str
     reliability = round(max(0.0, min(1.0, firmware_health - min(0.4, stale_gaps * 0.1) - (0 if cook_success else 0.15))), 4)
 
     return {
-        'source_event_id': f"{device_id}:{int(session_start.timestamp())}",
+        'source_event_id': f"{device_id}:{int(session_start.timestamp())}:{int(session_end.timestamp())}",
         'device_id': device_id,
         'user_id': None,
         'session_id': None,
