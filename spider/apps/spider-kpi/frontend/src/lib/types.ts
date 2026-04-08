@@ -262,6 +262,17 @@ export interface TelemetryConfidence {
   reason: string
 }
 
+export interface TelemetrySliceSnapshot {
+  distinct_devices_observed: number
+  distinct_engaged_devices_observed: number
+  sessions_derived: number
+  average_session_duration_seconds: number
+  median_session_duration_seconds: number
+  low_rssi_session_rate: number
+  error_vector_presence_rate: number
+  target_temp_distribution: Array<{ target_temp: string, count: number }>
+}
+
 export interface TelemetrySummary {
   latest?: TelemetryLatestSummary | null
   daily: Array<Record<string, any>>
@@ -269,6 +280,7 @@ export interface TelemetrySummary {
   grill_type_health: TelemetryHealthRow[]
   top_error_codes: TelemetryErrorCodeRow[]
   top_issue_patterns: TelemetryPatternRow[]
+  slice_snapshot?: TelemetrySliceSnapshot
   collection_metadata?: TelemetryCollectionMetadata
   confidence?: TelemetryConfidence
 }

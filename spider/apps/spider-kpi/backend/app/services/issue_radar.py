@@ -486,6 +486,16 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             telemetry_details = {
                 "theme": telemetry_theme,
                 "source": "aws_telemetry",
+                "truth_state": "estimated",
+                "confidence_caveat": "Telemetry reflects only the observed bounded DynamoDB slice, not full-fleet canonical completeness.",
+                "evidence": [
+                    f"disconnect_rate={round(latest.disconnect_rate, 4)}",
+                    f"temp_stability_score={round(latest.temp_stability_score, 4)}",
+                    f"manual_override_rate={round(latest.manual_override_rate, 4)}",
+                    f"firmware_health_score={round(latest.firmware_health_score, 4)}",
+                    f"session_reliability_score={round(latest.session_reliability_score, 4)}",
+                ],
+                "owner": "Kyle",
                 "disconnect_rate": round(latest.disconnect_rate, 4),
                 "temp_stability_score": round(latest.temp_stability_score, 4),
                 "manual_override_rate": round(latest.manual_override_rate, 4),

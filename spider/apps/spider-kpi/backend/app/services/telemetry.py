@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
+from statistics import median
 from typing import Any
 
 from sqlalchemy import desc, inspect, select
@@ -56,7 +57,6 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     latest = rows[0]
     sessions = db.execute(
         select(TelemetrySession)
-        .where(TelemetrySession.session_start >= datetime.now(timezone.utc) - timedelta(days=lookback_days))
         .order_by(desc(TelemetrySession.session_start))
         .limit(5000)
     ).scalars().all()
@@ -65,6 +65,10 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     grill_types = defaultdict(lambda: {"sessions": 0, "disconnects": 0, "overrides": 0, "failures": 0})
     error_codes: Counter[str] = Counter()
     issue_patterns: Counter[str] = Counter()
+    session_durations: list[int] = []
+    target_temp_counter: Counter[str] = Counter()
+    low_rssi_sessions = 0
+    error_sessions = 0
 
     for item in sessions:
         fw = item.firmware_version or "unknown"
@@ -78,6 +82,13 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         if not item.cook_success:
             firmware[fw]["failures"] += 1
             grill_types[gt]["failures"] += 1
+        session_durations.append(int(item.session_duration_seconds or 0))
+        if item.target_temp is not None:
+            target_temp_counter[str(int(item.target_temp))] += 1
+        if ((item.raw_payload or {}).get('rssi_min') or 0) <= -75:
+            low_rssi_sessions += 1
+        if (item.error_count or 0) > 0:
+            error_sessions += 1
         for code in item.error_codes_json or []:
             error_codes[str(code)] += 1
         if (item.disconnect_events or 0) > 0:
@@ -127,6 +138,16 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         "manual_override": "unavailable" if all((item.manual_overrides or 0) == 0 for item in sessions) else "proxy",
         "reason": metadata.get('coverage_summary') or "Direct DynamoDB reads from sg_device_shadows are bounded and device-keyed; fleet-wide recency is not globally indexed.",
     }
+    slice_snapshot = {
+        "distinct_devices_observed": metadata.get('distinct_devices_observed') or 0,
+        "distinct_engaged_devices_observed": metadata.get('distinct_engaged_devices_observed') or 0,
+        "sessions_derived": metadata.get('sessions_derived') or len(sessions),
+        "average_session_duration_seconds": round(sum(session_durations) / max(len(session_durations), 1), 2),
+        "median_session_duration_seconds": median(session_durations) if session_durations else 0,
+        "low_rssi_session_rate": round(_safe_div(low_rssi_sessions, len(sessions)), 4),
+        "error_vector_presence_rate": round(_safe_div(error_sessions, len(sessions)), 4),
+        "target_temp_distribution": [{"target_temp": key, "count": count} for key, count in target_temp_counter.most_common(10)],
+    }
 
     return {
         "latest": {
@@ -162,6 +183,7 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         "grill_type_health": _health_payload(grill_types)[:10],
         "top_error_codes": [{"code": code, "count": count} for code, count in error_codes.most_common(10)],
         "top_issue_patterns": [{"pattern": key, "count": count} for key, count in issue_patterns.most_common(10)],
+        "slice_snapshot": slice_snapshot,
         "collection_metadata": {
             "source": "sg_device_shadows",
             "region": metadata.get('region'),
