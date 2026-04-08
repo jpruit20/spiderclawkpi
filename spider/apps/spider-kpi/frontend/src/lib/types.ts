@@ -1,3 +1,47 @@
+export type KPIStatus = 'green' | 'yellow' | 'red'
+export type KPITrend = 'up' | 'flat' | 'down'
+export type KPITruthState = 'canonical' | 'proxy' | 'estimated' | 'degraded' | 'blocked' | 'unavailable'
+
+export interface KPIObject {
+  key: string
+  current_value: number | string | null
+  target_value: number | string | null
+  delta: {
+    absolute: number | null
+    percent: number | null
+    direction: 'improving' | 'worsening' | 'flat' | 'unknown'
+    comparison_basis: 'vs_prior_period' | 'vs_target' | 'vs_same_day_last_week'
+  }
+  trend: KPITrend
+  owner: string
+  status: KPIStatus
+  truth_state: KPITruthState
+  last_updated: string
+}
+
+export interface ActionObject {
+  id: string
+  trigger_kpi: string
+  trigger_condition: string
+  owner: string
+  co_owner?: string
+  escalation_owner?: string
+  required_action: string
+  priority: 'critical' | 'high' | 'medium' | 'low'
+  status: 'open' | 'in_progress' | 'resolved'
+  evidence: string[]
+  due_date: string
+  snapshot_timestamp: string
+}
+
+export interface BlockedStateOutput {
+  decision_blocked: string
+  missing_source: string
+  still_trustworthy: string[]
+  owner: string
+  required_action_to_unblock: string
+}
+
 export interface KPIDaily {
   business_date: string
   revenue: number
@@ -222,7 +266,7 @@ export interface CXMetricItem {
   delta: number
   trend7d: number
   trend30d: number
-  status: 'green' | 'yellow' | 'red'
+  status: KPIStatus
   confidence?: 'normal' | 'low'
   trigger_condition?: string | null
   critical_immediate?: boolean

@@ -1,14 +1,15 @@
 # Session: KPI
 
 ## Objective
-- Refactor the Spider KPI dashboard into a decision-first operating system centered on top revenue actions, impact, confidence, ownership, and system trust.
-- Investigate the reported KPI website outage and restore clear public access.
+- Define and enforce a universal division operating contract for KPI pages covering KPI structure, truth-state labeling, action generation, ownership, and blocked-state behavior.
+- Apply the contract concretely to the Marketing division page only.
 - Tune and refine the Spider Grills KPI dashboard so the data is more meaningful, actionable, and decision-grade.
 
 ## Current assumptions
 - The current dashboard is directionally strong but still needs tuning.
 - The main optimization target is better business meaning, not more widgets.
 - Sidecar review should guide progress but not override validated repo truth.
+- Division-contract enforcement is currently implemented at the frontend contract/helper layer across the required KPI surfaces; deeper backend payload unification can follow once the shape is validated.
 
 ## Active files
 - memory/topics/kpi_dashboard.md
@@ -20,6 +21,7 @@
 - apps/spider-kpi/frontend/src/lib/departmentViews.ts
 - apps/spider-kpi/frontend/src/pages/CommandCenter.tsx
 - apps/spider-kpi/frontend/src/pages/DepartmentViews.tsx
+- apps/spider-kpi/frontend/src/pages/MarketingDivision.tsx
 - apps/spider-kpi/frontend/src/pages/IssueRadar.tsx
 - apps/spider-kpi/frontend/src/pages/RootCause.tsx
 - apps/spider-kpi/frontend/src/pages/SourceHealth.tsx
@@ -32,13 +34,13 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
+- Audit the live UI behavior of the contract-enforced pages in-browser and tighten rough UX edges without changing the contract model.
+- Decide whether to promote the shared division contract from frontend helpers into backend/shared API payloads so truth_state and action ranking become source-controlled across surfaces.
 - Verify/record the formal Alembic version state for `20260407_0005_cx_actions` on the production DB host; runtime bootstrap has been removed from production code paths.
 - Apply the formal telemetry Alembic migration on the KPI backend host before enabling live AWS/Venom-backed telemetry outputs.
-- Deploy the new CX division frontend route and validate live rendering plus data consistency against production APIs.
 - Apply the new telemetry Alembic migration and deploy backend changes to the KPI API host.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
-- Decide whether to promote the impact/confidence/trust-penalty policy plus leader ownership mapping into backend/shared logic so action ranking becomes source-controlled instead of frontend-only.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Keep implementation-specific notes here instead of polluting durable files.
@@ -104,6 +106,7 @@
 - 2026-04-06 Clarity/GA4 live-state tuning: GA4 is now healthy in production after service-account/env fixes and API enablement. Clarity remained vulnerable to transient 429 rate limits, so polling was tuned to a separate 30-minute cadence and source-health/Executive trust logic now preserves a healthy state when Clarity’s latest poll is rate-limited but the last successful sync is still fresh.
 - 2026-04-06 frontend GA4 activation pass: updated live-connector counting so Executive now includes GA4 alongside Shopify, Triple Whale, Freshdesk, and Clarity (5/5 when healthy), and refreshed the UX / Behavior page copy so GA4 is treated as an active context layer for friction prioritization rather than a merely planned input.
 - 2026-04-06 command-center refinement pass: the operating model now explicitly penalizes action confidence when required sources degrade, labels affected actions as `Conditional` or `Trust-limited`, renders the top 3 actions as a canonical ranked strip plus expanded decision cards, and reframes Issue Radar vs Root Cause as queue/escalation versus adjudication/intervention pages. Local frontend build passed after the pass.
+- 2026-04-08 division contract enforcement pass: added explicit `KPIObject`, `ActionObject`, and `BlockedStateOutput` types plus shared division-contract helpers; wired Command Center, Revenue, Marketing, Issue Radar, and System Health to derive contract KPIs/actions with truth_state labels and truth-state-aware ranking/blocking rules; updated action-rendering components to consume contract actions; local frontend build passed.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

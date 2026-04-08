@@ -7,7 +7,8 @@ import { ApiError, api, getApiBase } from '../lib/api'
 import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
 import { currency } from '../lib/operatingModel'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
-import { KPIDaily } from '../lib/types'
+import { ActionObject, BlockedStateOutput, KPIDaily, KPIObject } from '../lib/types'
+import { actionFromKpi, buildBlockedState, buildNumericKpi, enforceActionContract } from '../lib/divisionContract'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
   return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
@@ -72,6 +73,42 @@ export function RevenueEngine() {
   const conversionDelta = compareValue(conversion, priorRows.length === currentRows.length ? priorConversion : null, 'Conversion')
   const grossProfitDelta = compareValue(grossProfitProxy, priorRows.length === currentRows.length ? priorGrossProfitProxy : null, 'Gross profit proxy')
   const contributionDelta = compareValue(contributionProxy, priorRows.length === currentRows.length ? priorContributionProxy : null, 'Contribution proxy')
+  const snapshotTimestamp = currentRows.at(-1)?.business_date ? `${currentRows.at(-1)?.business_date}T23:59:59Z` : new Date().toISOString()
+
+  const kpis: KPIObject[] = [
+    buildNumericKpi({ key: 'revenue_total', currentValue: revenue, targetValue: priorRevenue || null, priorValue: priorRevenue || null, owner: 'Joseph', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'gross_profit_proxy', currentValue: grossProfitProxy, targetValue: priorGrossProfitProxy || null, priorValue: priorGrossProfitProxy || null, owner: 'Joseph', truthState: 'proxy', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'gross_margin_proxy', currentValue: grossMarginProxy, targetValue: null, priorValue: null, owner: 'Joseph', truthState: 'proxy', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'contribution_proxy', currentValue: contributionProxy, targetValue: priorContributionProxy || null, priorValue: priorContributionProxy || null, owner: 'Joseph', truthState: 'proxy', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'mer', currentValue: adSpend ? (revenue / adSpend) : 0, targetValue: priorAdSpend ? (priorRevenue / priorAdSpend) : null, priorValue: priorAdSpend ? (priorRevenue / priorAdSpend) : null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'channel_revenue_breakdown', currentValue: null, targetValue: null, priorValue: null, owner: 'Bailey', truthState: 'blocked', lastUpdated: snapshotTimestamp }),
+  ]
+
+  const blockedStates: Record<string, BlockedStateOutput> = {
+    channel_revenue_breakdown: buildBlockedState({
+      decision_blocked: 'Which channel should gain or lose spend based on revenue contribution',
+      missing_source: 'channel-level revenue backend feed',
+      still_trustworthy: ['total revenue', 'orders', 'sessions', 'MER'],
+      owner: 'Bailey',
+      required_action_to_unblock: 'Connect and expose channel-level revenue rows before reallocating channel budget',
+    }),
+  }
+
+  const actions: ActionObject[] = enforceActionContract([
+    actionFromKpi({
+      id: 'revenue-unblock-channel-breakdown',
+      triggerKpi: kpis.find((item) => item.key === 'channel_revenue_breakdown')!,
+      triggerCondition: 'truth_state = blocked',
+      owner: 'Bailey',
+      requiredAction: 'Unblock channel revenue feed before making channel allocation decisions.',
+      priority: 'critical',
+      evidence: ['daily_kpis', 'revenue page'],
+      dueDate: 'next sync',
+      snapshotTimestamp,
+      baseRankingScore: 100,
+      blockedState: blockedStates.channel_revenue_breakdown,
+    }),
+  ])
 
   return (
     <div className="page-grid">
@@ -117,10 +154,12 @@ export function RevenueEngine() {
             </div>
           </Card>
           <Card title="Revenue by channel">
-            <div className="list-item status-warn">
-              <strong>Channel revenue unavailable</strong>
-              <p>Awaiting data source / backend feed for real revenue-by-channel reporting.</p>
-              <small>No fake or empty channel chart is shown.</small>
+            <div className="list-item status-bad">
+              <strong>{kpis.find((item) => item.key === 'channel_revenue_breakdown')?.key}</strong>
+              <p>{blockedStates.channel_revenue_breakdown.decision_blocked}</p>
+              <small><strong>truth_state:</strong> blocked · <strong>missing source:</strong> {blockedStates.channel_revenue_breakdown.missing_source}</small>
+              <small><strong>still trustworthy:</strong> {blockedStates.channel_revenue_breakdown.still_trustworthy.join(', ')}</small>
+              <small><strong>owner:</strong> {blockedStates.channel_revenue_breakdown.owner} · <strong>next action:</strong> {actions[0]?.required_action}</small>
             </div>
           </Card>
           <Card title="Diagnostic drill-downs">

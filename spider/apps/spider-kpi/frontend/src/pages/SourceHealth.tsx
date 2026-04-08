@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { ACTIVE_CONNECTORS, isLiveConnector, isScaffolded, isTruthfullyHealthy } from '../lib/sourceHealth'
-import { SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, KPIObject, SourceHealthItem } from '../lib/types'
+import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract } from '../lib/divisionContract'
 
 function statusTone(status: string) {
   switch (status) {
@@ -93,6 +94,48 @@ export function SourceHealthPage() {
   const healthyLiveCount = useMemo(() => liveConnectors.filter((row) => isTruthfullyHealthy(row)).length, [liveConnectors])
   const staleOrFailedCount = useMemo(() => liveConnectors.filter((row) => !isTruthfullyHealthy(row)).length, [liveConnectors])
   const telemetryRows = useMemo(() => rows.filter((row) => ['aws', 'aws_telemetry', 'venom', 'telemetry'].includes(row.source)), [rows])
+  const snapshotTimestamp = new Date().toISOString()
+  const kpis: KPIObject[] = [
+    buildNumericKpi({ key: 'system_health_trusted_live_inputs', currentValue: healthyLiveCount, targetValue: liveConnectors.length || null, priorValue: null, owner: 'Joseph', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'system_health_decision_risk', currentValue: staleOrFailedCount, targetValue: 0, priorValue: null, owner: 'Joseph', truthState: staleOrFailedCount > 0 ? 'degraded' : 'canonical', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'system_health_aws_venom', currentValue: telemetryRows.length ? telemetryRows.map((row) => `${row.source}:${row.derived_status}`).join(', ') : 'Not exposed', targetValue: 'Healthy', owner: 'Joseph', status: telemetryRows.length ? 'yellow' : 'red', truthState: telemetryRows.length ? 'degraded' : 'blocked', lastUpdated: snapshotTimestamp }),
+  ]
+  const blockedStates: Record<string, BlockedStateOutput> = {
+    system_health_aws_venom: buildBlockedState({
+      decision_blocked: 'Whether telemetry-linked product reliability decisions are complete',
+      missing_source: telemetryRows.length ? 'healthy AWS/Venom telemetry' : 'AWS/Venom telemetry source row',
+      still_trustworthy: ['other live connectors', 'explicit source health rows'],
+      owner: 'Joseph',
+      required_action_to_unblock: 'Expose and stabilize AWS/Venom telemetry source health before relying on telemetry-driven product decisions',
+    }),
+  }
+  const actions: ActionObject[] = enforceActionContract([
+    actionFromKpi({
+      id: 'system-health-restore-connectors',
+      triggerKpi: kpis[1],
+      triggerCondition: 'decision risk count > 0',
+      owner: 'Joseph',
+      requiredAction: 'Restore degraded connectors before trusting affected decision surfaces.',
+      priority: staleOrFailedCount > 0 ? 'critical' : 'medium',
+      evidence: liveConnectors.filter((row) => !isTruthfullyHealthy(row)).map((row) => row.source),
+      dueDate: '4h',
+      snapshotTimestamp,
+      baseRankingScore: 100,
+    }),
+    actionFromKpi({
+      id: 'system-health-unblock-telemetry',
+      triggerKpi: kpis[2],
+      triggerCondition: `truth_state = ${kpis[2].truth_state}`,
+      owner: 'Joseph',
+      requiredAction: 'Unblock AWS/Venom telemetry source health before treating telemetry-linked insights as complete.',
+      priority: 'high',
+      evidence: telemetryRows.map((row) => row.source),
+      dueDate: 'next integration pass',
+      snapshotTimestamp,
+      baseRankingScore: 80,
+      blockedState: blockedStates.system_health_aws_venom,
+    }),
+  ])
 
   return (
     <div className="page-grid">
@@ -115,7 +158,7 @@ export function SourceHealthPage() {
           <Card title="AWS / Venom Telemetry Health">
             <div className="stack-list">
               {telemetryRows.map((row) => <SourceCard key={row.source} row={row} />)}
-              {!telemetryRows.length ? <div className="list-item status-warn"><p>AWS / Venom telemetry is not yet exposed as a source-health row, so product reliability insights should be treated as incomplete.</p></div> : null}
+              {!telemetryRows.length ? <div className="list-item status-bad"><p>{blockedStates.system_health_aws_venom.decision_blocked}</p><small><strong>truth_state:</strong> {kpis[2].truth_state} · <strong>missing source:</strong> {blockedStates.system_health_aws_venom.missing_source}</small><small><strong>owner:</strong> {blockedStates.system_health_aws_venom.owner} · <strong>next action:</strong> {actions[1]?.required_action}</small></div> : null}
             </div>
           </Card>
           <Card title="Live Connectors">

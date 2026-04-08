@@ -3,8 +3,9 @@ import { Card } from '../components/Card'
 import { DecisionStack } from '../components/DecisionStack'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { compareValue, priorPeriodRows } from '../lib/compare'
-import { backlogAction, currency, DecisionAction, issueAction, rankActions, summarizeTrust, topDiagnosticAction, trustAction } from '../lib/operatingModel'
-import { KPIDaily, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
+import { currency, summarizeTrust } from '../lib/operatingModel'
+import { BlockedStateOutput, KPIDaily, KPIObject, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
+import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject, truthStateFromSource } from '../lib/divisionContract'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
   return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
@@ -59,17 +60,77 @@ export function CommandCenter() {
   const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
   const convDelta = compareValue(conv, priorRows.length === currentRows.length ? priorConv : null, 'Conversion')
 
-  const actions = useMemo(() => {
-    const built: DecisionAction[] = [
-      ...topDiagnosticAction(currentRows, sourceHealth, overview?.diagnostics || [], overview?.recommendations || []),
-      ...issueAction(issues?.clusters?.[0], latest, sourceHealth),
-      ...backlogAction(supportRows, sourceHealth),
-      ...trustAction(sourceHealth, latest),
-    ]
-    return rankActions(built).slice(0, 5)
-  }, [currentRows, sourceHealth, overview, issues, latest, supportRows])
-
   const trust = summarizeTrust(sourceHealth)
+  const snapshotTimestamp = latest?.business_date ? `${latest.business_date}T23:59:59Z` : new Date().toISOString()
+  const kpis: KPIObject[] = useMemo(() => [
+    buildNumericKpi({ key: 'command_center_revenue', currentValue: revenue, targetValue: priorRevenue || null, priorValue: priorRevenue || null, owner: 'Joseph', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'command_center_conversion', currentValue: conv, targetValue: priorConv || null, priorValue: priorConv || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'command_center_support_backlog', currentValue: Number(supportRows.at(-1)?.open_backlog || 0), targetValue: 100, priorValue: null, owner: 'Jeremiah', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'command_center_top_issue', currentValue: issues?.clusters?.[0]?.title || 'No cluster returned', targetValue: 'No high-risk issue', owner: issues?.clusters?.[0]?.owner_team || 'TBD', status: issues?.clusters?.[0] ? 'red' : 'yellow', truthState: truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy'), lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'command_center_data_trust', currentValue: trust.degraded ? `Degraded: ${trust.degradedSources.join(', ')}` : 'Healthy', targetValue: 'Healthy', owner: 'Joseph', status: trust.degraded ? 'red' : 'green', truthState: truthStateFromSource(sourceHealth, ['shopify', 'triplewhale', 'freshdesk', 'clarity', 'ga4'], 'canonical'), lastUpdated: snapshotTimestamp }),
+  ], [revenue, priorRevenue, conv, priorConv, supportRows, issues, sourceHealth, snapshotTimestamp])
+
+  const blockedStates: Record<string, BlockedStateOutput> = {
+    command_center_data_trust: buildBlockedState({
+      decision_blocked: 'Whether the top-ranked intervention should be treated as decision-grade',
+      missing_source: trust.degradedSources.join(', ') || 'none',
+      still_trustworthy: ['healthy source subset', 'visible top-line metrics'],
+      owner: 'Joseph',
+      required_action_to_unblock: 'Restore degraded connectors before trusting dependent actions',
+    }),
+  }
+
+  const actions: RankedActionObject[] = useMemo(() => enforceActionContract([
+    actionFromKpi({
+      id: 'cc-revenue',
+      triggerKpi: kpis[0],
+      triggerCondition: 'revenue delta negative vs prior period',
+      owner: 'Joseph',
+      requiredAction: 'Review the highest-confidence revenue drag before allocating more budget or staffing.',
+      priority: revenueDelta.deltaPct !== null && revenueDelta.deltaPct < 0 ? 'critical' : 'high',
+      evidence: ['overview', 'diagnostics', 'recommendations'],
+      dueDate: '48h',
+      snapshotTimestamp,
+      baseRankingScore: Math.abs(revenueDelta.deltaPct || 0) + 90,
+    }),
+    actionFromKpi({
+      id: 'cc-top-issue',
+      triggerKpi: kpis[3],
+      triggerCondition: 'highest-business-risk cluster exists',
+      owner: issues?.clusters?.[0]?.owner_team || 'TBD',
+      requiredAction: `Escalate now: ${issues?.clusters?.[0]?.title || 'No priority cluster returned yet.'}`,
+      priority: 'high',
+      evidence: ['issue radar', 'freshdesk', 'clarity', 'ga4'],
+      dueDate: '24h',
+      snapshotTimestamp,
+      baseRankingScore: Number(issues?.clusters?.[0]?.details_json?.priority_score || 60),
+    }),
+    actionFromKpi({
+      id: 'cc-support-backlog',
+      triggerKpi: kpis[2],
+      triggerCondition: 'support backlog elevated',
+      owner: 'Jeremiah',
+      requiredAction: 'Reduce support backlog before it suppresses conversion and repeat contact volume rises.',
+      priority: Number(supportRows.at(-1)?.open_backlog || 0) > 150 ? 'critical' : 'high',
+      evidence: ['support overview', 'freshdesk'],
+      dueDate: '24h',
+      snapshotTimestamp,
+      baseRankingScore: Number(supportRows.at(-1)?.open_backlog || 0),
+    }),
+    actionFromKpi({
+      id: 'cc-data-trust',
+      triggerKpi: kpis[4],
+      triggerCondition: 'source health degraded',
+      owner: 'Joseph',
+      requiredAction: 'Restore degraded sources before changing spend, UX, or queue priorities.',
+      priority: trust.degraded ? 'critical' : 'medium',
+      evidence: trust.degradedSources,
+      dueDate: '4h',
+      snapshotTimestamp,
+      baseRankingScore: trust.degraded ? 120 : 30,
+      blockedState: blockedStates.command_center_data_trust,
+    }),
+  ]).slice(0, 5), [kpis, revenueDelta.deltaPct, issues, supportRows, trust, snapshotTimestamp])
 
   return (
     <div className="page-grid">

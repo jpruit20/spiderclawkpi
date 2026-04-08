@@ -3,7 +3,8 @@ import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { currency, frictionRankingScore } from '../lib/operatingModel'
-import { IssueClusterItem, IssueRadarResponse, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, IssueClusterItem, IssueRadarResponse, KPIObject, SourceHealthItem } from '../lib/types'
+import { actionFromKpi, buildBlockedState, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 function ClusterList({ title, rows, mode = 'queue' }: { title: string; rows: IssueClusterItem[]; mode?: 'queue' | 'evidence' }) {
   return (
@@ -89,11 +90,61 @@ export function IssueRadar() {
       .sort((a, b) => Number(b.__rankingScore || 0) - Number(a.__rankingScore || 0))
   }, [data.clusters, sourceHealth])
   const topThree = sortedClusters.slice(0, 3)
-  const actionItems = [
-    topThree[0] ? `Escalate now: ${topThree[0].title}. ${String(topThree[0].details_json?.priority_reason_summary || '')}` : 'No priority cluster returned yet; verify connector health and issue normalization.',
-    data.fastest_rising[0] ? `Watch next: ${data.fastest_rising[0].title}. Confirm whether the rise reflects a new product, fulfillment, or support workflow issue.` : 'No rising cluster yet; keep reviewing complaint burden and business risk instead of chasing noise.',
-    data.live_sources.length ? `Radar queue currently draws from live sources: ${data.live_sources.join(', ')}.` : 'Issue radar still needs more live source coverage before it can serve as the primary voice-of-customer queue.',
+  const snapshotTimestamp = new Date().toISOString()
+  const topIssueTruthState = truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy')
+  const kpis: KPIObject[] = [
+    buildTextKpi({ key: 'issue_radar_top_issue', currentValue: topThree[0]?.title || 'No priority cluster returned yet', targetValue: 'No high-risk issue', owner: topThree[0]?.owner_team || 'TBD', status: topThree[0] ? 'red' : 'yellow', truthState: topIssueTruthState, lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'issue_radar_fastest_rising', currentValue: data.fastest_rising[0]?.title || 'No rising cluster', targetValue: 'No rising cluster', owner: data.fastest_rising[0]?.owner_team || 'TBD', status: data.fastest_rising[0] ? 'yellow' : 'green', truthState: topIssueTruthState, lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'issue_radar_source_coverage', currentValue: data.live_sources.length ? data.live_sources.join(', ') : 'Coverage incomplete', targetValue: 'Broad live coverage', owner: 'Joseph', status: data.live_sources.length ? 'yellow' : 'red', truthState: data.live_sources.length ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp }),
   ]
+  const blockedStates: Record<string, BlockedStateOutput> = {
+    issue_radar_source_coverage: buildBlockedState({
+      decision_blocked: 'Whether issue radar can be treated as the primary escalation queue across all surfaces',
+      missing_source: 'broader live source coverage',
+      still_trustworthy: ['currently live sources', 'top visible issue clusters'],
+      owner: 'Joseph',
+      required_action_to_unblock: 'Increase live source coverage before treating queue gaps as true silence',
+    }),
+  }
+  const actionItems: ActionObject[] = enforceActionContract([
+    actionFromKpi({
+      id: 'issue-radar-escalate-first',
+      triggerKpi: kpis[0],
+      triggerCondition: 'highest-business-risk cluster exists',
+      owner: topThree[0]?.owner_team || 'TBD',
+      requiredAction: topThree[0] ? `Escalate now: ${topThree[0].title}. ${String(topThree[0].details_json?.priority_reason_summary || '')}` : 'Verify connector health and issue normalization.',
+      priority: 'critical',
+      evidence: ['issue radar', 'freshdesk', 'clarity', 'ga4'],
+      dueDate: '24h',
+      snapshotTimestamp,
+      baseRankingScore: Number(topThree[0]?.details_json?.priority_score || 75),
+    }),
+    actionFromKpi({
+      id: 'issue-radar-watch-next',
+      triggerKpi: kpis[1],
+      triggerCondition: 'fastest-rising cluster exists',
+      owner: data.fastest_rising[0]?.owner_team || 'TBD',
+      requiredAction: data.fastest_rising[0] ? `Watch next: ${data.fastest_rising[0].title}. Confirm whether the rise reflects a new product, fulfillment, or support workflow issue.` : 'Keep reviewing complaint burden and business risk instead of chasing noise.',
+      priority: 'high',
+      evidence: ['issue radar'],
+      dueDate: '48h',
+      snapshotTimestamp,
+      baseRankingScore: Number(data.fastest_rising[0]?.details_json?.priority_score || 50),
+    }),
+    actionFromKpi({
+      id: 'issue-radar-unblock-coverage',
+      triggerKpi: kpis[2],
+      triggerCondition: 'truth_state = blocked',
+      owner: 'Joseph',
+      requiredAction: 'Unblock broader live source coverage before treating issue radar as complete.',
+      priority: 'high',
+      evidence: ['source breakdown'],
+      dueDate: 'next source pass',
+      snapshotTimestamp,
+      baseRankingScore: 40,
+      blockedState: blockedStates.issue_radar_source_coverage,
+    }),
+  ])
 
   return (
     <div className="page-grid">

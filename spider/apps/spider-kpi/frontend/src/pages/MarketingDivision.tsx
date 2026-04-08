@@ -7,7 +7,8 @@ import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLast
 import { currency } from '../lib/operatingModel'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { CompareMode as Mode } from '../lib/compare'
-import { IssueRadarResponse, KPIDaily, OverviewResponse, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SourceHealthItem } from '../lib/types'
+import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
   return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
@@ -106,11 +107,115 @@ export function MarketingDivision() {
   ]
   const campaignBreakdownAvailable = false
   const landingPageBreakdownAvailable = false
-  const actions = [
-    conversion < priorConversion ? `Conversion is down ${formatDeltaPct(compareValue(conversion, priorConversion, 'Conversion').deltaPct)}. Fix the top high-traffic friction path before adding more spend.` : 'Conversion is not the main drag right now; preserve funnel changes and focus on scaling efficient traffic.',
-    mer < priorMer ? `MER softened to ${mer.toFixed(2)}. Reallocate spend away from lower-efficiency traffic until channel mix recovers.` : `MER is holding at ${mer.toFixed(2)}. Keep scale pressure on the best-performing channels.`,
-    clarityDegraded ? 'Clarity is degraded/rate-limited. Treat rage/dead-click evidence as low confidence until the connector recovers.' : `Use Clarity and GA4 together to validate whether ${topFriction?.title || 'the leading friction signal'} is truly suppressing conversion.`,
+  const snapshotTimestamp = currentRows.at(-1)?.business_date ? `${currentRows.at(-1)?.business_date}T23:59:59Z` : new Date().toISOString()
+  const topFrictionTruthState = clarityDegraded ? 'degraded' : 'proxy'
+  const kpis: KPIObject[] = [
+    buildNumericKpi({ key: 'marketing_revenue', currentValue: revenue, targetValue: priorRevenue || null, priorValue: priorRevenue || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_conversion_rate', currentValue: conversion, targetValue: priorConversion || null, priorValue: priorConversion || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_mer', currentValue: mer, targetValue: priorMer || null, priorValue: priorMer || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_add_to_cart_rate', currentValue: addToCartRate, targetValue: priorAddToCartRate || null, priorValue: priorAddToCartRate || null, owner: 'Bailey', truthState: 'proxy', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_checkout_completion', currentValue: checkoutEstimate ? (purchaseEstimate / checkoutEstimate) * 100 : 0, targetValue: priorCheckoutEstimate ? (priorPurchaseEstimate / priorCheckoutEstimate) * 100 : null, priorValue: priorCheckoutEstimate ? (priorPurchaseEstimate / priorCheckoutEstimate) * 100 : null, owner: 'Bailey', truthState: 'estimated', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'marketing_top_friction', currentValue: topFriction?.title || 'Awaiting ranked friction source', targetValue: 'No dominant leak', owner: 'Bailey', status: topFriction ? 'red' : 'yellow', truthState: topFrictionTruthState, lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_channel_revenue_breakdown', currentValue: campaignBreakdownAvailable ? 1 : null, targetValue: 1, priorValue: null, owner: 'Bailey', truthState: 'blocked', lastUpdated: snapshotTimestamp }),
+    buildNumericKpi({ key: 'marketing_campaign_breakdown', currentValue: landingPageBreakdownAvailable ? 1 : null, targetValue: 1, priorValue: null, owner: 'Bailey', truthState: 'blocked', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'marketing_clarity_behavior_evidence', currentValue: clarityDegraded ? 'Clarity degraded' : 'Clarity healthy', targetValue: 'Clarity healthy', owner: 'Bailey', status: clarityDegraded ? 'red' : 'green', truthState: truthStateFromSource(sourceHealth, ['clarity'], 'proxy'), lastUpdated: snapshotTimestamp }),
   ]
+
+  const blockedStates: Record<string, BlockedStateOutput> = {
+    marketing_channel_revenue_breakdown: buildBlockedState({
+      decision_blocked: 'Which channel should gain or lose spend this week',
+      missing_source: 'channel-level revenue mapping feed',
+      still_trustworthy: ['total revenue', 'orders', 'sessions', 'MER'],
+      owner: 'Bailey',
+      required_action_to_unblock: 'Restore channel revenue feed before reallocating spend by channel',
+    }),
+    marketing_campaign_breakdown: buildBlockedState({
+      decision_blocked: 'Which campaign should be scaled, paused, or rewritten',
+      missing_source: 'campaign-level performance feed',
+      still_trustworthy: ['blended MER', 'overall conversion', 'total spend'],
+      owner: 'Bailey',
+      required_action_to_unblock: 'Add campaign-level performance rows before making campaign-specific optimization calls',
+    }),
+    marketing_clarity_behavior_evidence: buildBlockedState({
+      decision_blocked: 'Which page-level friction should be treated as the top-confidence marketing fix',
+      missing_source: 'reliable Clarity behavioral evidence',
+      still_trustworthy: ['GA4 funnel movement', 'Shopify purchases', 'top issue cluster'],
+      owner: 'Joseph',
+      required_action_to_unblock: 'Recover Clarity health and require corroboration until it is healthy',
+    }),
+  }
+
+  const actions: ActionObject[] = enforceActionContract([
+    actionFromKpi({
+      id: 'marketing-conversion-fix',
+      triggerKpi: kpis.find((item) => item.key === 'marketing_conversion_rate')!,
+      triggerCondition: 'conversion declines vs prior period',
+      owner: 'Bailey',
+      coOwner: 'Kyle',
+      escalationOwner: 'Joseph',
+      requiredAction: 'Fix the top high-traffic friction path before adding more spend.',
+      priority: conversion < priorConversion ? 'critical' : 'high',
+      evidence: ['ga4', 'clarity', 'shopify'],
+      dueDate: 'this week',
+      snapshotTimestamp,
+      baseRankingScore: 95,
+    }),
+    actionFromKpi({
+      id: 'marketing-mer-reallocation',
+      triggerKpi: kpis.find((item) => item.key === 'marketing_mer')!,
+      triggerCondition: 'MER softens vs prior period',
+      owner: 'Bailey',
+      escalationOwner: 'Joseph',
+      requiredAction: mer < priorMer ? 'Reallocate spend away from lower-efficiency traffic until channel mix recovers.' : 'Keep scale pressure on the best-performing channels.',
+      priority: mer < priorMer ? 'high' : 'medium',
+      evidence: ['triplewhale', 'shopify'],
+      dueDate: 'this week',
+      snapshotTimestamp,
+      baseRankingScore: 80,
+    }),
+    actionFromKpi({
+      id: 'marketing-unblock-channel-revenue',
+      triggerKpi: kpis.find((item) => item.key === 'marketing_channel_revenue_breakdown')!,
+      triggerCondition: 'truth_state = blocked',
+      owner: 'Bailey',
+      coOwner: 'Joseph',
+      requiredAction: 'Unblock channel revenue feed before reallocating spend by channel.',
+      priority: 'critical',
+      evidence: ['marketing page', 'backend model gap'],
+      dueDate: 'next sync',
+      snapshotTimestamp,
+      baseRankingScore: 70,
+      blockedState: blockedStates.marketing_channel_revenue_breakdown,
+    }),
+    actionFromKpi({
+      id: 'marketing-unblock-campaign-breakdown',
+      triggerKpi: kpis.find((item) => item.key === 'marketing_campaign_breakdown')!,
+      triggerCondition: 'truth_state = blocked',
+      owner: 'Bailey',
+      coOwner: 'Joseph',
+      requiredAction: 'Unblock campaign performance feed before campaign-specific optimization.',
+      priority: 'critical',
+      evidence: ['marketing page', 'backend model gap'],
+      dueDate: 'next sync',
+      snapshotTimestamp,
+      baseRankingScore: 65,
+      blockedState: blockedStates.marketing_campaign_breakdown,
+    }),
+    actionFromKpi({
+      id: 'marketing-clarity-degraded',
+      triggerKpi: kpis.find((item) => item.key === 'marketing_clarity_behavior_evidence')!,
+      triggerCondition: 'truth_state = degraded',
+      owner: 'Joseph',
+      coOwner: 'Bailey',
+      requiredAction: clarityDegraded ? 'Recover Clarity and do not top-rank page-friction actions without corroboration.' : `Use Clarity and GA4 together to validate whether ${topFriction?.title || 'the leading friction signal'} is truly suppressing conversion.`,
+      priority: clarityDegraded ? 'high' : 'medium',
+      evidence: ['clarity', 'ga4', 'issue radar'],
+      dueDate: 'next sync',
+      snapshotTimestamp,
+      baseRankingScore: 90,
+      blockedState: blockedStates.marketing_clarity_behavior_evidence,
+    }),
+  ])
 
   return (
     <div className="page-grid">
@@ -169,20 +274,20 @@ export function MarketingDivision() {
             <Card title="What’s not / What to do">
               <div className="stack-list compact">
                 <div className="list-item status-bad"><strong>WHAT’S NOT</strong><p>{conversion < priorConversion ? 'Conversion is down versus the selected comparison window.' : 'Conversion is not currently the primary regression.'}</p></div>
-                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[0]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
-                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[1]}</p><small><strong>OWNER:</strong> Bailey · <strong>SLA:</strong> This week</small></div>
+                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[0]?.required_action}</p><small><strong>OWNER:</strong> {actions[0]?.owner} · <strong>DUE:</strong> {actions[0]?.due_date} · <strong>truth_state:</strong> {(actions[0] as any)?.truth_state}</small></div>
+                <div className="list-item status-warn"><strong>WHAT TO DO</strong><p>{actions[1]?.required_action}</p><small><strong>OWNER:</strong> {actions[1]?.owner} · <strong>DUE:</strong> {actions[1]?.due_date} · <strong>truth_state:</strong> {(actions[1] as any)?.truth_state}</small></div>
               </div>
             </Card>
           </div>
           <div className="two-col two-col-equal">
             <Card title="Campaign-level breakdown">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>{campaignBreakdownAvailable ? 'Campaign breakdown available' : 'Campaign-level breakdown unavailable'}</strong><p>{campaignBreakdownAvailable ? 'Campaign conversion and efficiency rows would render here.' : 'Current backend does not expose campaign-level marketing performance yet.'}</p><small>{campaignBreakdownAvailable ? 'Live campaign table' : 'Awaiting source feed / backend model.'}</small></div>
+                <div className="list-item status-bad"><strong>{kpis.find((item) => item.key === 'marketing_campaign_breakdown')?.key}</strong><p>{blockedStates.marketing_campaign_breakdown.decision_blocked}</p><small><strong>truth_state:</strong> blocked · <strong>missing source:</strong> {blockedStates.marketing_campaign_breakdown.missing_source}</small><small><strong>owner:</strong> {blockedStates.marketing_campaign_breakdown.owner} · <strong>next action:</strong> {blockedStates.marketing_campaign_breakdown.required_action_to_unblock}</small></div>
               </div>
             </Card>
             <Card title="Landing page by source">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>{landingPageBreakdownAvailable ? 'Landing page breakdown available' : 'Landing page performance by source unavailable'}</strong><p>{landingPageBreakdownAvailable ? 'Landing pages by source/medium would render here.' : 'Current backend does not expose landing-page-by-source performance yet.'}</p><small>{landingPageBreakdownAvailable ? 'Live landing page table' : 'Awaiting GA4/source feed and backend model.'}</small></div>
+                <div className={`list-item status-${clarityDegraded ? 'warn' : 'good'}`}><strong>{kpis.find((item) => item.key === 'marketing_clarity_behavior_evidence')?.key}</strong><p>{clarityDegraded ? blockedStates.marketing_clarity_behavior_evidence.decision_blocked : 'Clarity evidence is healthy enough to support page-level friction review.'}</p><small><strong>truth_state:</strong> {kpis.find((item) => item.key === 'marketing_clarity_behavior_evidence')?.truth_state} · <strong>owner:</strong> {kpis.find((item) => item.key === 'marketing_clarity_behavior_evidence')?.owner}</small><small><strong>next action:</strong> {actions.find((item) => item.id === 'marketing-clarity-degraded')?.required_action}</small></div>
               </div>
             </Card>
           </div>
