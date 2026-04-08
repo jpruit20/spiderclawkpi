@@ -456,32 +456,6 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
 
     db.commit()
 
-    highest_business_risk = sorted(
-        [
-            {
-                "id": cluster.id,
-                "title": cluster.title,
-                "severity": cluster.severity,
-                "confidence": cluster.confidence,
-                "owner_team": cluster.owner_team,
-                "details_json": cluster.details_json,
-            }
-            for cluster in clusters
-        ],
-        key=lambda item: item["details_json"].get("priority_score", 0),
-        reverse=True,
-    )
-    highest_burden = sorted(
-        highest_business_risk,
-        key=lambda item: item["details_json"].get("tickets_per_100_orders_by_theme", 0) or 0,
-        reverse=True,
-    )
-    fastest_rising = sorted(
-        highest_business_risk,
-        key=lambda item: item["details_json"].get("trend_pct", 0),
-        reverse=True,
-    )
-
     telemetry_daily_rows = db.execute(select(TelemetryDaily).order_by(TelemetryDaily.business_date)).scalars().all() if telemetry_ready else []
     telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all() if telemetry_ready else []
     if telemetry_daily_rows and telemetry_sessions:
@@ -536,6 +510,7 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
                 details_json=telemetry_details,
             )
             db.add(telemetry_cluster)
+            db.flush()
             clusters.append(telemetry_cluster)
             telemetry_signal = IssueSignal(
                 business_date=datetime.now(timezone.utc).date(),
@@ -548,7 +523,36 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
                 metadata_json=telemetry_details,
             )
             db.add(telemetry_signal)
+            db.flush()
             signals.append(telemetry_signal)
+
+    highest_business_risk = sorted(
+        [
+            {
+                "id": cluster.id,
+                "title": cluster.title,
+                "severity": cluster.severity,
+                "confidence": cluster.confidence,
+                "owner_team": cluster.owner_team,
+                "details_json": cluster.details_json,
+            }
+            for cluster in clusters
+        ],
+        key=lambda item: item["details_json"].get("priority_score", 0),
+        reverse=True,
+    )
+    highest_burden = sorted(
+        highest_business_risk,
+        key=lambda item: item["details_json"].get("tickets_per_100_orders_by_theme", 0) or 0,
+        reverse=True,
+    )
+    fastest_rising = sorted(
+        highest_business_risk,
+        key=lambda item: item["details_json"].get("trend_pct", 0),
+        reverse=True,
+    )
+
+    db.commit()
 
     source_breakdown = [{"source": "freshdesk", "live": True, "signals": len([s for s in signals if s.source == 'freshdesk']), "clusters": len([c for c in clusters if str(c.cluster_key).startswith('freshdesk:')])}]
     source_breakdown.append({"source": "aws_telemetry", "live": telemetry_sessions_exist, "signals": len([s for s in signals if s.source == 'aws_telemetry']), "clusters": len([c for c in clusters if str(c.cluster_key).startswith('aws_telemetry:')])})

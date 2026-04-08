@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { ACTIVE_CONNECTORS, isLiveConnector, isScaffolded, isTruthfullyHealthy } from '../lib/sourceHealth'
-import { ActionObject, BlockedStateOutput, KPIObject, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, KPIObject, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract } from '../lib/divisionContract'
 
 function statusTone(status: string) {
@@ -58,6 +58,7 @@ function SourceCard({ row }: { row: SourceHealthItem }) {
 
 export function SourceHealthPage() {
   const [rows, setRows] = useState<SourceHealthItem[]>([])
+  const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
@@ -67,9 +68,10 @@ export function SourceHealthPage() {
     setLoading(true)
     setError(null)
     try {
-      const payload = await api.sourceHealth(signal)
+      const [payload, telemetryPayload] = await Promise.all([api.sourceHealth(signal), api.telemetrySummary(signal)])
       if (signal?.aborted || requestId !== requestIdRef.current) return
       setRows(payload)
+      setTelemetry(telemetryPayload)
     } catch (err) {
       if (signal?.aborted || requestId !== requestIdRef.current) return
       if (!signal?.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load source health')
@@ -94,11 +96,12 @@ export function SourceHealthPage() {
   const healthyLiveCount = useMemo(() => liveConnectors.filter((row) => isTruthfullyHealthy(row)).length, [liveConnectors])
   const staleOrFailedCount = useMemo(() => liveConnectors.filter((row) => !isTruthfullyHealthy(row)).length, [liveConnectors])
   const telemetryRows = useMemo(() => rows.filter((row) => ['aws', 'aws_telemetry', 'venom', 'telemetry'].includes(row.source)), [rows])
+  const telemetryLatest = telemetry?.latest || null
   const snapshotTimestamp = new Date().toISOString()
   const kpis: KPIObject[] = [
     buildNumericKpi({ key: 'system_health_trusted_live_inputs', currentValue: healthyLiveCount, targetValue: liveConnectors.length || null, priorValue: null, owner: 'Joseph', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
     buildNumericKpi({ key: 'system_health_decision_risk', currentValue: staleOrFailedCount, targetValue: 0, priorValue: null, owner: 'Joseph', truthState: staleOrFailedCount > 0 ? 'degraded' : 'canonical', lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'system_health_aws_venom', currentValue: telemetryRows.length ? telemetryRows.map((row) => `${row.source}:${row.derived_status}`).join(', ') : 'Not exposed', targetValue: 'Healthy', owner: 'Joseph', status: telemetryRows.length ? 'yellow' : 'red', truthState: telemetryRows.length ? 'degraded' : 'blocked', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'system_health_aws_venom', currentValue: telemetryRows.length ? telemetryRows.map((row) => `${row.source}:${row.derived_status}`).join(', ') : 'Not exposed', targetValue: 'Healthy', owner: 'Joseph', status: telemetryRows.some((row) => row.derived_status === 'healthy') ? 'green' : telemetryRows.length ? 'yellow' : 'red', truthState: telemetryRows.some((row) => row.derived_status === 'healthy') ? 'canonical' : telemetryRows.length ? 'degraded' : 'blocked', lastUpdated: snapshotTimestamp }),
   ]
   const blockedStates: Record<string, BlockedStateOutput> = {
     system_health_aws_venom: buildBlockedState({
@@ -158,6 +161,7 @@ export function SourceHealthPage() {
           <Card title="AWS / Venom Telemetry Health">
             <div className="stack-list">
               {telemetryRows.map((row) => <SourceCard key={row.source} row={row} />)}
+              {telemetryLatest ? <div className={`list-item status-${(telemetryLatest.session_reliability_score || 0) >= 0.8 ? 'good' : (telemetryLatest.session_reliability_score || 0) >= 0.6 ? 'warn' : 'bad'}`}><div className="item-head"><strong>telemetry latest aggregate</strong><span className="badge badge-neutral">{telemetryLatest.business_date}</span></div><p>Sessions {telemetryLatest.sessions} · success {(telemetryLatest.cook_success_rate * 100).toFixed(1)}% · disconnect {(telemetryLatest.disconnect_rate * 100).toFixed(1)}% · reliability {(telemetryLatest.session_reliability_score * 100).toFixed(0)}%</p><small><strong>firmware health:</strong> {(telemetryLatest.firmware_health_score * 100).toFixed(0)}% · <strong>temp stability:</strong> {(telemetryLatest.temp_stability_score * 100).toFixed(0)}% · <strong>manual override:</strong> {(telemetryLatest.manual_override_rate * 100).toFixed(1)}%</small></div> : null}
               {!telemetryRows.length ? <div className="list-item status-bad"><p>{blockedStates.system_health_aws_venom.decision_blocked}</p><small><strong>truth_state:</strong> {kpis[2].truth_state} · <strong>missing source:</strong> {blockedStates.system_health_aws_venom.missing_source}</small><small><strong>owner:</strong> {blockedStates.system_health_aws_venom.owner} · <strong>next action:</strong> {actions[1]?.required_action}</small></div> : null}
             </div>
           </Card>

@@ -189,6 +189,49 @@ export interface DataQualityResponse {
   missing_data: DataQualityItem[]
 }
 
+export interface TelemetryLatestSummary {
+  business_date: string
+  sessions: number
+  connected_users: number
+  cook_success_rate: number
+  disconnect_rate: number
+  temp_stability_score: number
+  avg_time_to_stabilization_seconds: number
+  manual_override_rate: number
+  firmware_health_score: number
+  session_reliability_score: number
+  error_rate: number
+}
+
+export interface TelemetryHealthRow {
+  key: string
+  sessions: number
+  disconnect_rate: number
+  manual_override_rate: number
+  failure_rate: number
+  health_score: number
+  severity: string
+}
+
+export interface TelemetryPatternRow {
+  pattern: string
+  count: number
+}
+
+export interface TelemetryErrorCodeRow {
+  code: string
+  count: number
+}
+
+export interface TelemetrySummary {
+  latest?: TelemetryLatestSummary | null
+  daily: Array<Record<string, any>>
+  firmware_health: TelemetryHealthRow[]
+  grill_type_health: TelemetryHealthRow[]
+  top_error_codes: TelemetryErrorCodeRow[]
+  top_issue_patterns: TelemetryPatternRow[]
+}
+
 export interface OverviewResponse {
   latest_kpi?: KPIDaily
   daily_series: KPIDaily[]
@@ -196,6 +239,7 @@ export interface OverviewResponse {
   diagnostics: DiagnosticItem[]
   recommendations: RecommendationItem[]
   source_health: SourceHealthItem[]
+  telemetry?: TelemetrySummary | null
 }
 
 export type KpiDisplayRow = {

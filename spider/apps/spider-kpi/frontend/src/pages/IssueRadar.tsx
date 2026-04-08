@@ -3,7 +3,7 @@ import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { currency, frictionRankingScore } from '../lib/operatingModel'
-import { ActionObject, BlockedStateOutput, IssueClusterItem, IssueRadarResponse, KPIObject, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, IssueClusterItem, IssueRadarResponse, KPIObject, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 function ClusterList({ title, rows, mode = 'queue' }: { title: string; rows: IssueClusterItem[]; mode?: 'queue' | 'evidence' }) {
@@ -46,6 +46,7 @@ export function IssueRadar() {
     scaffolded_sources: [],
   })
   const [sourceHealth, setSourceHealth] = useState<SourceHealthItem[]>([])
+  const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -55,7 +56,12 @@ export function IssueRadar() {
       setLoading(true)
       setError(null)
       try {
-        const [payload, sourcePayload] = await Promise.all([api.issues(), api.sourceHealth()])
+        const [payload, sourcePayload, telemetryPayload] = await Promise.all([api.issues(), api.sourceHealth(), api.telemetrySummary()])
+         if (!cancelled) {
+           setData(payload)
+           setSourceHealth(sourcePayload)
++          setTelemetry(telemetryPayload)
+         }
         if (!cancelled) {
           setData(payload)
           setSourceHealth(sourcePayload)
@@ -90,12 +96,14 @@ export function IssueRadar() {
       .sort((a, b) => Number(b.__rankingScore || 0) - Number(a.__rankingScore || 0))
   }, [data.clusters, sourceHealth])
   const topThree = sortedClusters.slice(0, 3)
+  const telemetryLatest = telemetry?.latest || null
   const snapshotTimestamp = new Date().toISOString()
   const topIssueTruthState = truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy')
   const kpis: KPIObject[] = [
     buildTextKpi({ key: 'issue_radar_top_issue', currentValue: topThree[0]?.title || 'No priority cluster returned yet', targetValue: 'No high-risk issue', owner: topThree[0]?.owner_team || 'TBD', status: topThree[0] ? 'red' : 'yellow', truthState: topIssueTruthState, lastUpdated: snapshotTimestamp }),
     buildTextKpi({ key: 'issue_radar_fastest_rising', currentValue: data.fastest_rising[0]?.title || 'No rising cluster', targetValue: 'No rising cluster', owner: data.fastest_rising[0]?.owner_team || 'TBD', status: data.fastest_rising[0] ? 'yellow' : 'green', truthState: topIssueTruthState, lastUpdated: snapshotTimestamp }),
     buildTextKpi({ key: 'issue_radar_source_coverage', currentValue: data.live_sources.length ? data.live_sources.join(', ') : 'Coverage incomplete', targetValue: 'Broad live coverage', owner: 'Joseph', status: data.live_sources.length ? 'yellow' : 'red', truthState: data.live_sources.length ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp }),
+    buildTextKpi({ key: 'issue_radar_telemetry_reliability', currentValue: telemetryLatest ? `disconnect ${(telemetryLatest.disconnect_rate * 100).toFixed(1)}% / reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'No telemetry summary', targetValue: 'Low disconnects / high reliability', owner: 'Kyle', status: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'red' : telemetryLatest ? 'yellow' : 'red', truthState: telemetryLatest ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp }),
   ]
   const blockedStates: Record<string, BlockedStateOutput> = {
     issue_radar_source_coverage: buildBlockedState({
@@ -104,6 +112,13 @@ export function IssueRadar() {
       still_trustworthy: ['currently live sources', 'top visible issue clusters'],
       owner: 'Joseph',
       required_action_to_unblock: 'Increase live source coverage before treating queue gaps as true silence',
+    }),
+    issue_radar_telemetry_reliability: buildBlockedState({
+      decision_blocked: 'Whether product reliability issues are visible enough to escalate confidently from the queue',
+      missing_source: telemetryLatest ? 'more telemetry history / stronger cohorting' : 'telemetry summary feed',
+      still_trustworthy: ['freshdesk complaint clusters', 'live source health', 'telemetry-linked issue rows if present'],
+      owner: 'Kyle',
+      required_action_to_unblock: 'Keep telemetry summary live and add more cohort depth before treating product reliability silence as real.',
     }),
   }
   const actionItems: ActionObject[] = enforceActionContract([
@@ -143,6 +158,20 @@ export function IssueRadar() {
       snapshotTimestamp,
       baseRankingScore: 40,
       blockedState: blockedStates.issue_radar_source_coverage,
+    }),
+    actionFromKpi({
+      id: 'issue-radar-telemetry-watch',
+      triggerKpi: kpis[3],
+      triggerCondition: telemetryLatest ? 'telemetry reliability below target' : 'truth_state = blocked',
+      owner: 'Kyle',
+      coOwner: 'Joseph',
+      requiredAction: telemetryLatest ? 'Review telemetry-linked reliability clusters alongside Freshdesk to decide whether product/firmware escalation should move ahead of queue-only issues.' : 'Unblock telemetry summary before relying on complaint-only product issue ranking.',
+      priority: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'critical' : 'high',
+      evidence: ['aws_telemetry', 'issue radar', 'source health'],
+      dueDate: '24h',
+      snapshotTimestamp,
+      baseRankingScore: telemetryLatest ? Math.round((1 - telemetryLatest.session_reliability_score) * 100) : 55,
+      blockedState: blockedStates.issue_radar_telemetry_reliability,
     }),
   ])
 
@@ -185,6 +214,23 @@ export function IssueRadar() {
             <ClusterList title="Watchlist: Fastest Rising" rows={data.fastest_rising.slice(0, 3)} mode="queue" />
             <ClusterList title="Evidence: Highest Complaint Burden" rows={data.highest_burden.slice(0, 3)} mode="evidence" />
           </div>
+          <Card title="Telemetry Reliability Signal">
+            {telemetryLatest ? (
+              <div className={`list-item status-${telemetryLatest.session_reliability_score >= 0.8 ? 'good' : telemetryLatest.session_reliability_score >= 0.6 ? 'warn' : 'bad'}`}>
+                <div className="item-head">
+                  <strong>{kpis[3].key}</strong>
+                  <span className="badge badge-neutral">{kpis[3].truth_state}</span>
+                </div>
+                <p>Sessions {telemetryLatest.sessions} · disconnect {(telemetryLatest.disconnect_rate * 100).toFixed(1)}% · success {(telemetryLatest.cook_success_rate * 100).toFixed(1)}% · reliability {(telemetryLatest.session_reliability_score * 100).toFixed(0)}%</p>
+                <small><strong>owner:</strong> Kyle · <strong>next action:</strong> {actionItems.find((item) => item.id === 'issue-radar-telemetry-watch')?.required_action}</small>
+              </div>
+            ) : (
+              <div className="list-item status-bad">
+                <p>{blockedStates.issue_radar_telemetry_reliability.decision_blocked}</p>
+                <small><strong>missing source:</strong> {blockedStates.issue_radar_telemetry_reliability.missing_source}</small>
+              </div>
+            )}
+          </Card>
           <div className="two-col">
             <Card title="Issue Signals">
               <div className="stack-list">

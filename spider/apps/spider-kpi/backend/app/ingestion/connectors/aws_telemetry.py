@@ -12,13 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import TelemetryDaily, TelemetrySession
-from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+from app.services.source_health import finish_sync_run, refresh_source_health_alerts, start_sync_run, upsert_source_config
 
 settings = get_settings()
 TIMEOUT_SECONDS = 60
 SOURCE_NAME = "aws_telemetry"
 DEFAULT_SESSION_GAP_MINUTES = 20
 DEFAULT_LOOKBACK_HOURS = 24 * 30
+DEFAULT_MAX_SCAN_PAGES = 10
 
 
 def _configured() -> bool:
@@ -139,6 +140,10 @@ def _load_records_from_file() -> list[dict[str, Any]]:
     return rows
 
 
+def _csv_tokens(value: str | None) -> set[str]:
+    return {token.strip().lower() for token in (value or '').split(',') if token.strip()}
+
+
 def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
     import boto3
     from botocore.config import Config
@@ -154,7 +159,9 @@ def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     last_evaluated_key = None
-    while len(rows) < max_records:
+    pages = 0
+    max_pages = max(1, settings.aws_telemetry_max_scan_pages or DEFAULT_MAX_SCAN_PAGES)
+    while len(rows) < max_records and pages < max_pages:
         params = {
             'TableName': settings.aws_telemetry_dynamodb_table,
             'ProjectionExpression': projection,
@@ -165,6 +172,7 @@ def _load_records_from_dynamodb(max_records: int) -> list[dict[str, Any]]:
         response = client.scan(**params)
         rows.extend(_normalize_record(item) for item in response.get('Items', []))
         last_evaluated_key = response.get('LastEvaluatedKey')
+        pages += 1
         if not last_evaluated_key:
             break
     rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
@@ -184,14 +192,21 @@ def _reported_state(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_test_device(device_id: str | None, reported: dict[str, Any]) -> bool:
-    fields = [
-        device_id or '',
-        str(reported.get('model') or ''),
-        str(reported.get('mac') or ''),
-        str(reported.get('vers') or ''),
-    ]
-    blob = ' '.join(fields).lower()
-    return any(token in blob for token in ['test', 'dev', 'qa', 'stage', 'staging', 'demo'])
+    device_id_value = str(device_id or '').lower()
+    model_value = str(reported.get('model') or '').lower()
+    mac_value = str(reported.get('mac') or '').lower()
+    version_value = str(reported.get('vers') or '').lower()
+    prefixes = _csv_tokens(settings.aws_telemetry_test_device_prefixes)
+    test_models = _csv_tokens(settings.aws_telemetry_test_models)
+    explicit_ids = _csv_tokens(settings.aws_telemetry_test_device_ids)
+    if device_id_value and device_id_value in explicit_ids:
+        return True
+    if model_value and model_value in test_models:
+        return True
+    if any(device_id_value.startswith(prefix) or model_value.startswith(prefix) or mac_value.startswith(prefix) for prefix in prefixes):
+        return True
+    blob = ' '.join([device_id_value, model_value, mac_value, version_value])
+    return any(token in blob for token in prefixes)
 
 
 def _build_samples(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -249,6 +264,24 @@ def _time_to_stabilization(samples: list[dict[str, Any]], target_temp: float | N
     return None
 
 
+def _merge_adjacent_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not sessions:
+        return []
+    merged = [sessions[0]]
+    merge_gap_seconds = max(0, settings.aws_telemetry_merge_gap_seconds or 0)
+    for session in sessions[1:]:
+        prior = merged[-1]
+        if session['device_id'] == prior['device_id'] and prior['session_end'] and session['session_start']:
+            gap_seconds = int((session['session_start'] - prior['session_end']).total_seconds())
+            same_target = prior.get('target_temp') == session.get('target_temp')
+            if gap_seconds >= 0 and gap_seconds <= merge_gap_seconds and same_target:
+                combined_samples = (prior.get('_samples') or []) + (session.get('_samples') or [])
+                merged[-1] = _finalize_session(session['device_id'], combined_samples)
+                continue
+        merged.append(session)
+    return merged
+
+
 def _derive_sessions(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped = _build_samples(records)
     sessions: list[dict[str, Any]] = []
@@ -256,18 +289,22 @@ def _derive_sessions(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for device_id, samples in grouped.items():
         active: list[dict[str, Any]] = []
+        device_sessions: list[dict[str, Any]] = []
         for sample in samples:
             if not sample['engaged']:
                 if active:
-                    sessions.append(_finalize_session(device_id, active))
+                    device_sessions.append(_finalize_session(device_id, active))
                     active = []
                 continue
             if active and sample['sample_time'] - active[-1]['sample_time'] > gap:
-                sessions.append(_finalize_session(device_id, active))
+                device_sessions.append(_finalize_session(device_id, active))
                 active = []
             active.append(sample)
         if active:
-            sessions.append(_finalize_session(device_id, active))
+            device_sessions.append(_finalize_session(device_id, active))
+        for session in _merge_adjacent_sessions(device_sessions):
+            if session['session_duration_seconds'] >= max(0, settings.aws_telemetry_min_session_seconds or 0):
+                sessions.append(session)
     return sessions
 
 
@@ -320,6 +357,7 @@ def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str
         'session_reliability_score': reliability,
         'manual_override_rate': manual_override_rate,
         'cook_success': cook_success,
+        '_samples': samples,
         'raw_payload': {
             'sample_count': len(samples),
             'heating_share': round(heating_points / max(len(samples), 1), 4),
@@ -375,7 +413,8 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
         })
 
         for session in sessions:
-            db.add(TelemetrySession(**session))
+            db_session_payload = {key: value for key, value in session.items() if key != '_samples'}
+            db.add(TelemetrySession(**db_session_payload))
             business_date = session['session_start'].date()
             bucket = daily[business_date]
             bucket['sessions'] += 1
@@ -416,14 +455,17 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
             'records_loaded': len(records),
             'sessions_derived': len(sessions),
             'days_materialized': len(daily),
+            'max_records': max_records,
             'sample_source': 'dynamodb' if settings.aws_telemetry_dynamodb_table else 'url' if settings.aws_telemetry_url else 'local_path',
             'table': settings.aws_telemetry_dynamodb_table,
             'region': settings.aws_region,
         }
         finish_sync_run(db, run, status='success', records_processed=len(records))
+        refresh_source_health_alerts(db)
         db.commit()
         return {'ok': True, 'records_processed': len(records), 'sessions_derived': len(sessions), 'days_materialized': len(daily)}
     except Exception as exc:
         finish_sync_run(db, run, status='failed', error_message=str(exc))
+        refresh_source_health_alerts(db)
         db.commit()
         return {'ok': False, 'records_processed': 0, 'message': str(exc)}
