@@ -1,12 +1,15 @@
 import { Link, NavLink } from 'react-router-dom'
 import { ReactNode } from 'react'
+import spiderGrillsLogo from '../../spider_grills_black_nocircle.avif'
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">🕷️</div>
+          <div className="brand-mark">
+            <img src={spiderGrillsLogo} alt="Spider Grills" className="brand-mark-image" />
+          </div>
           <div>
             <h1>Spider KPI</h1>
             <p>Decision Engine</p>
