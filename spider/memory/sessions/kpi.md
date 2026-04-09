@@ -38,6 +38,8 @@
 - apps/spider-kpi/backend/app/schemas/overview.py
 - apps/spider-kpi/deploy/aws-streams/lambda_handler_standalone.py
 - apps/spider-kpi/deploy/aws-streams/README.md
+- apps/spider-kpi/deploy/aws-streams/EXPORT_BACKFILL_RUNBOOK.md
+- apps/spider-kpi/scripts/telemetry_export_audit.py
 
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
@@ -55,6 +57,8 @@
 - Use the new admin telemetry hooks in production to force bounded telemetry sync (`/api/admin/run-sync/aws_telemetry`) and inspect landed stream rows (`/api/admin/debug/telemetry-stream`) during rollout validation.
 - Apply the follow-up telemetry stream migration adding `updated_at`; production deployed code exposed that the original `telemetry_stream_events` migration created `created_at` but not `updated_at`, which causes live 500s against the SQLAlchemy model.
 - Switch the production Lambda path from direct-Postgres writes to authenticated API ingestion so AWS does not need direct connectivity into the droplet-local KPI Postgres instance.
+- Treat `device_id` as the correct unique-device proxy for telemetry history work; do not label device-proxy counts as users unless an account join is added.
+- Use DynamoDB export -> S3 -> offline processing as the recommended 12-month history recovery path for `sg_device_shadows`, because the live table is ~314M items / ~169 GB with only 4 RCUs and deep runtime scans hit throughput limits.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
@@ -137,6 +141,7 @@
 - 2026-04-08 telemetry ops hardening pass: exported `TelemetryStreamEvent` from `app.models` so stream-backed telemetry summary imports resolve correctly, and added admin endpoints for `aws_telemetry` sync plus `/api/admin/debug/telemetry-stream` so production rollout can be verified without direct DB shell access.
 - 2026-04-08 production telemetry 500 root cause: deployed code was live, but `telemetry_stream_events` schema drifted from the model because the original Alembic migration created `created_at` without `updated_at` even though the model inherits `TimestampMixin`; added a corrective migration so production can query stream rows without crashing.
 - 2026-04-08 AWS stream runtime root cause: live Lambda is failing with `Runtime.ImportModuleError: No module named app`, its env still contains a placeholder `KPI_DATABASE_URL`, and production Postgres is droplet-local, so direct Lambda->Postgres writes are not the right production path. Added a backend HTTP ingest endpoint and a standalone Lambda handler that forwards normalized stream records to the KPI API instead.
+- 2026-04-09 historical telemetry recommendation locked: `sg_device_shadows` deep live scans are not the primary truth-recovery path under current AWS limits (314M items, ~169 GB, 4 RCUs, throughput exceeded during wider backfill). Added export/offline runbook plus `telemetry_export_audit.py` to recover 12-month distinct `device_id` history via DynamoDB export -> S3 -> offline analysis.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.
