@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column('error_codes_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column('raw_payload', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
     )
 
 
