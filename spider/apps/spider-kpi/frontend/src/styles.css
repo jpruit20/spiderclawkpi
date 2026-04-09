@@ -585,6 +585,102 @@ a { color: inherit; }
   overflow: auto;
 }
 
+.telemetry-page {
+  gap: 20px;
+}
+
+.telemetry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.telemetry-status-bar {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  min-width: min(100%, 720px);
+}
+
+.telemetry-status-item {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(17, 27, 57, 0.78);
+  padding: 12px 14px;
+}
+
+.telemetry-status-item small,
+.telemetry-status-item strong {
+  display: block;
+}
+
+.telemetry-status-item small {
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.telemetry-kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.analytics-kpi {
+  display: grid;
+  gap: 10px;
+}
+
+.analytics-kpi-good { border-top: 3px solid rgba(57, 208, 143, 0.6); padding-top: 4px; }
+.analytics-kpi-warn { border-top: 3px solid rgba(255, 178, 87, 0.6); padding-top: 4px; }
+.analytics-kpi-bad { border-top: 3px solid rgba(255, 109, 122, 0.7); padding-top: 4px; }
+.analytics-kpi-muted { border-top: 3px solid rgba(159, 176, 212, 0.35); padding-top: 4px; }
+
+.metric-subcopy {
+  color: var(--muted);
+  margin: 0;
+}
+
+.metric-link-row {
+  margin-top: 6px;
+}
+
+.analysis-link {
+  color: var(--blue);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.analysis-link:hover {
+  text-decoration: underline;
+}
+
+.section-head-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.section-head-row p {
+  margin: 0;
+  color: var(--muted);
+  max-width: 860px;
+}
+
+.chart-wrap-short {
+  height: 280px;
+}
+
+.chart-wrap-medium {
+  height: 300px;
+}
+
+.archetype-card {
+  min-height: 180px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -635,4 +731,11 @@ th {
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .kpi-grid, .two-col, .three-col, .summary-grid, .compare-values, .canonical-actions-grid, .canonical-order-strip { grid-template-columns: 1fr; }
   .toolbar, .scope-banner, .trust-banner { flex-direction: column; align-items: flex-start; }
+  .telemetry-status-bar,
+  .telemetry-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 800px) {
+  .telemetry-status-bar,
+  .telemetry-kpi-grid { grid-template-columns: 1fr; }
 }

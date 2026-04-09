@@ -329,6 +329,7 @@ export interface TelemetryConnectivityBucket {
   sessions: number
   failure_rate: number
   stability_score: number | null
+  disconnect_rate?: number | null
 }
 
 export interface TelemetryIssueInsight {
@@ -342,9 +343,21 @@ export interface TelemetryIssueInsight {
 export interface TelemetryDerivedMetrics {
   stability_score?: number | null
   overshoot_rate?: number | null
+  oscillation_rate?: number | null
+  timeout_rate?: number | null
   time_to_stabilize_seconds?: number | null
+  time_to_stabilize_p50_seconds?: number | null
+  time_to_stabilize_p95_seconds?: number | null
   disconnect_proxy_rate?: number | null
   session_success_rate?: number | null
+  active_cooks_now?: number | null
+  cooks_started_24h?: number | null
+  cooks_completed_24h?: number | null
+  median_cook_duration_seconds?: number | null
+  p95_cook_duration_seconds?: number | null
+  median_rssi_now?: number | null
+  devices_reporting_last_5m?: number | null
+  devices_reporting_last_15m?: number | null
 }
 
 export interface TelemetryAnalytics {

@@ -334,9 +334,13 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
     probe_sessions = [session for session in derived_sessions if session.probe_count > 0]
     probe_failure_sessions = [session for session in derived_sessions if session.probe_failure]
     pit_probe_deltas = [session.avg_pit_probe_delta for session in derived_sessions if session.avg_pit_probe_delta is not None]
+    session_durations = [int((session.end_ts - session.start_ts).total_seconds()) for session in derived_sessions if session.start_ts and session.end_ts]
+    current_rssis = [float(event.rssi) for event in (latest_rows or latest_by_device.values()) if event.rssi is not None]
 
     dropoff_counter = Counter(session.dropoff_reason for session in derived_sessions if session.dropoff_reason != 'completed')
     archetype_counter = Counter(session.archetype for session in derived_sessions)
+    timeout_count = dropoff_counter.get('ended_before_completion', 0)
+    oscillation_count = archetype_counter.get('oscillation', 0)
 
     temp_curve_buckets: dict[int, list[float]] = defaultdict(list)
     for session in derived_sessions:
@@ -372,6 +376,7 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
             'sessions': len(rows),
             'failure_rate': round(sum(1 for row in rows if not row.session_success) / len(rows), 3),
             'stability_score': round(sum(row.stability_score for row in rows) / len(rows), 3) if rows else None,
+            'disconnect_rate': round(sum(1 for row in rows if row.disconnect_proxy) / len(rows), 3),
         })
 
     def _cohort_health(rows: list[DerivedSession], label: str) -> list[dict[str, Any]]:
@@ -571,9 +576,21 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
             'derived_metrics': {
                 'stability_score': round(sum(stable_scores) / len(stable_scores), 3) if stable_scores else None,
                 'overshoot_rate': _safe_div(overshoot_count, sessions_count or 1) if sessions_count else None,
+                'oscillation_rate': _safe_div(oscillation_count, sessions_count or 1) if sessions_count else None,
+                'timeout_rate': _safe_div(timeout_count, sessions_count or 1) if sessions_count else None,
                 'time_to_stabilize_seconds': int(sum(time_to_stabilize) / len(time_to_stabilize)) if time_to_stabilize else None,
+                'time_to_stabilize_p50_seconds': int(_percentile([float(value) for value in time_to_stabilize], 0.5) or 0) if time_to_stabilize else None,
+                'time_to_stabilize_p95_seconds': int(_percentile([float(value) for value in time_to_stabilize], 0.95) or 0) if time_to_stabilize else None,
                 'disconnect_proxy_rate': _safe_div(disconnect_count, sessions_count or 1) if sessions_count else None,
                 'session_success_rate': _safe_div(success_count, sessions_count or 1) if sessions_count else None,
+                'active_cooks_now': active_counts['15m'] or active_counts['5m'] or len(engaged_latest_devices),
+                'cooks_started_24h': sessions_count,
+                'cooks_completed_24h': completed_count,
+                'median_cook_duration_seconds': int(_percentile([float(value) for value in session_durations], 0.5) or 0) if session_durations else None,
+                'p95_cook_duration_seconds': int(_percentile([float(value) for value in session_durations], 0.95) or 0) if session_durations else None,
+                'median_rssi_now': _percentile(current_rssis, 0.5) if current_rssis else None,
+                'devices_reporting_last_5m': active_counts['5m'],
+                'devices_reporting_last_15m': active_counts['15m'],
             },
         },
     }

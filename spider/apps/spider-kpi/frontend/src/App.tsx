@@ -15,6 +15,7 @@ const FrictionMap = lazy(() => import('./pages/FrictionMap').then((m) => ({ defa
 const IssueRadar = lazy(() => import('./pages/IssueRadar').then((m) => ({ default: m.IssueRadar })))
 const RootCause = lazy(() => import('./pages/RootCause').then((m) => ({ default: m.RootCause })))
 const SystemHealthPage = lazy(() => import('./pages/SystemHealth').then((m) => ({ default: m.SystemHealthPage })))
+const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage').then((m) => ({ default: m.TelemetryAnalysisPage })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -48,6 +49,12 @@ export function App() {
         <Route path="/ux" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/diagnostics" element={withBoundary('Root Cause', <RootCause />)} />
         <Route path="/source-health" element={withBoundary('System Health', <SystemHealthPage />)} />
+        <Route path="/analysis/cook-failures" element={withBoundary('Cook Failures Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="/analysis/temp-curves" element={withBoundary('Temperature Curves Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="/analysis/session-clusters" element={withBoundary('Session Cluster Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="/analysis/rssi-impact" element={withBoundary('RSSI Impact Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="/analysis/probe-health" element={withBoundary('Probe Health Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="/analysis/firmware-model" element={withBoundary('Firmware Model Analysis', <TelemetryAnalysisPage />)} />
       </Routes>
     </Layout>
   )
