@@ -95,7 +95,10 @@ class Settings(BaseSettings):
     env: str = "development"
     debug: bool = False
     api_prefix: str = "/api"
-    database_url: str = "postgresql+psycopg://spider:spider@db:5432/spider_kpi"
+    database_url: str = Field(
+        default="postgresql+psycopg://spider:spider@db:5432/spider_kpi",
+        validation_alias=AliasChoices('DATABASE_URL', 'KPI_DATABASE_URL'),
+    )
     cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     app_password: str = "change-me"

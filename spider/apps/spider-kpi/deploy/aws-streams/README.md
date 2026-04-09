@@ -15,7 +15,7 @@
 - Alembic migration: `apps/spider-kpi/backend/alembic/versions/20260408_0006_telemetry_stream_events.py`
 
 ## Required Lambda env vars
-- `KPI_DATABASE_URL`
+- `KPI_DATABASE_URL` (supported explicitly by backend settings; `DATABASE_URL` also works)
 - `AWS_REGION`
 
 ## Required AWS activation steps
@@ -25,6 +25,7 @@
 4. Attach IAM permissions for DynamoDB Streams read + CloudWatch logs + VPC access if DB is private
 5. Create event source mapping from stream ARN to Lambda
 6. Run Alembic upgrade on KPI backend DB to create `telemetry_stream_events`
+7. Validate the Lambda can reach the KPI Postgres host/network path used by `KPI_DATABASE_URL` before enabling the mapping at scale
 
 ## Migration coexistence
 - Keep current bounded scan path active as fallback during migration

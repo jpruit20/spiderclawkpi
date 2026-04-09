@@ -29,6 +29,8 @@
 - apps/spider-kpi/frontend/src/components/Layout.tsx
 - apps/spider-kpi/frontend/src/App.tsx
 - apps/spider-kpi/frontend/src/styles.css
+- apps/spider-kpi/backend/app/core/config.py
+- apps/spider-kpi/deploy/aws-streams/README.md
 
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
@@ -42,6 +44,7 @@
 - Apply the formal telemetry Alembic migration on the KPI backend host before enabling live AWS/Venom-backed telemetry outputs.
 - Apply the new telemetry Alembic migration and deploy backend changes to the KPI API host.
 - Validate that live Lambda/DynamoDB stream events are landing in `telemetry_stream_events` and that `/api/telemetry/summary` now prefers fresh stream-backed telemetry when available.
+- Ensure the Lambda runtime DB URL variable matches backend config (`KPI_DATABASE_URL` or `DATABASE_URL`) and validate Lambda-to-Postgres network reachability before enabling the stream mapping broadly.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
@@ -120,6 +123,7 @@
 - 2026-04-08 telemetry decision-hardening pass: added `sample_size`, `sample_scope`, and `sample_reliability` to KPI contract objects for telemetry use; added `scope` and `confidence` to action objects; downgraded 1-device telemetry slice interpretation to “Limited sample — directional only”; suppressed low-sample telemetry actions from top-rank in Command Center while preserving them as early warning signals.
 - 2026-04-08 telemetry intelligence sharpening pass: upgraded Product / Engineering insights from generic observations to thresholded, testable hypotheses (RSSI threshold, temp-stability relationship, cohort uncertainty, session-stability wording), and replaced vague “investigate further” actions with exact slice/cohort queries while keeping all conclusions scoped to the observed bounded slice.
 - 2026-04-08 stream-summary wiring pass: `app/services/telemetry.py` now prefers recent `telemetry_stream_events` via `summarize_stream_telemetry()` before falling back to bounded-scan `telemetry_daily`/`telemetry_sessions`, so the dashboard can surface live stream-backed telemetry once the Lambda path is landing rows.
+- 2026-04-08 stream deploy hardening pass: found a deploy/config mismatch where the AWS stream docs/template used `KPI_DATABASE_URL` but backend settings only read `DATABASE_URL`; patched backend settings to accept both so the documented Lambda env will work during rollout.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.
