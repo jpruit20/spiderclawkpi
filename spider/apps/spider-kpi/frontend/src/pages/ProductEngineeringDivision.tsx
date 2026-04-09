@@ -1,26 +1,8 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  Area,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Legend,
-  Line,
-  ReferenceArea,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import { Card } from '../components/Card'
-import { DecisionStack } from '../components/DecisionStack'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { BlockedStateOutput, KPIObject, TelemetrySummary } from '../lib/types'
-import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject } from '../lib/divisionContract'
 
 function formatTelemetryFreshness(timestamp?: string | null) {
   if (!timestamp) return 'n/a'
@@ -43,63 +25,55 @@ function secondsToMinutes(value?: number | null, digits = 1) {
   return `${(value / 60).toFixed(digits)} min`
 }
 
-function statusTone(value: number | null | undefined, goodAt: number, warnAt: number, inverse = false) {
-  if (value === null || value === undefined || Number.isNaN(value)) return 'muted'
-  if (inverse) {
-    if (value <= goodAt) return 'good'
-    if (value <= warnAt) return 'warn'
-    return 'bad'
-  }
-  if (value >= goodAt) return 'good'
-  if (value >= warnAt) return 'warn'
-  return 'bad'
+function listText(items: Array<string | null | undefined>) {
+  const filtered = items.filter((item): item is string => Boolean(item && item.trim()))
+  return filtered.length ? filtered : ['No current row data returned.']
 }
 
 function drillLabel(path: string, label: string) {
   return <Link className="analysis-link" to={path}>{label} →</Link>
 }
 
-function formatDelta(current?: number | null, previous?: number | null, digits = 0, suffix = '%') {
-  if (current === null || current === undefined || previous === null || previous === undefined || Number.isNaN(current) || Number.isNaN(previous)) return 'Δ unavailable'
-  const diff = current - previous
-  const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→'
-  const scaled = suffix === '%' ? diff * 100 : diff
-  return `${arrow} ${Math.abs(scaled).toFixed(digits)}${suffix}`
+type TelemetryBoardCell = {
+  label: string
+  heading: string
+  bullets: string[]
+  purpose?: string
+  footer?: ReactNode
 }
 
-function MiniKpiCard({
-  title,
-  value,
-  subtext,
-  deltaText,
-  link,
-  tone,
-  kpi,
-}: {
+type TelemetryBoardRowData = {
+  id: string
   title: string
-  value: string
-  subtext: string
-  deltaText: string
-  link: ReactNode
-  tone: string
-  kpi: KPIObject
-}) {
+  section: string
+  cells: TelemetryBoardCell[]
+}
+
+function BoardCell({ cell }: { cell: TelemetryBoardCell }) {
   return (
-    <Card title={title}>
-      <div className={`analytics-kpi analytics-kpi-${tone}`}>
-        <div className="hero-metric">{value}</div>
-        <div className="inline-badges">
-          <span className={`badge ${tone === 'good' ? 'badge-good' : tone === 'warn' ? 'badge-warn' : tone === 'bad' ? 'badge-bad' : 'badge-neutral'}`}>{tone.toUpperCase()}</span>
-          <span className={`badge ${kpi.truth_state === 'blocked' ? 'badge-bad' : kpi.truth_state === 'estimated' || kpi.truth_state === 'proxy' ? 'badge-warn' : 'badge-good'}`}>{kpi.truth_state}</span>
-          <span className="badge badge-neutral">n {kpi.sample_size ?? '—'}</span>
-          <span className="badge badge-neutral">sample {kpi.sample_reliability || '—'}</span>
-        </div>
-        <p className="metric-subcopy">{subtext}</p>
-        <small className="metric-delta">{deltaText}</small>
-        <small>{kpi.sample_scope}</small>
-        <div className="metric-link-row">{link}</div>
+    <div className="telemetry-board-cell">
+      <div className="telemetry-board-cell-label">{cell.label}</div>
+      <div className="telemetry-board-cell-heading">{cell.heading}</div>
+      <ul className="telemetry-board-list">
+        {cell.bullets.map((bullet, index) => <li key={`${cell.label}-${index}`}>{bullet}</li>)}
+      </ul>
+      {cell.purpose ? <p className="telemetry-board-purpose">{cell.purpose}</p> : null}
+      {cell.footer ? <div className="telemetry-board-footer">{cell.footer}</div> : null}
+    </div>
+  )
+}
+
+function BoardRow({ row }: { row: TelemetryBoardRowData }) {
+  return (
+    <section className="telemetry-board-row">
+      <div className="telemetry-board-row-title">
+        <small>{row.id}</small>
+        <strong>{row.title}</strong>
       </div>
-    </Card>
+      <div className="telemetry-board-grid">
+        {row.cells.map((cell) => <BoardCell key={`${row.id}-${cell.label}`} cell={cell} />)}
+      </div>
+    </section>
   )
 }
 
@@ -126,140 +100,496 @@ export function ProductEngineeringDivision() {
     return () => { cancelled = true }
   }, [])
 
-  const snapshotTimestamp = new Date().toISOString()
   const latest = telemetry?.latest || null
   const slice = telemetry?.slice_snapshot || null
   const collection = telemetry?.collection_metadata || null
+  const confidence = telemetry?.confidence || null
   const analytics = telemetry?.analytics || null
   const derived = analytics?.derived_metrics || null
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
   const sampleSize = Math.max(slice?.sessions_derived || 0, collection?.distinct_devices_observed || 0, collection?.active_devices_last_15m || 0)
+  const sampleReliability: KPIObject['sample_reliability'] = !streamBacked ? 'low' : sampleSize < 5 ? 'low' : sampleSize < 20 ? 'medium' : 'high'
   const sampleScope = streamBacked
     ? `${collection?.distinct_devices_observed || 0} devices · ${slice?.sessions_derived || 0} derived sessions · ${collection?.records_loaded || 0} stream rows · latest ${formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)}`
-    : `${collection?.distinct_devices_observed || 0} devices from fallback telemetry — not safe for full product claims`
-  const sampleReliability: KPIObject['sample_reliability'] = !streamBacked ? 'low' : sampleSize < 5 ? 'low' : sampleSize < 20 ? 'medium' : 'high'
-  const analyticsTruthState: KPIObject['truth_state'] = streamBacked ? 'estimated' : 'blocked'
-  const summaryTruthState: KPIObject['truth_state'] = streamBacked ? 'proxy' : 'blocked'
-  const probeAvailable = Boolean((analytics?.probe_usage || []).some((row) => row.probe_count > 0) || analytics?.pit_probe_delta_avg !== null && analytics?.pit_probe_delta_avg !== undefined)
-  const previousDaily = telemetry?.daily && telemetry.daily.length > 1 ? telemetry.daily[telemetry.daily.length - 2] : null
-
-  const activeCooksKpi = buildNumericKpi({ key: 'active_cooks_now', currentValue: derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? null, targetValue: null, owner: 'Kyle', truthState: summaryTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability })
-  const throughputKpi = buildNumericKpi({ key: 'cook_throughput', currentValue: derived?.cooks_completed_24h ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability })
-  const reliabilityKpi = buildNumericKpi({ key: 'session_success_rate', currentValue: derived?.session_success_rate ?? latest?.session_reliability_score ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability, thresholds: { greenAtOrAbove: 0.8, yellowAtOrAbove: 0.65 } })
-  const controlKpi = buildNumericKpi({ key: 'control_quality', currentValue: derived?.stability_score ?? latest?.temp_stability_score ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability, thresholds: { greenAtOrAbove: 0.8, yellowAtOrAbove: 0.65 } })
-  const probeBlockedKpi = buildTextKpi({ key: 'probe_health_blocked', currentValue: probeAvailable ? 'Probe telemetry available in current slice.' : 'Probe telemetry is too thin or absent in current stream slice.', targetValue: 'Probe telemetry available', owner: 'Kyle', status: probeAvailable ? 'green' : 'red', truthState: probeAvailable ? analyticsTruthState : 'blocked', lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability })
+    : `${collection?.distinct_devices_observed || 0} devices from fallback telemetry — directional only`
+  const truthState = streamBacked ? 'observed_slice stream-backed' : 'fallback / blocked'
+  const analyticsTruthState = streamBacked ? 'estimated / proxy' : 'blocked / degraded'
+  const funnelRows = analytics?.cook_lifecycle_funnel || []
+  const dropoffRows = analytics?.dropoff_reasons || []
+  const curveRows = analytics?.pit_temperature_curve || []
+  const archetypes = analytics?.session_archetypes || []
+  const connectivityRows = analytics?.connectivity_buckets || []
+  const probeRows = analytics?.probe_usage || []
+  const issueRows = analytics?.issue_insights || []
+  const firmwareRows = telemetry?.firmware_health || []
+  const modelRows = telemetry?.grill_type_health || []
+  const probeAvailable = Boolean(probeRows.some((row) => row.probe_count > 0) || (analytics?.pit_probe_delta_avg !== null && analytics?.pit_probe_delta_avg !== undefined))
 
   const blockedStates: Record<string, BlockedStateOutput> = {
-    probe_health: buildBlockedState({
+    probe_health: {
       decision_blocked: 'Probe-health conclusions at fleet level',
       missing_source: 'consistent probe telemetry fields in the current raw stream payload',
       still_trustworthy: ['active cooks', 'cook lifecycle funnel', 'temperature control quality', 'connectivity correlation', 'firmware/model cohorts'],
       owner: 'Kyle',
       required_action_to_unblock: 'Confirm stable ingestion of probe telemetry fields across stream rows before turning probe analytics into a primary decision surface.',
-    }),
-    generalization: buildBlockedState({
+    },
+    generalization: {
       decision_blocked: 'Full-fleet product truth from this page',
       missing_source: streamBacked ? 'canonical cook ledger / historical backfill' : 'live stream-backed telemetry path',
       still_trustworthy: ['observed_slice product patterns', 'recent activity windows', 'cohort comparisons with explicit n', 'proxy-based issue detection'],
       owner: 'Joseph',
       required_action_to_unblock: streamBacked ? 'Keep this page scoped to observed slice telemetry until historical/canonical cook truth is added.' : 'Restore stream-backed telemetry before making product decisions from this page.',
-    }),
+    },
   }
 
-  const actions: RankedActionObject[] = useMemo(() => enforceActionContract([
-    actionFromKpi({
-      id: 'pe_review_failed_funnel_stage',
-      triggerKpi: reliabilityKpi,
-      triggerCondition: 'cook lifecycle funnel completion or success is weak',
-      owner: 'Kyle',
-      requiredAction: `Go to /analysis/cook-failures and isolate sessions in the ${analytics?.dropoff_reasons?.[0]?.reason || 'top drop-off'} bucket from the last observed slice; compare the failed stage against completed sessions and write the top failing condition before remediation.`,
-      priority: (derived?.session_success_rate || 0) < 0.6 ? 'critical' : 'high',
-      evidence: [`success=${pct(derived?.session_success_rate)}`, `completed_24h=${derived?.cooks_completed_24h ?? 0}`, `dropoff=${analytics?.dropoff_reasons?.[0]?.reason || 'n/a'}`],
-      dueDate: 'this week',
-      snapshotTimestamp,
-      baseRankingScore: Math.round((1 - (derived?.session_success_rate || 0)) * 100) + 35,
-      scope: 'observed_slice',
-      confidence: sampleReliability === 'low' ? 'low' : 'medium',
-    }),
-    actionFromKpi({
-      id: 'pe_review_connectivity_risk',
-      triggerKpi: controlKpi,
-      triggerCondition: 'low RSSI correlates with lower stability or higher failure',
-      owner: 'Kyle',
-      requiredAction: `Go to /analysis/rssi-impact and compare sessions in ${highestRiskConnectivity?.bucket || 'the weakest RSSI bucket'} against stronger-signal buckets over the observed slice; confirm whether failure and disconnect proxies stay elevated before assigning root cause.`,
-      priority: ((analytics?.connectivity_buckets || []).some((row) => (row.failure_rate || 0) >= 0.35) ? 'high' : 'medium'),
-      evidence: (analytics?.connectivity_buckets || []).slice(0, 2).map((row) => `${row.bucket}: fail ${pct(row.failure_rate)} · stability ${pct(row.stability_score)}`),
-      dueDate: 'this week',
-      snapshotTimestamp,
-      baseRankingScore: Math.round(((analytics?.connectivity_buckets || [])[0]?.failure_rate || 0) * 100) + 25,
-      scope: 'observed_slice',
-      confidence: sampleReliability === 'low' ? 'low' : 'medium',
-    }),
-    actionFromKpi({
-      id: 'pe_review_worst_cohort',
-      triggerKpi: throughputKpi,
-      triggerCondition: 'firmware/model cohorts show concentrated degradation',
-      owner: 'Kyle',
-      requiredAction: `Go to /analysis/firmware-model and compare firmware ${worstFirmware?.key || 'n/a'} and model ${worstModel?.key || 'n/a'} against healthier cohorts; confirm whether failure stays concentrated after accounting for RSSI and stability.`,
-      priority: ((telemetry?.firmware_health?.[0]?.failure_rate || 0) >= 0.25 || (telemetry?.grill_type_health?.[0]?.failure_rate || 0) >= 0.25) ? 'high' : 'medium',
-      evidence: [`fw=${telemetry?.firmware_health?.[0]?.key || 'n/a'} ${pct(telemetry?.firmware_health?.[0]?.failure_rate)}`, `model=${telemetry?.grill_type_health?.[0]?.key || 'n/a'} ${pct(telemetry?.grill_type_health?.[0]?.failure_rate)}`],
-      dueDate: 'this week',
-      snapshotTimestamp,
-      baseRankingScore: Math.round(((telemetry?.firmware_health?.[0]?.failure_rate || 0) + (telemetry?.grill_type_health?.[0]?.failure_rate || 0)) * 50) + 20,
-      scope: 'observed_slice',
-      confidence: sampleReliability === 'low' ? 'low' : 'medium',
-    }),
-    actionFromKpi({
-      id: 'pe_probe_blocked',
-      triggerKpi: probeBlockedKpi,
-      triggerCondition: 'probe telemetry is thin or missing',
-      owner: 'Kyle',
-      requiredAction: probeAvailable ? 'Probe telemetry is present; use /analysis/probe-health for deeper review.' : 'Keep probe-related conclusions investigative only and unblock by confirming stable probe-field coverage in stream payloads.',
-      priority: probeAvailable ? 'low' : 'medium',
-      evidence: [probeAvailable ? `probe_failure=${pct(analytics?.probe_failure_rate)}` : 'probe telemetry unavailable in current slice'],
-      dueDate: 'this week',
-      snapshotTimestamp,
-      baseRankingScore: probeAvailable ? 10 : 55,
-      blockedState: probeAvailable ? undefined : blockedStates.probe_health,
-      scope: 'observed_slice',
-      confidence: probeAvailable && sampleReliability !== 'low' ? 'medium' : 'low',
-    }),
-  ]), [reliabilityKpi, controlKpi, throughputKpi, probeBlockedKpi, analytics, derived, snapshotTimestamp, sampleReliability, telemetry, probeAvailable, blockedStates, highestRiskConnectivity, worstFirmware, worstModel])
+  const rows = useMemo<TelemetryBoardRowData[]>(() => {
+    const row01: TelemetryBoardRowData = {
+      id: 'Row 01',
+      title: 'Top KPI Strip',
+      section: 'Core overview',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Top KPI Strip',
+          bullets: ['Active Cooks', 'Cook Throughput', 'Reliability', 'Control Quality'],
+          purpose: 'Fast read on current usage, throughput, reliability, and control behavior.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Primary sources and fields',
+          bullets: listText([
+            'telemetry summary.latest',
+            'telemetry summary.slice_snapshot',
+            'telemetry_sessions',
+            'telemetry_daily',
+            'telemetry_stream_events (indirect)',
+            `active_cooks_now = ${derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 'n/a'}`,
+            `devices_reporting_last_5m = ${derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 'n/a'}`,
+            `median_rssi_now = ${derived?.median_rssi_now ?? 'n/a'}`,
+            `cooks_started_24h = ${derived?.cooks_started_24h ?? slice?.sessions_derived ?? 'n/a'}`,
+            `cooks_completed_24h = ${derived?.cooks_completed_24h ?? 'n/a'}`,
+            `session_success_rate = ${pct(derived?.session_success_rate ?? latest?.session_reliability_score)}`,
+            `disconnect_proxy_rate = ${pct(derived?.disconnect_proxy_rate ?? latest?.disconnect_rate, 1)}`,
+            `stability_score = ${pct(derived?.stability_score ?? latest?.temp_stability_score)}`,
+            `overshoot_rate = ${pct(derived?.overshoot_rate, 1)}`,
+            `time_to_stabilize_p50_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)}`,
+            `time_to_stabilize_p95_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`,
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed KPIs',
+          bullets: listText([
+            `active_cooks_now = ${derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0}`,
+            `devices_reporting_last_5m = ${derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0}`,
+            `cooks_started_24h = ${derived?.cooks_started_24h ?? slice?.sessions_derived ?? 0}`,
+            `cooks_completed_24h = ${derived?.cooks_completed_24h ?? 0}`,
+            `median_cook_duration_seconds = ${secondsToMinutes(derived?.median_cook_duration_seconds)}`,
+            `p95_cook_duration_seconds = ${secondsToMinutes(derived?.p95_cook_duration_seconds)}`,
+            `session_success_rate = ${pct(derived?.session_success_rate ?? latest?.session_reliability_score)}`,
+            `disconnect_proxy_rate = ${pct(derived?.disconnect_proxy_rate, 1)}`,
+            `timeout_rate = ${pct(derived?.timeout_rate, 1)}`,
+            `probe_error_rate = ${pct(analytics?.probe_failure_rate, 1)}`,
+            `stability_score = ${pct(derived?.stability_score)}`,
+            `overshoot_rate = ${pct(derived?.overshoot_rate, 1)}`,
+            `time_to_stabilize_p50_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)}`,
+            `time_to_stabilize_p95_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`,
+          ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            `truth_state = ${analyticsTruthState}`,
+            'proxy for live activity / coverage',
+            'estimated for session-derived reliability/control metrics',
+            `sample_size = ${sampleSize}`,
+            `sample_scope = ${sampleScope}`,
+            `sample_reliability = ${sampleReliability}`,
+            'never show naked percentages without n',
+            sampleReliability === 'low' ? 'thin sample: directional only' : 'sample strength acceptable for observed-slice decision support',
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Drill-downs and decisions',
+          bullets: ['View cooks', 'View funnel', 'View issues', 'View curves', 'Is usage healthy?', 'Is reliability degrading?', 'Is control quality weak?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/rssi-impact', 'View cooks')}{drillLabel('/analysis/cook-failures', 'View funnel')}{drillLabel('/analysis/temp-curves', 'View curves')}</div>,
+        },
+      ],
+    }
 
-  const funnelRows = (analytics?.cook_lifecycle_funnel || []).map((row, index, arr) => ({
-    ...row,
-    label: row.step.replace('_', ' '),
-    dropoff_rate: index === 0 ? 0 : Math.max(0, 1 - row.sessions / Math.max(arr[index - 1]?.sessions || 1, 1)),
-  }))
-  const curveRows = analytics?.pit_temperature_curve || []
-  const archetypes = analytics?.session_archetypes || []
-  const connectivityRows = analytics?.connectivity_buckets || []
-  const firmwareRows = telemetry?.firmware_health || []
-  const modelRows = telemetry?.grill_type_health || []
-  const issueRows = analytics?.issue_insights || []
-  const activeTrendRows = [
-    { label: '5m', value: collection?.active_devices_last_5m || 0 },
-    { label: '15m', value: collection?.active_devices_last_15m || 0 },
-    { label: '60m', value: collection?.active_devices_last_60m || 0 },
-    { label: '24h', value: collection?.active_devices_last_24h || 0 },
+    const row02: TelemetryBoardRowData = {
+      id: 'Row 02',
+      title: 'Cook Lifecycle Funnel',
+      section: 'Core overview',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Cook Lifecycle Funnel',
+          bullets: ['Started', 'Reached Target', 'Stable', 'Completed'],
+          purpose: 'Show where cooks fail and where drop-off occurs.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and derivation logic',
+          bullets: listText([
+            'telemetry_sessions',
+            'telemetry summary.latest',
+            'session state derivation logic',
+            'engaged flags',
+            'timestamps',
+            'stability logic',
+            'completion logic',
+            'proxy failure reasons',
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Funnel metrics',
+          bullets: listText([
+            ...funnelRows.map((row) => `${row.step.replace(/_/g, ' ')} = ${row.sessions} (${pct(row.rate)})`),
+            ...dropoffRows.slice(0, 4).map((row) => `${row.reason.replace(/_/g, ' ')} dropoff = ${row.sessions} (${pct(row.rate)})`),
+          ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            'estimated for funnel stages',
+            'proxy for inferred dropoff reasons',
+            `show n at each stage = ${sampleSize}`,
+            dropoffRows.length ? 'reason labels are heuristic and should stay clearly labeled' : 'no strong dropoff reason currently returned',
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: ['Where do cooks fail?', 'What failure mode is growing?', 'Should Kyle investigate control, connectivity, or probe behavior?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/cook-failures', 'Open cook failures')}</div>,
+        },
+      ],
+    }
+
+    const row03: TelemetryBoardRowData = {
+      id: 'Row 03',
+      title: 'Temperature Performance',
+      section: 'Behavioral analytics',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Temperature Performance',
+          bullets: ['Pit vs target curve', 'p50 / p90 deviation band', 'Stability / overshoot summaries'],
+          purpose: 'Show whether control quality and stabilization are healthy.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'analytics.pit_temperature_curve',
+            'analytics.derived_metrics',
+            `curve points = ${curveRows.length}`,
+            `stability_score = ${pct(derived?.stability_score)}`,
+            `overshoot_rate = ${pct(derived?.overshoot_rate, 1)}`,
+            `oscillation_rate = ${pct(derived?.oscillation_rate, 1)}`,
+            `time_to_stabilize_p50_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)}`,
+            `time_to_stabilize_p95_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`,
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: listText([
+            `temp_stability_score = ${pct(derived?.stability_score)}`,
+            `overshoot_rate = ${pct(derived?.overshoot_rate, 1)}`,
+            `oscillation_rate = ${pct(derived?.oscillation_rate, 1)}`,
+            `time_to_stabilize_p50_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)}`,
+            `time_to_stabilize_p95_seconds = ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`,
+            curveRows[0] ? `first curve bucket = minute ${curveRows[0].minute_bucket} / p50 ${curveRows[0].p50_temp_delta ?? '—'}°` : null,
+          ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            `truth_state = ${analyticsTruthState}`,
+            `sample_scope = ${sampleScope}`,
+            sampleReliability === 'low' ? 'thin sample: directional only' : 'safe for observed-slice control-quality review',
+            'temperature deltas are slice-based summaries, not full-fleet truth',
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: ['Is control unstable?', 'Is overshoot worsening?', 'Should temperature behavior drive product or firmware investigation?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/temp-curves', 'Open temp curves')}</div>,
+        },
+      ],
+    }
+
+    const row04: TelemetryBoardRowData = {
+      id: 'Row 04',
+      title: 'Session Patterns',
+      section: 'Behavioral analytics',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Session Patterns',
+          bullets: ['Stable', 'Dropout', 'Interrupted', 'Heuristic archetypes'],
+          purpose: 'Show the dominant observed session shapes in the current telemetry slice.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'analytics.session_archetypes',
+            `archetype rows = ${archetypes.length}`,
+            ...archetypes.map((row) => `${row.archetype} sessions = ${row.sessions}`),
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: listText(archetypes.map((row) => `${row.archetype} = ${pct(row.rate)} (n=${row.sessions})`)),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            'estimated heuristic clustering only',
+            'not canonical session taxonomy',
+            `sample_reliability = ${sampleReliability}`,
+            `sample_size = ${sampleSize}`,
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: ['Which session shape is dominating?', 'Are unstable archetypes growing?', 'Should cluster behavior reshape deeper analysis priority?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/session-clusters', 'Open session clusters')}</div>,
+        },
+      ],
+    }
+
+    const row05: TelemetryBoardRowData = {
+      id: 'Row 05',
+      title: 'Connectivity / Environment',
+      section: 'Behavioral analytics',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Connectivity / Environment',
+          bullets: ['RSSI buckets', 'Failure correlation', 'Disconnect concentration'],
+          purpose: 'Show whether weak-signal cohorts align with worse outcomes.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'analytics.connectivity_buckets',
+            'slice_snapshot.low_rssi_session_rate',
+            ...connectivityRows.slice(0, 5).map((row) => `${row.bucket} sessions = ${row.sessions}`),
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: listText([
+            `low_rssi_session_rate = ${pct(slice?.low_rssi_session_rate)}`,
+            ...connectivityRows.slice(0, 5).map((row) => `${row.bucket}: fail ${pct(row.failure_rate)} · disconnect ${pct(row.disconnect_rate, 1)} · stability ${pct(row.stability_score)}`),
+          ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            'correlation / hypothesis, not causation',
+            'bucket analysis is observed-slice only',
+            `sample_reliability = ${sampleReliability}`,
+            'keep weak-signal claims labeled as correlation until corroborated',
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: ['Is weak RSSI a likely driver?', 'Which bucket is highest risk?', 'Should connectivity investigation jump priority?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/rssi-impact', 'Open RSSI impact')}</div>,
+        },
+      ],
+    }
+
+    const row06: TelemetryBoardRowData = {
+      id: 'Row 06',
+      title: 'Probe Analytics',
+      section: 'Segment analysis',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Probe Analytics',
+          bullets: ['Probe usage mix', 'Probe failure rate', 'Pit vs probe delta'],
+          purpose: 'Surface probe-related insights only where telemetry supports them.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'analytics.probe_usage',
+            `probe_failure_rate = ${pct(analytics?.probe_failure_rate, 1)}`,
+            `pit_probe_delta_avg = ${analytics?.pit_probe_delta_avg ?? 'n/a'}°`,
+            ...probeRows.map((row) => `${row.probe_count} probes = ${row.sessions} sessions`),
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: probeAvailable
+            ? listText([
+                `probe_failure_rate = ${pct(analytics?.probe_failure_rate, 1)}`,
+                `pit_probe_delta_avg = ${analytics?.pit_probe_delta_avg ?? 'n/a'}°`,
+                ...probeRows.map((row) => `${row.probe_count} probes = ${pct(row.rate)} (n=${row.sessions})`),
+              ])
+            : listText([
+                blockedStates.probe_health.decision_blocked,
+                blockedStates.probe_health.missing_source,
+              ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: probeAvailable
+            ? listText([
+                `truth_state = ${analyticsTruthState}`,
+                `sample_reliability = ${sampleReliability}`,
+                'probe analytics remain observed-slice only',
+              ])
+            : listText([
+                'truth_state = blocked',
+                `owner = ${blockedStates.probe_health.owner}`,
+                `still trustworthy = ${blockedStates.probe_health.still_trustworthy.join(', ')}`,
+              ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: probeAvailable
+            ? ['Is probe failure rising?', 'Is probe count mix changing?', 'Does probe behavior deserve deeper review?']
+            : ['Do not generalize probe conclusions yet', 'Unblock probe telemetry coverage first'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/probe-health', 'Open probe health')}</div>,
+        },
+      ],
+    }
+
+    const row07: TelemetryBoardRowData = {
+      id: 'Row 07',
+      title: 'Cohort Comparison',
+      section: 'Segment analysis',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Cohort Comparison',
+          bullets: ['Firmware cohorts', 'Model cohorts', 'Explicit n and severity'],
+          purpose: 'Show where degradation is concentrated by firmware or model.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'telemetry.firmware_health',
+            'telemetry.grill_type_health',
+            ...firmwareRows.slice(0, 4).map((row) => `firmware ${row.key} sessions = ${row.sessions}`),
+            ...modelRows.slice(0, 4).map((row) => `model ${row.key} sessions = ${row.sessions}`),
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: listText([
+            ...firmwareRows.slice(0, 4).map((row) => `firmware ${row.key}: fail ${pct(row.failure_rate)} · disconnect ${pct(row.disconnect_rate)} · health ${pct(row.health_score)}`),
+            ...modelRows.slice(0, 4).map((row) => `model ${row.key}: fail ${pct(row.failure_rate)} · disconnect ${pct(row.disconnect_rate)} · health ${pct(row.health_score)}`),
+          ]),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            `truth_state = ${analyticsTruthState}`,
+            'cohort cuts require explicit n and low-n labeling',
+            'observed_slice only — not full installed-base truth',
+            blockedStates.generalization.decision_blocked,
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: ['Which firmware is worst?', 'Which model is drifting?', 'Should cohort degradation trigger product or firmware action?'],
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/firmware-model', 'Open firmware/model analysis')}</div>,
+        },
+      ],
+    }
+
+    const row08: TelemetryBoardRowData = {
+      id: 'Row 08',
+      title: 'Automated Product Insights',
+      section: 'Decision layer',
+      cells: [
+        {
+          label: 'UI Component',
+          heading: 'Automated Product Insights',
+          bullets: ['Prioritized issue cards', 'Confidence-aware ranking', 'Recommended next action'],
+          purpose: 'Translate telemetry evidence into a decision-ready product insight layer.',
+        },
+        {
+          label: 'Data Source / Backend Field',
+          heading: 'Sources and fields',
+          bullets: listText([
+            'analytics.issue_insights',
+            ...issueRows.slice(0, 5).map((row) => `${row.issue} · cohort ${row.cohort} · confidence ${row.confidence}`),
+          ]),
+        },
+        {
+          label: 'KPI / Derived Metric',
+          heading: 'Displayed metrics',
+          bullets: listText(issueRows.slice(0, 5).map((row) => `${row.issue}: ${row.signal}`)),
+        },
+        {
+          label: 'Truth / Sample Context',
+          heading: 'Truth framing',
+          bullets: listText([
+            'low-confidence insights stay investigative',
+            `sample_reliability = ${sampleReliability}`,
+            `session_derivation = ${confidence?.session_derivation || 'unknown'}`,
+            `global_completeness = ${confidence?.global_completeness || 'unknown'}`,
+          ]),
+        },
+        {
+          label: 'Action / Drill-down',
+          heading: 'Primary decisions',
+          bullets: listText(issueRows.slice(0, 4).map((row) => row.action)),
+          footer: <div className="telemetry-board-links">{drillLabel('/analysis/cook-failures', 'Failure analysis')}{drillLabel('/analysis/temp-curves', 'Curve analysis')}{drillLabel('/analysis/rssi-impact', 'RSSI analysis')}</div>,
+        },
+      ],
+    }
+
+    return [row01, row02, row03, row04, row05, row06, row07, row08]
+  }, [analytics, analyticsTruthState, blockedStates.generalization.decision_blocked, blockedStates.probe_health, collection?.active_devices_last_15m, collection?.active_devices_last_5m, confidence?.global_completeness, confidence?.session_derivation, curveRows, derived, dropoffRows, funnelRows, issueRows, latest?.disconnect_rate, latest?.session_reliability_score, latest?.temp_stability_score, modelRows, probeAvailable, probeRows, sampleReliability, sampleScope, sampleSize, slice?.sessions_derived, streamBacked, telemetry?.grill_type_health, telemetry?.firmware_health])
+
+  const groupedRows = [
+    { title: 'Core overview', rows: rows.filter((row) => row.section === 'Core overview') },
+    { title: 'Behavioral analytics', rows: rows.filter((row) => row.section === 'Behavioral analytics') },
+    { title: 'Segment analysis', rows: rows.filter((row) => row.section === 'Segment analysis') },
+    { title: 'Decision layer', rows: rows.filter((row) => row.section === 'Decision layer') },
   ]
-  const probeRows = analytics?.probe_usage || []
-  const worstInsight = issueRows[0]
-  const largestDropoff = funnelRows.slice(1).sort((a, b) => (b.dropoff_rate || 0) - (a.dropoff_rate || 0))[0] || null
-  const worstFirmware = [...firmwareRows].sort((a, b) => (b.failure_rate - a.failure_rate) || (a.health_score - b.health_score))[0] || null
-  const worstModel = [...modelRows].sort((a, b) => (b.failure_rate - a.failure_rate) || (a.health_score - b.health_score))[0] || null
-  const highestRiskConnectivity = [...connectivityRows].sort((a, b) => ((b.failure_rate + (b.disconnect_rate || 0)) - (a.failure_rate + (a.disconnect_rate || 0))))[0] || null
 
   return (
-    <div className="page-grid telemetry-page">
+    <div className="page-grid telemetry-page telemetry-board-page">
       <div className="page-head telemetry-head">
         <div>
           <h2>Product / Engineering</h2>
-          <p>Telemetry-backed product analytics for Venom usage, cook failure, control quality, and cohort degradation. Stream-backed where available. No unsupported full-fleet claims.</p>
+          <p>Telemetry-backed product analytics restructured into an 8-row operating board: each row maps the UI component, backend source, KPI layer, truth framing, and drill-down action.</p>
           <small className="page-meta">API base: {getApiBase()}</small>
         </div>
         <div className="telemetry-status-bar">
-          <div className="telemetry-status-item"><small>truth</small><strong>{streamBacked ? 'stream-backed observed slice' : 'fallback / blocked'}</strong></div>
+          <div className="telemetry-status-item"><small>truth</small><strong>{truthState}</strong></div>
           <div className="telemetry-status-item"><small>sample</small><strong>n {sampleSize} · {sampleReliability}</strong></div>
           <div className="telemetry-status-item"><small>scope</small><strong>{streamBacked ? 'observed_slice' : 'degraded'}</strong></div>
           <div className="telemetry-status-item"><small>last updated</small><strong>{formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)}</strong></div>
@@ -271,237 +601,36 @@ export function ProductEngineeringDivision() {
 
       {!loading && !error ? (
         <>
-          <div className="four-col telemetry-kpi-grid">
-            <MiniKpiCard title="Active Cooks" value={`${derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0} now`} subtext={`5m devices ${derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0} · median RSSI ${derived?.median_rssi_now ?? '—'} dBm`} deltaText={formatDelta((derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? null), previousDaily?.sessions ?? null, 0, '')} link={drillLabel('/analysis/rssi-impact', 'View cooks')} tone={statusTone(derived?.active_cooks_now, 20, 8)} kpi={activeCooksKpi} />
-            <MiniKpiCard title="Cook Throughput" value={`${derived?.cooks_started_24h ?? slice?.sessions_derived ?? 0} started / ${derived?.cooks_completed_24h ?? 0} completed`} subtext={`median ${secondsToMinutes(derived?.median_cook_duration_seconds)} · p95 ${secondsToMinutes(derived?.p95_cook_duration_seconds)}`} deltaText={formatDelta(((derived?.cooks_completed_24h || 0) / Math.max(derived?.cooks_started_24h || 1, 1)), previousDaily?.cook_success_rate ?? null)} link={drillLabel('/analysis/cook-failures', 'View funnel')} tone={statusTone((derived?.cooks_completed_24h || 0) / Math.max(derived?.cooks_started_24h || 1, 1), 0.7, 0.45)} kpi={throughputKpi} />
-            <MiniKpiCard title="Reliability" value={`${pct(derived?.session_success_rate)} success`} subtext={`disconnect ${pct(derived?.disconnect_proxy_rate)} · timeout ${pct(derived?.timeout_rate)} · probe error ${pct(analytics?.probe_failure_rate)}`} deltaText={formatDelta(derived?.session_success_rate ?? null, previousDaily?.session_reliability_score ?? null)} link={drillLabel('/analysis/cook-failures', 'View issues')} tone={statusTone(derived?.session_success_rate, 0.8, 0.65)} kpi={reliabilityKpi} />
-            <MiniKpiCard title="Control Quality" value={`${pct(derived?.stability_score)} stable`} subtext={`overshoot ${pct(derived?.overshoot_rate)} · p50 ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)} · p95 ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`} deltaText={formatDelta(derived?.stability_score ?? null, previousDaily?.temp_stability_score ?? null)} link={drillLabel('/analysis/temp-curves', 'View curves')} tone={statusTone(derived?.stability_score, 0.8, 0.65)} kpi={controlKpi} />
-          </div>
-
-          <DecisionStack actions={actions} />
-
-          <Card title="Cook lifecycle funnel">
-            <div className="section-head-row">
-              <p>Started → reached target → stable → completed. Stage derivation is estimated from stream-derived sessions; drop-off reasons are proxy-derived where noted.</p>
-              {drillLabel('/analysis/cook-failures', 'Open cook failures')}
-            </div>
-            {largestDropoff ? (
-              <div className="largest-dropoff-banner status-bad">
-                <strong>Largest break: {largestDropoff.label}</strong>
-                <span>{pct(largestDropoff.dropoff_rate)} drop-off from prior stage · {largestDropoff.sessions} sessions remain</span>
+          <Card title="Board framing">
+            <div className="telemetry-board-summary">
+              <div className="list-item status-neutral">
+                <strong>Layout rule</strong>
+                <p>Each telemetry section is now one full-width row with 5 fixed columns: UI Component, Data Source / Backend Field, KPI / Derived Metric, Truth / Sample Context, and Action / Drill-down.</p>
               </div>
-            ) : null}
-            <div className="two-col-equal funnel-dominant-grid">
-              <div className="chart-wrap chart-wrap-funnel-dominant">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={funnelRows} layout="vertical" margin={{ left: 20, right: 20, top: 10, bottom: 10 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                    <XAxis type="number" stroke="#9fb0d4" />
-                    <YAxis type="category" dataKey="label" stroke="#9fb0d4" width={120} />
-                    <Tooltip />
-                    <Bar dataKey="sessions" radius={[0, 8, 8, 0]}>
-                      {funnelRows.map((row, idx) => <Cell key={row.step} fill={largestDropoff?.step === row.step ? '#ff6d7a' : (['#6ea8ff', '#55c2ff', '#ffb257', '#39d08f'][idx] || '#6ea8ff')} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="list-item status-muted">
+                <strong>Sample scope</strong>
+                <p>{sampleScope}</p>
               </div>
-              <div className="stack-list compact">
-                {funnelRows.map((row) => (
-                  <div className={`list-item status-${row.rate >= 0.75 ? 'good' : row.rate >= 0.5 ? 'warn' : 'bad'}`} key={row.step}>
-                    <div className="item-head"><strong>{row.label}</strong><span>{row.sessions}</span></div>
-                    <p>{pct(row.rate)} of started sessions. {row.dropoff_rate ? `Stage drop-off ${pct(row.dropoff_rate)}.` : 'Entry stage.'}</p>
-                  </div>
-                ))}
-                <div className="list-item status-muted"><strong>Top drop-off reasons</strong><p>{(analytics?.dropoff_reasons || []).map((row) => `${row.reason.replace(/_/g, ' ')} ${pct(row.rate)}`).join(' · ') || 'No material drop-off reason returned.'}</p></div>
+              <div className={`list-item status-${streamBacked ? 'warn' : 'bad'}`}>
+                <strong>Guardrail</strong>
+                <p>{blockedStates.generalization.decision_blocked}</p>
+                <small><strong>missing source:</strong> {blockedStates.generalization.missing_source}</small>
+                <small><strong>next action:</strong> {blockedStates.generalization.required_action_to_unblock}</small>
               </div>
             </div>
           </Card>
 
-          <Card title="Temperature Performance">
-            <div className="section-head-row">
-              <p>Pit temperature vs target, percentile band, stabilization timing, and overshoot/oscillation metrics. Aggregated over the current observed stream slice.</p>
-              {drillLabel('/analysis/temp-curves', 'Open temp curves')}
-            </div>
-            <div className="two-col">
-              <div>
-                <div className="chart-wrap">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={curveRows}>
-                      <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="minute_bucket" stroke="#9fb0d4" label={{ value: 'minutes', position: 'insideBottom', fill: '#9fb0d4' }} />
-                      <YAxis stroke="#9fb0d4" label={{ value: 'pit - target °F', angle: -90, position: 'insideLeft', fill: '#9fb0d4' }} />
-                      <Tooltip />
-                      <Legend />
-                      <ReferenceArea y1={-15} y2={15} fill="rgba(57,208,143,0.08)" ifOverflow="extendDomain" />
-                      <ReferenceLine y={15} stroke="#ff6d7a" strokeDasharray="4 4" label={{ value: 'instability zone', fill: '#ff6d7a', position: 'insideTopRight' }} />
-                      <ReferenceLine y={-15} stroke="#ff6d7a" strokeDasharray="4 4" />
-                      <Area type="monotone" dataKey="p90_temp_delta" stroke="#ffb257" fill="rgba(255,178,87,0.22)" name="p90 Δ" />
-                      <Line type="monotone" dataKey="p50_temp_delta" stroke="#6ea8ff" strokeWidth={3} dot={false} name="p50 Δ" />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-                <small className="page-meta">Sample {sampleSize} · {sampleScope}. If thin, treat this as directional only.</small>
+          {groupedRows.map((group) => (
+            <div className="telemetry-board-section" key={group.title}>
+              <div className="telemetry-board-section-head">
+                <h3>{group.title}</h3>
+                <small>{group.rows.length} rows</small>
               </div>
-              <div className="stack-list compact">
-                <div className={`list-item status-${statusTone(derived?.stability_score, 0.8, 0.65)}`}><strong>temp_stability_score</strong><p>{pct(derived?.stability_score)} · observed control stability in derived sessions</p></div>
-                <div className={`list-item status-${statusTone(derived?.overshoot_rate, 0.05, 0.15, true)}`}><strong>overshoot_rate</strong><p>{pct(derived?.overshoot_rate)} · sessions that exceeded target materially</p></div>
-                <div className={`list-item status-${statusTone(derived?.oscillation_rate, 0.08, 0.18, true)}`}><strong>oscillation_rate</strong><p>{pct(derived?.oscillation_rate)} · sessions that reached range but failed to stabilize</p></div>
-                <div className="list-item status-neutral"><strong>time_to_stabilize</strong><p>p50 {secondsToMinutes(derived?.time_to_stabilize_p50_seconds)} · p95 {secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}</p></div>
+              <div className="telemetry-board-stack">
+                {group.rows.map((row) => <BoardRow key={row.id} row={row} />)}
               </div>
             </div>
-          </Card>
-
-          <Card title="Session Patterns">
-            <div className="section-head-row">
-              <p>Heuristic archetypes from stream-derived session shape. Estimated, not canonical clustering.</p>
-              {drillLabel('/analysis/session-clusters', 'Open session clusters')}
-            </div>
-            <div className="four-col">
-              {archetypes.map((row) => (
-                <div className={`list-item archetype-card status-${row.archetype === 'stable' ? 'good' : row.archetype === 'dropout' ? 'bad' : 'warn'}`} key={row.archetype}>
-                  <strong>{row.archetype}</strong>
-                  <div className="hero-metric hero-metric-sm">{pct(row.rate)}</div>
-                  <p>{row.description}</p>
-                  <small>n {row.sessions} · truth_state {analyticsTruthState}</small>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card title="Connectivity / Environment">
-            <div className="section-head-row">
-              <p>RSSI distribution and observed correlation between weak-signal cohorts and lower reliability. This is correlation / hypothesis, not causation.</p>
-              {drillLabel('/analysis/rssi-impact', 'Open RSSI impact')}
-            </div>
-            <div className="two-col">
-              <div className="chart-wrap chart-wrap-medium">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={connectivityRows}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                    <XAxis dataKey="bucket" stroke="#9fb0d4" />
-                    <YAxis yAxisId="left" stroke="#9fb0d4" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" />
-                    <Tooltip />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="sessions" name="sessions">
-                      {connectivityRows.map((row) => <Cell key={row.bucket} fill={row.bucket.includes('-84') || row.bucket.includes('<=') ? '#ff6d7a' : row.bucket.includes('-74') ? '#ffb257' : '#6ea8ff'} />)}
-                    </Bar>
-                    <Line yAxisId="right" type="monotone" dataKey="failure_rate" stroke="#ff6d7a" strokeWidth={3} dot={false} name="failure rate" />
-                    <Line yAxisId="right" type="monotone" dataKey="stability_score" stroke="#39d08f" strokeWidth={3} dot={false} name="stability score" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>sessions below -75 dBm</strong><p>{pct(slice?.low_rssi_session_rate)} of derived sessions</p></div>
-                <div className="list-item status-neutral"><strong>critical threshold bands</strong><p>Buckets at -84 to -75 dBm and {'<='} -85 dBm are highlighted as weak-signal risk bands.</p></div>
-                <div className="list-item status-neutral"><strong>disconnect proxy by bucket</strong><p>{connectivityRows.map((row) => `${row.bucket}: ${pct(row.disconnect_rate)}`).join(' · ') || 'No bucket data returned.'}</p></div>
-                <div className={`list-item status-${highestRiskConnectivity ? 'bad' : 'muted'}`}><strong>highest-risk connectivity cohort</strong><p>{highestRiskConnectivity ? `${highestRiskConnectivity.bucket} · fail ${pct(highestRiskConnectivity.failure_rate)} · disconnect ${pct(highestRiskConnectivity.disconnect_rate)}` : 'No strong connectivity-linked issue crossed threshold in the current slice.'}</p></div>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Probe Analytics">
-            <div className="section-head-row">
-              <p>Only shown where current telemetry actually supports probe-level analysis.</p>
-              {drillLabel('/analysis/probe-health', 'Open probe health')}
-            </div>
-            {probeAvailable ? (
-              <div className="two-col">
-                <div className="chart-wrap chart-wrap-medium">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={probeRows}>
-                      <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="probe_count" stroke="#9fb0d4" />
-                      <YAxis stroke="#9fb0d4" />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="sessions" fill="#6ea8ff" name="sessions" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="stack-list compact">
-                  <div className="list-item status-neutral"><strong>probe usage mix</strong><p>{probeRows.map((row) => `${row.probe_count}: ${pct(row.rate)} (n=${row.sessions})`).join(' · ')}</p></div>
-                  <div className="list-item status-warn"><strong>probe failure rate</strong><p>{pct(analytics?.probe_failure_rate)}</p></div>
-                  <div className="list-item status-neutral"><strong>pit vs probe delta</strong><p>{analytics?.pit_probe_delta_avg !== null && analytics?.pit_probe_delta_avg !== undefined ? `${analytics.pit_probe_delta_avg}° avg absolute delta` : 'Unavailable'}</p></div>
-                </div>
-              </div>
-            ) : (
-              <div className="list-item status-bad">
-                <strong>{blockedStates.probe_health.decision_blocked}</strong>
-                <p>{blockedStates.probe_health.missing_source}</p>
-                <small><strong>still trustworthy:</strong> {blockedStates.probe_health.still_trustworthy.join(', ')}</small>
-                <small><strong>owner:</strong> {blockedStates.probe_health.owner} · <strong>next action:</strong> {blockedStates.probe_health.required_action_to_unblock}</small>
-              </div>
-            )}
-          </Card>
-
-          <Card title="Cohort Comparison">
-            <div className="section-head-row">
-              <p>Firmware and model cohorts with explicit n, failure, stability proxy, disconnect, and severity.</p>
-              {drillLabel('/analysis/firmware-model', 'Open firmware/model analysis')}
-            </div>
-            <div className="three-col cohort-highlight-grid">
-              <div className="list-item status-bad"><strong>worst firmware cohort</strong><p>{worstFirmware ? `${worstFirmware.key} · fail ${pct(worstFirmware.failure_rate)} · health ${pct(worstFirmware.health_score)}` : 'n/a'}</p></div>
-              <div className="list-item status-bad"><strong>worst model cohort</strong><p>{worstModel ? `${worstModel.key} · fail ${pct(worstModel.failure_rate)} · health ${pct(worstModel.health_score)}` : 'n/a'}</p></div>
-              <div className="list-item status-warn"><strong>highest-risk signal</strong><p>{highestRiskConnectivity ? `${highestRiskConnectivity.bucket} weak-signal cohort · fail ${pct(highestRiskConnectivity.failure_rate)}` : 'n/a'}</p></div>
-            </div>
-            <div className="two-col">
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Firmware</th><th>n</th><th>success</th><th>disconnect</th><th>failure</th><th>health</th><th>severity</th></tr>
-                  </thead>
-                  <tbody>
-                    {firmwareRows.slice(0, 8).map((row) => (
-                      <tr key={row.key}>
-                        <td>{row.key}</td><td>{row.sessions}</td><td>{pct(1 - row.failure_rate)}</td><td>{pct(row.disconnect_rate)}</td><td>{pct(row.failure_rate)}</td><td>{pct(row.health_score)}</td><td>{row.severity}{row.sessions < 3 ? ' · low n' : ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Model</th><th>n</th><th>success</th><th>disconnect</th><th>failure</th><th>health</th><th>severity</th></tr>
-                  </thead>
-                  <tbody>
-                    {modelRows.slice(0, 8).map((row) => (
-                      <tr key={row.key}>
-                        <td>{row.key}</td><td>{row.sessions}</td><td>{pct(1 - row.failure_rate)}</td><td>{pct(row.disconnect_rate)}</td><td>{pct(row.failure_rate)}</td><td>{pct(row.health_score)}</td><td>{row.severity}{row.sessions < 3 ? ' · low n' : ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Automated Product Insights">
-            <div className="section-head-row">
-              <p>Prioritized issue cards ranked by severity, sample reliability, recurrence, cohort concentration, and testability. Low reliability stays investigative.</p>
-            </div>
-            <div className="stack-list compact">
-              {issueRows.map((row, index) => (
-                <div className={`list-item status-${row.confidence === 'high' ? 'bad' : row.confidence === 'medium' ? 'warn' : 'muted'}`} key={`${row.issue}-${index}`}>
-                  <div className="item-head"><strong>{row.issue}</strong><span className="badge badge-neutral">{row.confidence}</span></div>
-                  <p>{row.signal}</p>
-                  <small><strong>cohort:</strong> {row.cohort} · <strong>scope:</strong> observed_slice</small>
-                  <small><strong>recommended action:</strong> {row.action}</small>
-                  <small><strong>drill-down:</strong> {row.issue.toLowerCase().includes('connectivity') ? '/analysis/rssi-impact' : row.issue.toLowerCase().includes('firmware') ? '/analysis/firmware-model' : '/analysis/temp-curves'}</small>
-                </div>
-              ))}
-              {!issueRows.length ? <div className="state-message">No issue card crossed threshold in the current slice.</div> : null}
-            </div>
-          </Card>
-
-          <Card title="Truth / confidence guardrails">
-            <div className="stack-list compact">
-              <div className="list-item status-muted"><strong>sample scope</strong><p>{sampleScope}</p></div>
-              <div className="list-item status-neutral"><strong>truth_state handling</strong><p>Top KPI strip and analytics sections keep `truth_state`, `sample_size`, and `sample_reliability`. Stream-backed analytics are shown as estimated/proxy rather than canonical truth.</p></div>
-              <div className="list-item status-bad"><strong>{blockedStates.generalization.decision_blocked}</strong><p>{blockedStates.generalization.missing_source}</p><small><strong>still trustworthy:</strong> {blockedStates.generalization.still_trustworthy.join(', ')}</small><small><strong>next action:</strong> {blockedStates.generalization.required_action_to_unblock}</small></div>
-            </div>
-          </Card>
+          ))}
         </>
       ) : null}
     </div>

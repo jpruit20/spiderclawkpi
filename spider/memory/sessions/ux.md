@@ -11,12 +11,14 @@
 ## Active files
 - memory/topics/ux_ui.md
 - memory/2026-04-09.md
+- apps/spider-kpi/frontend/src/pages/ProductEngineeringDivision.tsx
+- apps/spider-kpi/frontend/src/styles.css
 
 ## Blockers
-- Browser bridge is currently unavailable from OpenClaw, so direct logged-in browser inspection may be blocked until the gateway/browser connection is restored.
-- Need either public fetchable Figma content or restored authenticated browser access for full inspection.
+- Browser bridge is still unavailable, so the live Figma file could not be inspected directly.
+- The Engineering page refactor proceeded from Joseph's written Figma workflow spec instead of live canvas review.
 
 ## Next actions
-- Test whether the provided Figma link is readable without the browser bridge.
-- If not, restore browser/gateway access or get exported screenshots/frames.
-- Review Product Engineering page UX/UI and convert findings into implementation-ready next steps.
+- Push the Product / Engineering page refactor and let the KPI dashboard deploy.
+- Review the deployed page against Joseph's intended row/cell workflow.
+- Reconnect live Figma later for visual polish and any frame-level corrections.
