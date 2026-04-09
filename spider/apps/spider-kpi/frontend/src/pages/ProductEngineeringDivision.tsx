@@ -9,6 +9,8 @@ import {
   ComposedChart,
   Legend,
   Line,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -57,10 +59,19 @@ function drillLabel(path: string, label: string) {
   return <Link className="analysis-link" to={path}>{label} →</Link>
 }
 
+function formatDelta(current?: number | null, previous?: number | null, digits = 0, suffix = '%') {
+  if (current === null || current === undefined || previous === null || previous === undefined || Number.isNaN(current) || Number.isNaN(previous)) return 'Δ unavailable'
+  const diff = current - previous
+  const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→'
+  const scaled = suffix === '%' ? diff * 100 : diff
+  return `${arrow} ${Math.abs(scaled).toFixed(digits)}${suffix}`
+}
+
 function MiniKpiCard({
   title,
   value,
   subtext,
+  deltaText,
   link,
   tone,
   kpi,
@@ -68,6 +79,7 @@ function MiniKpiCard({
   title: string
   value: string
   subtext: string
+  deltaText: string
   link: ReactNode
   tone: string
   kpi: KPIObject
@@ -77,11 +89,13 @@ function MiniKpiCard({
       <div className={`analytics-kpi analytics-kpi-${tone}`}>
         <div className="hero-metric">{value}</div>
         <div className="inline-badges">
+          <span className={`badge ${tone === 'good' ? 'badge-good' : tone === 'warn' ? 'badge-warn' : tone === 'bad' ? 'badge-bad' : 'badge-neutral'}`}>{tone.toUpperCase()}</span>
           <span className={`badge ${kpi.truth_state === 'blocked' ? 'badge-bad' : kpi.truth_state === 'estimated' || kpi.truth_state === 'proxy' ? 'badge-warn' : 'badge-good'}`}>{kpi.truth_state}</span>
           <span className="badge badge-neutral">n {kpi.sample_size ?? '—'}</span>
           <span className="badge badge-neutral">sample {kpi.sample_reliability || '—'}</span>
         </div>
         <p className="metric-subcopy">{subtext}</p>
+        <small className="metric-delta">{deltaText}</small>
         <small>{kpi.sample_scope}</small>
         <div className="metric-link-row">{link}</div>
       </div>
@@ -127,6 +141,7 @@ export function ProductEngineeringDivision() {
   const analyticsTruthState: KPIObject['truth_state'] = streamBacked ? 'estimated' : 'blocked'
   const summaryTruthState: KPIObject['truth_state'] = streamBacked ? 'proxy' : 'blocked'
   const probeAvailable = Boolean((analytics?.probe_usage || []).some((row) => row.probe_count > 0) || analytics?.pit_probe_delta_avg !== null && analytics?.pit_probe_delta_avg !== undefined)
+  const previousDaily = telemetry?.daily && telemetry.daily.length > 1 ? telemetry.daily[telemetry.daily.length - 2] : null
 
   const activeCooksKpi = buildNumericKpi({ key: 'active_cooks_now', currentValue: derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? null, targetValue: null, owner: 'Kyle', truthState: summaryTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability })
   const throughputKpi = buildNumericKpi({ key: 'cook_throughput', currentValue: derived?.cooks_completed_24h ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability })
@@ -157,7 +172,7 @@ export function ProductEngineeringDivision() {
       triggerKpi: reliabilityKpi,
       triggerCondition: 'cook lifecycle funnel completion or success is weak',
       owner: 'Kyle',
-      requiredAction: `Review the biggest funnel break (${analytics?.dropoff_reasons?.[0]?.reason || 'n/a'}) and inspect failed sessions through /analysis/cook-failures before escalating remediation.`,
+      requiredAction: `Go to /analysis/cook-failures and isolate sessions in the ${analytics?.dropoff_reasons?.[0]?.reason || 'top drop-off'} bucket from the last observed slice; compare the failed stage against completed sessions and write the top failing condition before remediation.`,
       priority: (derived?.session_success_rate || 0) < 0.6 ? 'critical' : 'high',
       evidence: [`success=${pct(derived?.session_success_rate)}`, `completed_24h=${derived?.cooks_completed_24h ?? 0}`, `dropoff=${analytics?.dropoff_reasons?.[0]?.reason || 'n/a'}`],
       dueDate: 'this week',
@@ -171,7 +186,7 @@ export function ProductEngineeringDivision() {
       triggerKpi: controlKpi,
       triggerCondition: 'low RSSI correlates with lower stability or higher failure',
       owner: 'Kyle',
-      requiredAction: 'Use /analysis/rssi-impact to compare weak-signal cohorts against stronger-signal sessions, then separate connectivity-driven instability from control-loop issues.',
+      requiredAction: `Go to /analysis/rssi-impact and compare sessions in ${highestRiskConnectivity?.bucket || 'the weakest RSSI bucket'} against stronger-signal buckets over the observed slice; confirm whether failure and disconnect proxies stay elevated before assigning root cause.`,
       priority: ((analytics?.connectivity_buckets || []).some((row) => (row.failure_rate || 0) >= 0.35) ? 'high' : 'medium'),
       evidence: (analytics?.connectivity_buckets || []).slice(0, 2).map((row) => `${row.bucket}: fail ${pct(row.failure_rate)} · stability ${pct(row.stability_score)}`),
       dueDate: 'this week',
@@ -185,7 +200,7 @@ export function ProductEngineeringDivision() {
       triggerKpi: throughputKpi,
       triggerCondition: 'firmware/model cohorts show concentrated degradation',
       owner: 'Kyle',
-      requiredAction: 'Use /analysis/firmware-model to inspect the worst firmware/model cohort with explicit n before assigning product or firmware root cause.',
+      requiredAction: `Go to /analysis/firmware-model and compare firmware ${worstFirmware?.key || 'n/a'} and model ${worstModel?.key || 'n/a'} against healthier cohorts; confirm whether failure stays concentrated after accounting for RSSI and stability.`,
       priority: ((telemetry?.firmware_health?.[0]?.failure_rate || 0) >= 0.25 || (telemetry?.grill_type_health?.[0]?.failure_rate || 0) >= 0.25) ? 'high' : 'medium',
       evidence: [`fw=${telemetry?.firmware_health?.[0]?.key || 'n/a'} ${pct(telemetry?.firmware_health?.[0]?.failure_rate)}`, `model=${telemetry?.grill_type_health?.[0]?.key || 'n/a'} ${pct(telemetry?.grill_type_health?.[0]?.failure_rate)}`],
       dueDate: 'this week',
@@ -209,7 +224,7 @@ export function ProductEngineeringDivision() {
       scope: 'observed_slice',
       confidence: probeAvailable && sampleReliability !== 'low' ? 'medium' : 'low',
     }),
-  ]), [reliabilityKpi, controlKpi, throughputKpi, probeBlockedKpi, analytics, derived, snapshotTimestamp, sampleReliability, telemetry, probeAvailable, blockedStates])
+  ]), [reliabilityKpi, controlKpi, throughputKpi, probeBlockedKpi, analytics, derived, snapshotTimestamp, sampleReliability, telemetry, probeAvailable, blockedStates, highestRiskConnectivity, worstFirmware, worstModel])
 
   const funnelRows = (analytics?.cook_lifecycle_funnel || []).map((row, index, arr) => ({
     ...row,
@@ -230,6 +245,10 @@ export function ProductEngineeringDivision() {
   ]
   const probeRows = analytics?.probe_usage || []
   const worstInsight = issueRows[0]
+  const largestDropoff = funnelRows.slice(1).sort((a, b) => (b.dropoff_rate || 0) - (a.dropoff_rate || 0))[0] || null
+  const worstFirmware = [...firmwareRows].sort((a, b) => (b.failure_rate - a.failure_rate) || (a.health_score - b.health_score))[0] || null
+  const worstModel = [...modelRows].sort((a, b) => (b.failure_rate - a.failure_rate) || (a.health_score - b.health_score))[0] || null
+  const highestRiskConnectivity = [...connectivityRows].sort((a, b) => ((b.failure_rate + (b.disconnect_rate || 0)) - (a.failure_rate + (a.disconnect_rate || 0))))[0] || null
 
   return (
     <div className="page-grid telemetry-page">
@@ -253,10 +272,10 @@ export function ProductEngineeringDivision() {
       {!loading && !error ? (
         <>
           <div className="four-col telemetry-kpi-grid">
-            <MiniKpiCard title="Active Cooks" value={`${derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0}`} subtext={`5m devices ${derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0} · median RSSI ${derived?.median_rssi_now ?? '—'} dBm`} link={drillLabel('/analysis/rssi-impact', 'View cooks')} tone={statusTone(derived?.active_cooks_now, 20, 8)} kpi={activeCooksKpi} />
-            <MiniKpiCard title="Cook Throughput" value={`${derived?.cooks_started_24h ?? slice?.sessions_derived ?? 0} started / ${derived?.cooks_completed_24h ?? 0} completed`} subtext={`median ${secondsToMinutes(derived?.median_cook_duration_seconds)} · p95 ${secondsToMinutes(derived?.p95_cook_duration_seconds)}`} link={drillLabel('/analysis/cook-failures', 'View funnel')} tone={statusTone((derived?.cooks_completed_24h || 0) / Math.max(derived?.cooks_started_24h || 1, 1), 0.7, 0.45)} kpi={throughputKpi} />
-            <MiniKpiCard title="Reliability" value={`${pct(derived?.session_success_rate)} success`} subtext={`disconnect ${pct(derived?.disconnect_proxy_rate)} · timeout ${pct(derived?.timeout_rate)} · probe error ${pct(analytics?.probe_failure_rate)}`} link={drillLabel('/analysis/cook-failures', 'View issues')} tone={statusTone(derived?.session_success_rate, 0.8, 0.65)} kpi={reliabilityKpi} />
-            <MiniKpiCard title="Control Quality" value={`${pct(derived?.stability_score)} stable`} subtext={`overshoot ${pct(derived?.overshoot_rate)} · p50 ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)} · p95 ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`} link={drillLabel('/analysis/temp-curves', 'View curves')} tone={statusTone(derived?.stability_score, 0.8, 0.65)} kpi={controlKpi} />
+            <MiniKpiCard title="Active Cooks" value={`${derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0} now`} subtext={`5m devices ${derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0} · median RSSI ${derived?.median_rssi_now ?? '—'} dBm`} deltaText={formatDelta((derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? null), previousDaily?.sessions ?? null, 0, '')} link={drillLabel('/analysis/rssi-impact', 'View cooks')} tone={statusTone(derived?.active_cooks_now, 20, 8)} kpi={activeCooksKpi} />
+            <MiniKpiCard title="Cook Throughput" value={`${derived?.cooks_started_24h ?? slice?.sessions_derived ?? 0} started / ${derived?.cooks_completed_24h ?? 0} completed`} subtext={`median ${secondsToMinutes(derived?.median_cook_duration_seconds)} · p95 ${secondsToMinutes(derived?.p95_cook_duration_seconds)}`} deltaText={formatDelta(((derived?.cooks_completed_24h || 0) / Math.max(derived?.cooks_started_24h || 1, 1)), previousDaily?.cook_success_rate ?? null)} link={drillLabel('/analysis/cook-failures', 'View funnel')} tone={statusTone((derived?.cooks_completed_24h || 0) / Math.max(derived?.cooks_started_24h || 1, 1), 0.7, 0.45)} kpi={throughputKpi} />
+            <MiniKpiCard title="Reliability" value={`${pct(derived?.session_success_rate)} success`} subtext={`disconnect ${pct(derived?.disconnect_proxy_rate)} · timeout ${pct(derived?.timeout_rate)} · probe error ${pct(analytics?.probe_failure_rate)}`} deltaText={formatDelta(derived?.session_success_rate ?? null, previousDaily?.session_reliability_score ?? null)} link={drillLabel('/analysis/cook-failures', 'View issues')} tone={statusTone(derived?.session_success_rate, 0.8, 0.65)} kpi={reliabilityKpi} />
+            <MiniKpiCard title="Control Quality" value={`${pct(derived?.stability_score)} stable`} subtext={`overshoot ${pct(derived?.overshoot_rate)} · p50 ${secondsToMinutes(derived?.time_to_stabilize_p50_seconds)} · p95 ${secondsToMinutes(derived?.time_to_stabilize_p95_seconds)}`} deltaText={formatDelta(derived?.stability_score ?? null, previousDaily?.temp_stability_score ?? null)} link={drillLabel('/analysis/temp-curves', 'View curves')} tone={statusTone(derived?.stability_score, 0.8, 0.65)} kpi={controlKpi} />
           </div>
 
           <DecisionStack actions={actions} />
@@ -266,8 +285,14 @@ export function ProductEngineeringDivision() {
               <p>Started → reached target → stable → completed. Stage derivation is estimated from stream-derived sessions; drop-off reasons are proxy-derived where noted.</p>
               {drillLabel('/analysis/cook-failures', 'Open cook failures')}
             </div>
-            <div className="two-col-equal">
-              <div className="chart-wrap chart-wrap-short">
+            {largestDropoff ? (
+              <div className="largest-dropoff-banner status-bad">
+                <strong>Largest break: {largestDropoff.label}</strong>
+                <span>{pct(largestDropoff.dropoff_rate)} drop-off from prior stage · {largestDropoff.sessions} sessions remain</span>
+              </div>
+            ) : null}
+            <div className="two-col-equal funnel-dominant-grid">
+              <div className="chart-wrap chart-wrap-funnel-dominant">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={funnelRows} layout="vertical" margin={{ left: 20, right: 20, top: 10, bottom: 10 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" />
@@ -275,7 +300,7 @@ export function ProductEngineeringDivision() {
                     <YAxis type="category" dataKey="label" stroke="#9fb0d4" width={120} />
                     <Tooltip />
                     <Bar dataKey="sessions" radius={[0, 8, 8, 0]}>
-                      {funnelRows.map((row, idx) => <Cell key={row.step} fill={['#6ea8ff', '#55c2ff', '#ffb257', '#39d08f'][idx] || '#6ea8ff'} />)}
+                      {funnelRows.map((row, idx) => <Cell key={row.step} fill={largestDropoff?.step === row.step ? '#ff6d7a' : (['#6ea8ff', '#55c2ff', '#ffb257', '#39d08f'][idx] || '#6ea8ff')} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -307,6 +332,9 @@ export function ProductEngineeringDivision() {
                       <YAxis stroke="#9fb0d4" label={{ value: 'pit - target °F', angle: -90, position: 'insideLeft', fill: '#9fb0d4' }} />
                       <Tooltip />
                       <Legend />
+                      <ReferenceArea y1={-15} y2={15} fill="rgba(57,208,143,0.08)" ifOverflow="extendDomain" />
+                      <ReferenceLine y={15} stroke="#ff6d7a" strokeDasharray="4 4" label={{ value: 'instability zone', fill: '#ff6d7a', position: 'insideTopRight' }} />
+                      <ReferenceLine y={-15} stroke="#ff6d7a" strokeDasharray="4 4" />
                       <Area type="monotone" dataKey="p90_temp_delta" stroke="#ffb257" fill="rgba(255,178,87,0.22)" name="p90 Δ" />
                       <Line type="monotone" dataKey="p50_temp_delta" stroke="#6ea8ff" strokeWidth={3} dot={false} name="p50 Δ" />
                     </ComposedChart>
@@ -355,7 +383,9 @@ export function ProductEngineeringDivision() {
                     <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" />
                     <Tooltip />
                     <Legend />
-                    <Bar yAxisId="left" dataKey="sessions" fill="#6ea8ff" name="sessions" />
+                    <Bar yAxisId="left" dataKey="sessions" name="sessions">
+                      {connectivityRows.map((row) => <Cell key={row.bucket} fill={row.bucket.includes('-84') || row.bucket.includes('<=') ? '#ff6d7a' : row.bucket.includes('-74') ? '#ffb257' : '#6ea8ff'} />)}
+                    </Bar>
                     <Line yAxisId="right" type="monotone" dataKey="failure_rate" stroke="#ff6d7a" strokeWidth={3} dot={false} name="failure rate" />
                     <Line yAxisId="right" type="monotone" dataKey="stability_score" stroke="#39d08f" strokeWidth={3} dot={false} name="stability score" />
                   </ComposedChart>
@@ -363,8 +393,9 @@ export function ProductEngineeringDivision() {
               </div>
               <div className="stack-list compact">
                 <div className="list-item status-warn"><strong>sessions below -75 dBm</strong><p>{pct(slice?.low_rssi_session_rate)} of derived sessions</p></div>
+                <div className="list-item status-neutral"><strong>critical threshold bands</strong><p>Buckets at -84 to -75 dBm and {'<='} -85 dBm are highlighted as weak-signal risk bands.</p></div>
                 <div className="list-item status-neutral"><strong>disconnect proxy by bucket</strong><p>{connectivityRows.map((row) => `${row.bucket}: ${pct(row.disconnect_rate)}`).join(' · ') || 'No bucket data returned.'}</p></div>
-                <div className={`list-item status-${worstInsight?.issue?.toLowerCase().includes('connectivity') ? 'bad' : 'muted'}`}><strong>connectivity insight</strong><p>{worstInsight?.issue?.toLowerCase().includes('connectivity') ? `${worstInsight.signal} ${worstInsight.action}` : 'No strong connectivity-linked issue crossed threshold in the current slice.'}</p></div>
+                <div className={`list-item status-${highestRiskConnectivity ? 'bad' : 'muted'}`}><strong>highest-risk connectivity cohort</strong><p>{highestRiskConnectivity ? `${highestRiskConnectivity.bucket} · fail ${pct(highestRiskConnectivity.failure_rate)} · disconnect ${pct(highestRiskConnectivity.disconnect_rate)}` : 'No strong connectivity-linked issue crossed threshold in the current slice.'}</p></div>
               </div>
             </div>
           </Card>
@@ -408,6 +439,11 @@ export function ProductEngineeringDivision() {
             <div className="section-head-row">
               <p>Firmware and model cohorts with explicit n, failure, stability proxy, disconnect, and severity.</p>
               {drillLabel('/analysis/firmware-model', 'Open firmware/model analysis')}
+            </div>
+            <div className="three-col cohort-highlight-grid">
+              <div className="list-item status-bad"><strong>worst firmware cohort</strong><p>{worstFirmware ? `${worstFirmware.key} · fail ${pct(worstFirmware.failure_rate)} · health ${pct(worstFirmware.health_score)}` : 'n/a'}</p></div>
+              <div className="list-item status-bad"><strong>worst model cohort</strong><p>{worstModel ? `${worstModel.key} · fail ${pct(worstModel.failure_rate)} · health ${pct(worstModel.health_score)}` : 'n/a'}</p></div>
+              <div className="list-item status-warn"><strong>highest-risk signal</strong><p>{highestRiskConnectivity ? `${highestRiskConnectivity.bucket} weak-signal cohort · fail ${pct(highestRiskConnectivity.failure_rate)}` : 'n/a'}</p></div>
             </div>
             <div className="two-col">
               <div className="table-wrap">
