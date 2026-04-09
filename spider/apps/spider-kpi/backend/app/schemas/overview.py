@@ -122,6 +122,27 @@ class TelemetrySummaryOut(BaseModel):
     confidence: Optional[dict[str, Any]] = None
 
 
+class TelemetryStreamRecordIn(BaseModel):
+    source_event_id: str
+    device_id: str
+    sample_timestamp: Optional[datetime] = None
+    stream_event_name: Optional[str] = None
+    engaged: bool = False
+    firmware_version: Optional[str] = None
+    grill_type: Optional[str] = None
+    target_temp: Optional[float] = None
+    current_temp: Optional[float] = None
+    heating: Optional[bool] = None
+    intensity: Optional[float] = None
+    rssi: Optional[float] = None
+    error_codes_json: list[Any] = []
+    raw_payload: dict[str, Any] = {}
+
+
+class TelemetryStreamIngestIn(BaseModel):
+    records: list[TelemetryStreamRecordIn]
+
+
 class CXActionOut(BaseModel):
     id: str
     trigger_kpi: str

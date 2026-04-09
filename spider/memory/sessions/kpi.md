@@ -34,6 +34,9 @@
 - apps/spider-kpi/backend/app/models/__init__.py
 - apps/spider-kpi/backend/alembic/versions/20260408_0006_telemetry_stream_events.py
 - apps/spider-kpi/backend/alembic/versions/20260408_0007_telemetry_stream_events_updated_at.py
+- apps/spider-kpi/backend/app/api/routes/admin.py
+- apps/spider-kpi/backend/app/schemas/overview.py
+- apps/spider-kpi/deploy/aws-streams/lambda_handler_standalone.py
 - apps/spider-kpi/deploy/aws-streams/README.md
 
 ## Blockers
@@ -51,6 +54,7 @@
 - Ensure the Lambda runtime DB URL variable matches backend config (`KPI_DATABASE_URL` or `DATABASE_URL`) and validate Lambda-to-Postgres network reachability before enabling the stream mapping broadly.
 - Use the new admin telemetry hooks in production to force bounded telemetry sync (`/api/admin/run-sync/aws_telemetry`) and inspect landed stream rows (`/api/admin/debug/telemetry-stream`) during rollout validation.
 - Apply the follow-up telemetry stream migration adding `updated_at`; production deployed code exposed that the original `telemetry_stream_events` migration created `created_at` but not `updated_at`, which causes live 500s against the SQLAlchemy model.
+- Switch the production Lambda path from direct-Postgres writes to authenticated API ingestion so AWS does not need direct connectivity into the droplet-local KPI Postgres instance.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
@@ -132,6 +136,7 @@
 - 2026-04-08 stream deploy hardening pass: found a deploy/config mismatch where the AWS stream docs/template used `KPI_DATABASE_URL` but backend settings only read `DATABASE_URL`; patched backend settings to accept both so the documented Lambda env will work during rollout.
 - 2026-04-08 telemetry ops hardening pass: exported `TelemetryStreamEvent` from `app.models` so stream-backed telemetry summary imports resolve correctly, and added admin endpoints for `aws_telemetry` sync plus `/api/admin/debug/telemetry-stream` so production rollout can be verified without direct DB shell access.
 - 2026-04-08 production telemetry 500 root cause: deployed code was live, but `telemetry_stream_events` schema drifted from the model because the original Alembic migration created `created_at` without `updated_at` even though the model inherits `TimestampMixin`; added a corrective migration so production can query stream rows without crashing.
+- 2026-04-08 AWS stream runtime root cause: live Lambda is failing with `Runtime.ImportModuleError: No module named app`, its env still contains a placeholder `KPI_DATABASE_URL`, and production Postgres is droplet-local, so direct Lambda->Postgres writes are not the right production path. Added a backend HTTP ingest endpoint and a standalone Lambda handler that forwards normalized stream records to the KPI API instead.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

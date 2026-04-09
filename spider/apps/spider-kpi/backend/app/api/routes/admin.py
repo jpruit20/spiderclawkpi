@@ -14,7 +14,9 @@ from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun, TelemetryStreamEvent
+from app.schemas.overview import TelemetryStreamIngestIn
 from app.services.seed import seed_from_prototype_files
+from app.streaming.telemetry_stream_writer import write_stream_records
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_auth)])
 settings = get_settings()
@@ -98,6 +100,17 @@ def seed(db: Session = Depends(db_session)):
 @router.get('/debug/ga4')
 def debug_ga4():
     return ga4_debug_self_check()
+
+
+@router.post('/ingest/telemetry-stream')
+def ingest_telemetry_stream(payload: TelemetryStreamIngestIn, db: Session = Depends(db_session)):
+    records = [record.model_dump() for record in payload.records]
+    result = write_stream_records(db, records)
+    return {
+        'ok': True,
+        'records_received': len(records),
+        **result,
+    }
 
 
 @router.get('/debug/telemetry-stream')
