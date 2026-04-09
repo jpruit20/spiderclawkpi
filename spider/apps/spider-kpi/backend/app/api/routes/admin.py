@@ -15,9 +15,10 @@ from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun, TelemetrySession, TelemetryStreamEvent
-from app.schemas.overview import TelemetryStreamIngestIn
+from app.schemas.overview import TelemetryHistoryIngestIn, TelemetryStreamIngestIn
 from app.services.seed import seed_from_prototype_files
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+from app.services.telemetry_history import upsert_telemetry_history_monthly
 from app.streaming.telemetry_stream_writer import write_stream_records
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_auth)])
@@ -219,6 +220,65 @@ def debug_telemetry_stream(db: Session = Depends(db_session)):
             for row in latest
         ],
     }
+
+
+@router.post('/ingest/telemetry-history')
+def ingest_telemetry_history(payload: TelemetryHistoryIngestIn, db: Session = Depends(db_session)):
+    source_name = 'aws_telemetry_history'
+    upsert_source_config(
+        db,
+        source_name,
+        configured=True,
+        enabled=True,
+        sync_mode='manual',
+        config_json={
+            'source_type': 'connector',
+            'input': 'ddb_export_audit',
+            'upstream': 'sg_device_shadows_export',
+        },
+    )
+    db.commit()
+
+    run = start_sync_run(db, source_name, 'ingest_telemetry_history', {
+        'window_days': payload.window_days,
+        'distinct_devices': payload.distinct_devices,
+        'distinct_engaged_devices': payload.distinct_engaged_devices,
+        'months_received': len(payload.monthly),
+        'export_bucket': payload.export_bucket,
+        'export_prefix': payload.export_prefix,
+        'export_arn': payload.export_arn,
+    })
+    db.commit()
+    try:
+        result = upsert_telemetry_history_monthly(
+            db,
+            monthly_rows=[
+                {
+                    'month_start': row.month_start,
+                    'distinct_devices': row.distinct_devices,
+                    'distinct_engaged_devices': row.distinct_engaged_devices,
+                }
+                for row in payload.monthly
+            ],
+            window_days=payload.window_days,
+            distinct_devices=payload.distinct_devices,
+            distinct_engaged_devices=payload.distinct_engaged_devices,
+            observed_mac_count=payload.observed_mac_count,
+            source=payload.source,
+            metadata={
+                'export_bucket': payload.export_bucket,
+                'export_prefix': payload.export_prefix,
+                'export_arn': payload.export_arn,
+                'notes': payload.notes,
+            },
+        )
+        finish_sync_run(db, run, status='success', records_processed=int(result.get('months_loaded', 0)))
+        db.commit()
+        return result
+    except Exception as exc:
+        finish_sync_run(db, run, status='failed', error_message=str(exc))
+        db.commit()
+        raise
 
 
 @router.get('/debug/telemetry-audit')

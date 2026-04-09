@@ -295,6 +295,20 @@ class TelemetryDaily(TimestampMixin, Base):
     error_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
 
+class TelemetryHistoryMonthly(TimestampMixin, Base):
+    __tablename__ = "telemetry_history_monthly"
+    __table_args__ = (UniqueConstraint("month_start", name="uq_telemetry_history_monthly_month_start"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    month_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    distinct_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    distinct_engaged_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    observed_mac_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), default="ddb_export_backfill", nullable=False)
+    coverage_window_days: Mapped[int] = mapped_column(Integer, default=365, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class KPIDaily(TimestampMixin, Base):
     __tablename__ = "kpi_daily"
     __table_args__ = (UniqueConstraint("business_date", name="uq_kpi_daily_date"),)

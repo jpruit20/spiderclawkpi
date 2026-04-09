@@ -9,6 +9,7 @@ from sqlalchemy import desc, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession, TelemetryStreamEvent
+from app.services.telemetry_history import get_telemetry_history_monthly
 from app.services.telemetry_stream_summary import summarize_stream_telemetry
 
 
@@ -42,10 +43,12 @@ def _empty_telemetry_payload() -> dict[str, Any]:
         "grill_type_health": [],
         "top_error_codes": [],
         "top_issue_patterns": [],
+        "analytics": {"historical_monthly": []},
     }
 
 
 def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+    historical_monthly = get_telemetry_history_monthly(db)
     if telemetry_stream_table_available(db):
         fresh_stream_events = db.execute(
             select(TelemetryStreamEvent)
@@ -54,7 +57,11 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             .limit(5000)
         ).scalars().all()
         if fresh_stream_events:
-            return summarize_stream_telemetry(db, fresh_stream_events)
+            payload = summarize_stream_telemetry(db, fresh_stream_events)
+            payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
+            payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
+            payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
+            return payload
 
     if not telemetry_tables_available(db):
         return _empty_telemetry_payload()
@@ -234,4 +241,7 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             "coverage_summary": metadata.get('coverage_summary'),
         },
         "confidence": confidence,
+        "analytics": {
+            "historical_monthly": historical_monthly,
+        },
     }

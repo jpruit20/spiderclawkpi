@@ -121,6 +121,26 @@ class TelemetrySummaryOut(BaseModel):
     slice_snapshot: Optional[dict[str, Any]] = None
     collection_metadata: Optional[dict[str, Any]] = None
     confidence: Optional[dict[str, Any]] = None
+    analytics: Optional[dict[str, Any]] = None
+
+
+class TelemetryHistoryMonthlyIn(BaseModel):
+    month_start: date
+    distinct_devices: int
+    distinct_engaged_devices: int = 0
+
+
+class TelemetryHistoryIngestIn(BaseModel):
+    window_days: int = 365
+    distinct_devices: int = 0
+    distinct_engaged_devices: int = 0
+    observed_mac_count: int = 0
+    monthly: list[TelemetryHistoryMonthlyIn]
+    source: str = "ddb_export_backfill"
+    export_bucket: Optional[str] = None
+    export_prefix: Optional[str] = None
+    export_arn: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class TelemetryStreamRecordIn(BaseModel):
