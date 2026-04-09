@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { DecisionStack } from '../components/DecisionStack'
 import { ApiError, api, getApiBase } from '../lib/api'
-import { ActionObject, BlockedStateOutput, KPIObject, TelemetrySummary } from '../lib/types'
+import { BlockedStateOutput, KPIObject, TelemetrySummary } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject } from '../lib/divisionContract'
 
 function formatTelemetryFreshness(timestamp?: string | null) {
@@ -14,6 +14,21 @@ function formatTelemetryFreshness(timestamp?: string | null) {
   const hours = Math.floor(ageMinutes / 60)
   const minutes = ageMinutes % 60
   return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`
+}
+
+function pct(value?: number | null, digits = 0) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  return `${(value * 100).toFixed(digits)}%`
+}
+
+function secondsToMinutes(value?: number | null, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  return `${(value / 60).toFixed(digits)} min`
+}
+
+function metricTruthState(streamBacked: boolean, hasAnalytics: boolean): KPIObject['truth_state'] {
+  if (!streamBacked) return 'blocked'
+  return hasAnalytics ? 'estimated' : 'proxy'
 }
 
 export function ProductEngineeringDivision() {
@@ -43,193 +58,288 @@ export function ProductEngineeringDivision() {
   const latest = telemetry?.latest || null
   const slice = telemetry?.slice_snapshot || null
   const collection = telemetry?.collection_metadata || null
-  const confidence = telemetry?.confidence || null
-  const boundedTruthState = latest ? 'proxy' : 'blocked'
-  const reliabilityTruthState = latest ? 'estimated' : 'blocked'
+  const analytics = telemetry?.analytics || null
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
-  const sampleSize = Math.max(collection?.distinct_devices_observed || 0, collection?.active_devices_last_15m || 0, slice?.sessions_derived || 0)
+  const hasAnalytics = Boolean(analytics?.cook_lifecycle_funnel?.length)
+  const analyticsTruthState = metricTruthState(streamBacked, hasAnalytics)
+  const coverageTruthState: KPIObject['truth_state'] = streamBacked ? 'proxy' : 'blocked'
+  const sampleSize = Math.max(collection?.distinct_devices_observed || 0, slice?.sessions_derived || 0, collection?.active_devices_last_15m || 0)
   const sampleScope = streamBacked
-    ? `${collection?.distinct_devices_observed || 0} device(s) in loaded stream slice, ${collection?.records_loaded || 0} stream rows, ${collection?.active_devices_last_15m || 0} active in last 15m`
-    : `${collection?.distinct_devices_observed || 0} device(s), ${collection?.samples_retained || 0} samples, bounded scan`
-  const sampleReliability: KPIObject['sample_reliability'] = sampleSize <= 1 || collection?.scan_truncated || collection?.max_record_cap_hit ? 'low' : sampleSize < 10 ? 'medium' : 'high'
-  const limitedSampleNote = sampleReliability === 'low' ? 'Limited sample — directional only' : null
-  const lowRssiPct = Math.round((slice?.low_rssi_session_rate || 0) * 100)
-  const errorPct = Math.round((slice?.error_vector_presence_rate || 0) * 100)
-  const reliabilityPct = latest ? Math.round(latest.session_reliability_score * 100) : 0
-  const tempStabilityPct = latest ? Math.round(latest.temp_stability_score * 100) : 0
-  const medianMinutes = slice ? Number((slice.median_session_duration_seconds / 60).toFixed(1)) : 0
-  const lowRssiRisk = lowRssiPct >= 75
-  const tempInstability = tempStabilityPct <= 40
-  const shortSessionPattern = medianMinutes > 0 && medianMinutes < 20
-  const errorPattern = errorPct >= 10
-  const combinedConnectivityControlHypothesis = lowRssiRisk && tempInstability
-  const dominantFirmware = telemetry?.firmware_health?.[0] || null
-  const dominantModel = telemetry?.grill_type_health?.[0] || null
+    ? `${collection?.distinct_devices_observed || 0} devices, ${slice?.sessions_derived || 0} derived sessions, ${collection?.records_loaded || 0} stream rows`
+    : `${collection?.distinct_devices_observed || 0} device(s) from bounded fallback telemetry`
+  const sampleReliability: KPIObject['sample_reliability'] = !streamBacked ? 'low' : sampleSize < 5 ? 'low' : sampleSize < 20 ? 'medium' : 'high'
+  const limitedSampleNote = sampleReliability === 'low' ? 'Limited sample — directional only.' : null
+
+  const derived = analytics?.derived_metrics
+  const funnel = analytics?.cook_lifecycle_funnel || []
+  const dropoffs = analytics?.dropoff_reasons || []
+  const connectivity = analytics?.connectivity_buckets || []
+  const issueInsights = analytics?.issue_insights || []
+  const archetypes = analytics?.session_archetypes || []
+  const probeUsage = analytics?.probe_usage || []
+  const curve = analytics?.pit_temperature_curve || []
+  const worstFirmware = telemetry?.firmware_health?.[0] || null
+  const worstModel = telemetry?.grill_type_health?.[0] || null
+  const worstConnectivity = [...connectivity].sort((a, b) => b.failure_rate - a.failure_rate)[0] || null
 
   const kpis: KPIObject[] = useMemo(() => [
-    buildNumericKpi({ key: 'product_distinct_devices_observed', currentValue: collection?.distinct_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_active_devices_last_15m', currentValue: collection?.active_devices_last_15m ?? slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_active_devices_last_60m', currentValue: collection?.active_devices_last_60m ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_engaged_latest_devices', currentValue: collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildTextKpi({ key: 'product_low_rssi_session_risk', currentValue: slice ? (sampleReliability === 'low' ? `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of ${slice.sessions_derived} observed session(s); potential impact on control stability. ${limitedSampleNote}` : `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of observed sessions; potential impact on control stability.`) : null, targetValue: 'Low observed low-RSSI risk', owner: 'Kyle', status: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'red' : 'yellow', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildTextKpi({ key: 'product_error_vector_presence', currentValue: slice ? (sampleReliability === 'low' ? `Observed non-zero error vectors in ${errorPct}% of ${slice.sessions_derived} observed session(s). ${limitedSampleNote}` : `Observed non-zero error vectors in ${errorPct}% of observed sessions.`) : null, targetValue: 'Low observed error-vector presence', owner: 'Kyle', status: (slice?.error_vector_presence_rate || 0) > 0 ? 'yellow' : 'green', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: collection?.scan_truncated || collection?.max_record_cap_hit ? 'red' : 'yellow', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-  ], [collection, slice, snapshotTimestamp, boundedTruthState, reliabilityTruthState, sampleSize, sampleScope, sampleReliability, limitedSampleNote])
+    buildNumericKpi({ key: 'product_session_success_rate', currentValue: derived?.session_success_rate ?? latest?.cook_success_rate ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, thresholds: { greenAtOrAbove: 0.85, yellowAtOrAbove: 0.7 }, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_stability_score', currentValue: derived?.stability_score ?? latest?.temp_stability_score ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, thresholds: { greenAtOrAbove: 0.8, yellowAtOrAbove: 0.65 }, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_overshoot_rate', currentValue: derived?.overshoot_rate ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, thresholds: { greenAtOrAbove: 0, yellowAtOrAbove: 0 }, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_disconnect_proxy_rate', currentValue: derived?.disconnect_proxy_rate ?? latest?.disconnect_rate ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, thresholds: { greenAtOrAbove: 0, yellowAtOrAbove: 0 }, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_time_to_stabilize_seconds', currentValue: derived?.time_to_stabilize_seconds ?? latest?.avg_time_to_stabilization_seconds ?? null, targetValue: null, owner: 'Kyle', truthState: analyticsTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_probe_coverage', currentValue: analytics ? `${probeUsage.map((row) => `${row.probe_count} probes: ${pct(row.rate)}`).join(' · ') || 'No probe telemetry observed'}${limitedSampleNote ? ` ${limitedSampleNote}` : ''}` : null, targetValue: 'Consistent observable probe usage', owner: 'Kyle', status: analytics?.probe_failure_rate && analytics.probe_failure_rate > 0.2 ? 'yellow' : 'green', truthState: streamBacked ? 'estimated' : 'blocked', lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: streamBacked ? 'yellow' : 'red', truthState: coverageTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+  ], [derived, latest, analyticsTruthState, snapshotTimestamp, sampleSize, sampleScope, sampleReliability, analytics, probeUsage, limitedSampleNote, collection, streamBacked, coverageTruthState])
 
   const blockedStates: Record<string, BlockedStateOutput> = {
     product_coverage_quality: buildBlockedState({
-      decision_blocked: 'Whether observed telemetry can be treated as representative of the full fleet',
-      missing_source: 'global recent-time fleet access path',
-      still_trustworthy: ['device-local ordering', 'observed slice cohorts', 'bounded telemetry health summary'],
+      decision_blocked: 'Whether Product / Engineering telemetry can be generalized to full-fleet product truth',
+      missing_source: streamBacked ? 'canonical cook-session ledger / account-linked cook truth' : 'live stream-backed telemetry analytics path',
+      still_trustworthy: ['recent device activity windows', 'observed slice cohort comparisons', 'stream-derived funnel and RSSI proxies when stream-backed'],
       owner: 'Joseph',
-      required_action_to_unblock: 'Keep product decisions scoped to the observed slice until telemetry access broadens beyond bounded device-keyed reads.',
+      required_action_to_unblock: streamBacked ? 'Keep claims scoped to observed device-session heuristics until historical backfill and canonical cook semantics are added.' : 'Restore stream-backed telemetry and do not generalize fallback telemetry into fleet-wide product claims.',
     }),
   }
 
   const actions: RankedActionObject[] = enforceActionContract([
     actionFromKpi({
-      id: 'product-review-reliability-slice',
-      triggerKpi: kpis[4],
-      triggerCondition: 'observed low RSSI or reliability risk in current slice',
+      id: 'product-review-funnel-dropoff',
+      triggerKpi: kpis[0],
+      triggerCondition: 'session success or completion funnel is weak',
       owner: 'Kyle',
-      requiredAction: sampleSize < 3 ? `Query the observed slice for sessions where RSSI proxy < -75 dBm and firmware = ${dominantFirmware?.key || 'current cohort'} and model = ${dominantModel?.key || 'current cohort'}; inspect whether low signal coincides with stability loss before scaling the conclusion.` : `Query recent sessions where RSSI proxy < -75 dBm by firmware/model and compare stability loss against stronger-signal cohorts before prioritizing a product fix.`,
-      priority: lowRssiRisk ? 'critical' : 'high',
-      evidence: [`low_rssi_session_rate=${lowRssiPct}%`, `temp_stability_score=${tempStabilityPct}%`, `firmware=${dominantFirmware?.key || 'n/a'}`, `model=${dominantModel?.key || 'n/a'}`],
+      requiredAction: `Inspect derived sessions that fail between started -> reached_target -> stable -> completed; prioritize top drop-off reason (${dropoffs[0]?.reason || 'n/a'}) before broad product claims.`,
+      priority: (derived?.session_success_rate || 0) < 0.6 ? 'critical' : 'high',
+      evidence: [`session_success=${pct(derived?.session_success_rate)}`, `top_dropoff=${dropoffs[0]?.reason || 'n/a'}`, `funnel_started=${funnel[0]?.sessions || 0}`, `funnel_completed=${funnel[3]?.sessions || 0}`],
       dueDate: '24h',
       snapshotTimestamp,
-      baseRankingScore: lowRssiPct + (combinedConnectivityControlHypothesis ? 30 : 0) + 35,
+      baseRankingScore: Math.round((1 - (derived?.session_success_rate || 0)) * 100) + 30,
       scope: 'observed_slice',
-      confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
+      confidence: sampleReliability === 'low' ? 'low' : 'medium',
     }),
     actionFromKpi({
-      id: 'product-review-error-slice',
-      triggerKpi: kpis[5],
-      triggerCondition: 'error-vector presence observed in derived session slice',
+      id: 'product-review-connectivity-cohort',
+      triggerKpi: kpis[3],
+      triggerCondition: 'disconnect proxy or weak-RSSI cohort underperforms',
       owner: 'Kyle',
-      requiredAction: sampleSize < 3 ? `Pull the observed session(s) with non-zero error vectors and compare firmware = ${dominantFirmware?.key || 'current cohort'} against other visible cohorts before treating this as a firmware issue.` : 'Inspect error-vector-bearing sessions by firmware/model concentration and isolate the dominant reproducible cohort before escalating remediation.',
-      priority: errorPattern ? 'high' : 'medium',
-      evidence: [`error_vector_presence_rate=${errorPct}%`, `top_error_codes=${(telemetry?.top_error_codes || []).map((row) => row.code).join(',') || 'none'}`, `firmware=${dominantFirmware?.key || 'n/a'}`],
+      requiredAction: `Compare session stability and failure by RSSI bucket, starting with ${worstConnectivity?.bucket || 'weakest observed bucket'}, then isolate firmware/model concentration inside that bucket before escalating to hardware or controls work.`,
+      priority: (derived?.disconnect_proxy_rate || 0) >= 0.25 ? 'critical' : 'high',
+      evidence: [`disconnect_proxy=${pct(derived?.disconnect_proxy_rate)}`, `worst_rssi_bucket=${worstConnectivity?.bucket || 'n/a'}`, `bucket_failure=${pct(worstConnectivity?.failure_rate)}`],
+      dueDate: '24h',
+      snapshotTimestamp,
+      baseRankingScore: Math.round((derived?.disconnect_proxy_rate || 0) * 100) + Math.round((worstConnectivity?.failure_rate || 0) * 100),
+      scope: 'observed_slice',
+      confidence: sampleReliability === 'low' ? 'low' : 'medium',
+    }),
+    actionFromKpi({
+      id: 'product-review-worst-cohort',
+      triggerKpi: kpis[1],
+      triggerCondition: 'firmware/model cohort materially underperforms in observed sessions',
+      owner: 'Kyle',
+      requiredAction: `Review the worst observed firmware/model cohorts (firmware ${worstFirmware?.key || 'n/a'}, model ${worstModel?.key || 'n/a'}) and compare stability, failure, and disconnect proxies before assigning root cause.`,
+      priority: (worstFirmware?.failure_rate || 0) >= 0.25 || (worstModel?.failure_rate || 0) >= 0.25 ? 'high' : 'medium',
+      evidence: [`worst_firmware=${worstFirmware?.key || 'n/a'}:${pct(worstFirmware?.failure_rate)}`, `worst_model=${worstModel?.key || 'n/a'}:${pct(worstModel?.failure_rate)}`],
       dueDate: '48h',
       snapshotTimestamp,
-      baseRankingScore: errorPct + 25,
+      baseRankingScore: Math.round(((worstFirmware?.failure_rate || 0) + (worstModel?.failure_rate || 0)) * 50) + 20,
       scope: 'observed_slice',
-      confidence: sampleReliability === 'low' ? 'low' : sampleReliability === 'medium' ? 'medium' : 'high',
+      confidence: sampleReliability === 'low' ? 'low' : 'medium',
     }),
     actionFromKpi({
-      id: 'product-bound-coverage-warning',
+      id: 'product-coverage-warning',
       triggerKpi: kpis[6],
-      triggerCondition: 'coverage summary indicates bounded/truncated read',
+      triggerCondition: 'page is still using proxy telemetry rather than canonical cook truth',
       owner: 'Joseph',
-      coOwner: 'Kyle',
-      requiredAction: 'Keep telemetry conclusions scoped to the observed slice; do not generalize to fleet-level product action until a broader sample confirms the pattern.',
+      requiredAction: 'Keep product conclusions scoped to observed stream-derived telemetry until historical backfill and stronger canonical cook semantics are added.',
       priority: 'critical',
-      evidence: [collection?.coverage_summary || 'bounded telemetry coverage'],
+      evidence: [collection?.coverage_summary || 'telemetry coverage summary', telemetry?.confidence?.reason || 'proxy telemetry path'],
       dueDate: 'now',
       snapshotTimestamp,
-      baseRankingScore: collection?.scan_truncated || collection?.max_record_cap_hit ? 95 : 40,
+      baseRankingScore: 95,
       blockedState: blockedStates.product_coverage_quality,
       scope: 'observed_slice',
       confidence: 'low',
     }),
   ]).slice(0, 5)
 
-  const insights = [
-    {
-      key: 'connectivity-risk',
-      title: 'Connectivity degradation may be contributing to control instability',
-      observed: `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of the slice and temperature stability at ${tempStabilityPct}%.`,
-      strength: combinedConnectivityControlHypothesis ? 'high within slice' : lowRssiRisk ? 'medium within slice' : 'low',
-      scope: 'observed_slice',
-      uncertainty: sampleReliability === 'low' ? 'Insufficient sample to treat this as fleet-representative.' : 'Still bounded by observed slice only.',
-      rankScore: lowRssiPct + (combinedConnectivityControlHypothesis ? 30 : 0),
-    },
-    {
-      key: 'cohort-uncertainty',
-      title: 'Observed firmware/model cohort shows a reliability concern, but uncertainty remains high',
-      observed: `Firmware ${dominantFirmware?.key || 'n/a'} and model ${dominantModel?.key || 'n/a'} each show failure in the current observed cohort (n=${dominantFirmware?.sessions || 0}).`,
-      strength: dominantFirmware?.sessions ? 'early warning' : 'none',
-      scope: 'observed_slice',
-      uncertainty: `Insufficient sample to confirm cohort-level issue${dominantFirmware?.key ? ` for firmware ${dominantFirmware.key}` : ''}.`,
-      rankScore: (dominantFirmware?.failure_rate || 0) * 100,
-    },
-    {
-      key: 'session-stability',
-      title: 'Observed session stability is weak in the current slice',
-      observed: `Median observed session duration is ${medianMinutes} min and session reliability is ${reliabilityPct}%.`,
-      strength: shortSessionPattern || reliabilityPct <= 60 ? 'medium within slice' : 'low',
-      scope: 'observed_slice',
-      uncertainty: sampleReliability === 'low' ? 'Directional only because the slice is thin and bounded.' : 'Still bounded to current observed slice.',
-      rankScore: (100 - reliabilityPct) + (shortSessionPattern ? 15 : 0),
-    },
-  ].sort((a, b) => b.rankScore - a.rankScore)
-
   return (
     <div className="page-grid">
       <div className="page-head">
         <h2>Product / Engineering</h2>
-        <p>Telemetry-backed live operations and reliability view. Stream-backed where available; no canonical fleet-session claims.</p>
+        <p>Stream-backed telemetry analytics for cook behavior, failure modes, cohort risk, and connectivity. No ingestion changes; truth-state preserved.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
-      {loading ? <Card title="Product / Engineering"><div className="state-message">Loading telemetry operating view…</div></Card> : null}
+      {loading ? <Card title="Product / Engineering"><div className="state-message">Loading telemetry analytics…</div></Card> : null}
       {error ? <Card title="Product / Engineering Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
           <div className="three-col">
-            <Card title="Active devices · last 15m"><div className="hero-metric">{collection?.active_devices_last_15m ?? slice?.sessions_derived ?? 0}</div><div className="state-message">device_id proxy for live active grills · latest sample {formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)}</div></Card>
-            <Card title="Engaged latest-state devices"><div className="hero-metric">{collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? 0}</div><div className="state-message">latest observed device state marked engaged</div></Card>
-            <Card title="Reliability indicators"><div className="hero-metric">{latest ? `${(latest.session_reliability_score * 100).toFixed(0)}%` : '—'}</div><div className="state-message">stream-backed reliability proxy · sample {sampleReliability}</div></Card>
+            <Card title="Session success"><div className="hero-metric">{pct(derived?.session_success_rate ?? latest?.cook_success_rate)}</div><div className="state-message">truth_state: {kpis[0].truth_state} · sample {sampleReliability}</div></Card>
+            <Card title="Stability score"><div className="hero-metric">{pct(derived?.stability_score ?? latest?.temp_stability_score)}</div><div className="state-message">derived from stream session heuristics · sample {sampleScope}</div></Card>
+            <Card title="Disconnect proxy"><div className="hero-metric">{pct(derived?.disconnect_proxy_rate ?? latest?.disconnect_rate)}</div><div className="state-message">gap/RSSI proxy, not canonical disconnect event truth</div></Card>
           </div>
           <DecisionStack actions={actions} />
+
           <div className="two-col">
-            <Card title="Telemetry health / coverage snapshot">
+            <Card title="Cook lifecycle funnel">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>coverage summary</strong><p>{collection?.coverage_summary || 'No telemetry coverage summary returned.'}</p><small><strong>oldest:</strong> {collection?.oldest_sample_timestamp_seen || 'n/a'} · <strong>newest:</strong> {collection?.newest_sample_timestamp_seen || 'n/a'} ({formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)})</small><small><strong>active now:</strong> 5m {collection?.active_devices_last_5m ?? 'n/a'} · 15m {collection?.active_devices_last_15m ?? 'n/a'} · 60m {collection?.active_devices_last_60m ?? 'n/a'} · 24h {collection?.active_devices_last_24h ?? 'n/a'}</small></div>
-                <div className="list-item status-muted"><strong>source truth</strong><p>{streamBacked ? 'Live DynamoDB stream events (`sg_device_shadows_stream`) flowing through Lambda -> KPI API -> raw telemetry store.' : 'Direct DynamoDB read from `sg_device_shadows` in a bounded observed slice.'}</p><small><strong>source:</strong> {collection?.source || 'n/a'} · <strong>sample_source:</strong> {collection?.sample_source || 'n/a'} · <strong>gap timeout:</strong> {collection?.session_gap_timeout_minutes ?? 'n/a'} min</small></div>
+                {funnel.map((step) => (
+                  <div className={`list-item status-${step.rate >= 0.8 ? 'good' : step.rate >= 0.5 ? 'warn' : 'bad'}`} key={step.step}>
+                    <div className="item-head"><strong>{step.step.replace('_', ' ')}</strong><span>{step.sessions} sessions</span></div>
+                    <p>{pct(step.rate)} of started sessions reached this stage.</p>
+                    <small>Rendered from stream-derived session lifecycle heuristics · truth_state: {kpis[0].truth_state}</small>
+                  </div>
+                ))}
+                {!funnel.length ? <div className="state-message">No stream-backed funnel rows returned.</div> : null}
               </div>
             </Card>
-            <Card title="Observed device and session slice">
+            <Card title="Drop-off reasons">
               <div className="stack-list compact">
-                <div className="list-item status-neutral"><strong>live device activity</strong><p>Active last 5m: {collection?.active_devices_last_5m ?? 0} · last 15m: {collection?.active_devices_last_15m ?? 0} · last 60m: {collection?.active_devices_last_60m ?? 0}</p></div>
-                <div className="list-item status-neutral"><strong>device coverage</strong><p>Distinct devices in loaded slice: {collection?.distinct_devices_observed ?? 0} · engaged latest-state devices: {collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? 0}</p><small><strong>sample scope:</strong> {sampleScope} · <strong>sample reliability:</strong> {sampleReliability}</small></div>
+                {dropoffs.map((row) => (
+                  <div className="list-item status-warn" key={row.reason}>
+                    <div className="item-head"><strong>{row.reason.replace(/_/g, ' ')}</strong><span>{pct(row.rate)}</span></div>
+                    <p>{row.sessions} derived sessions dropped here.</p>
+                  </div>
+                ))}
+                {!dropoffs.length ? <div className="state-message">No material drop-off reason was returned from the current observed slice.</div> : null}
               </div>
             </Card>
           </div>
+
           <div className="two-col">
-            <Card title="Observed insights">
-              <div className="stack-list compact">
-                {insights.map((insight) => <div className={`list-item status-${insight.rankScore >= 100 ? 'bad' : insight.rankScore >= 50 ? 'warn' : 'neutral'}`} key={insight.key}><strong>{insight.title}</strong><p>{insight.observed}</p><small><strong>signal:</strong> {insight.strength} · <strong>scope:</strong> {insight.scope}</small><small><strong>uncertainty:</strong> {insight.uncertainty}</small></div>)}
+            <Card title="Time vs temperature analytics">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Minute</th><th>P50 pit-target Δ</th><th>P90 pit-target Δ</th><th>Samples</th></tr>
+                  </thead>
+                  <tbody>
+                    {curve.map((row) => (
+                      <tr key={row.minute_bucket}>
+                        <td>{row.minute_bucket}</td>
+                        <td>{row.p50_temp_delta ?? '—'}°</td>
+                        <td>{row.p90_temp_delta ?? '—'}°</td>
+                        <td>{row.sessions}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
+              <div className="state-message">Aggregate pit vs target deltas from derived stream sessions. Truth state: {kpis[1].truth_state}.</div>
             </Card>
-            <Card title="Derived patterns">
+            <Card title="Session archetypes">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>Combined-signal hypothesis</strong><p>{combinedConnectivityControlHypothesis ? `Observed low RSSI proxy (${lowRssiPct}%) and low temp stability (${tempStabilityPct}%) together; connectivity degradation may be contributing to temperature instability.` : 'No strong combined connectivity + control instability hypothesis triggered in the current slice.'}</p></div>
-                <div className="list-item status-neutral"><strong>Cohort uncertainty</strong><p>{`Failure observed in firmware ${dominantFirmware?.key || 'n/a'} and model ${dominantModel?.key || 'n/a'} (n=${dominantFirmware?.sessions || 0}); insufficient sample to confirm cohort-level issue.`}</p></div>
+                {archetypes.map((row) => (
+                  <div className={`list-item status-${row.archetype === 'stable' ? 'good' : row.archetype === 'dropout' ? 'bad' : 'warn'}`} key={row.archetype}>
+                    <div className="item-head"><strong>{row.archetype}</strong><span>{pct(row.rate)}</span></div>
+                    <p>{row.description}</p>
+                    <small>{row.sessions} sessions in observed slice.</small>
+                  </div>
+                ))}
               </div>
             </Card>
           </div>
+
           <div className="two-col">
-            <Card title="Firmware / model cohort summary">
-              <div className="stack-list">
-                {(telemetry?.firmware_health || []).slice(0, 5).map((row) => <div className={`list-item status-${row.severity === 'high' ? 'bad' : row.severity === 'medium' ? 'warn' : 'good'}`} key={`fw-${row.key}`}><strong>Firmware {row.key}</strong><p>Sessions {row.sessions} · failure {(row.failure_rate * 100).toFixed(1)}% · disconnect {(row.disconnect_rate * 100).toFixed(1)}%</p></div>)}
-                {(telemetry?.grill_type_health || []).slice(0, 5).map((row) => <div className={`list-item status-${row.severity === 'high' ? 'bad' : row.severity === 'medium' ? 'warn' : 'good'}`} key={`gt-${row.key}`}><strong>Model {row.key}</strong><p>Sessions {row.sessions} · failure {(row.failure_rate * 100).toFixed(1)}% · disconnect {(row.disconnect_rate * 100).toFixed(1)}%</p></div>)}
-                {!(telemetry?.firmware_health || []).length && !(telemetry?.grill_type_health || []).length ? <div className="state-message">No cohort rows returned.</div> : null}
+            <Card title="Probe analytics">
+              <div className="stack-list compact">
+                <div className="list-item status-neutral"><strong>probe usage rate</strong><p>{probeUsage.map((row) => `${row.probe_count}: ${pct(row.rate)}`).join(' · ') || 'No probe telemetry observed in current slice.'}</p></div>
+                <div className="list-item status-warn"><strong>probe failure rate</strong><p>{pct(analytics?.probe_failure_rate)}</p><small>Only computed when raw payload exposes probe-like fields; otherwise remains unavailable.</small></div>
+                <div className="list-item status-neutral"><strong>pit vs probe delta</strong><p>{analytics?.pit_probe_delta_avg !== null && analytics?.pit_probe_delta_avg !== undefined ? `${analytics.pit_probe_delta_avg}° avg absolute delta` : 'Unavailable from current payload shape.'}</p></div>
               </div>
             </Card>
-            <Card title="Reliability indicators from observed data">
-              <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>low signal risk proxy</strong><p>{kpis[4]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[4]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[4]?.sample_reliability || 'n/a'}</small></div>
-                <div className="list-item status-warn"><strong>error-vector presence rate</strong><p>{kpis[5]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[5]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[5]?.sample_reliability || 'n/a'}</small></div>
-                <div className="list-item status-neutral"><strong>target temp distribution</strong><p>{slice?.target_temp_distribution?.map((row) => `${row.target_temp}°:${row.count}`).join(' · ') || 'No target-temp distribution returned.'}</p></div>
-                <div className="list-item status-neutral"><strong>live active-device windows</strong><p>5m: {collection?.active_devices_last_5m ?? 0} · 15m: {collection?.active_devices_last_15m ?? 0} · 60m: {collection?.active_devices_last_60m ?? 0} · 24h: {collection?.active_devices_last_24h ?? 0}</p></div>
+            <Card title="Connectivity analysis">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>RSSI bucket</th><th>Sessions</th><th>Failure rate</th><th>Stability score</th></tr>
+                  </thead>
+                  <tbody>
+                    {connectivity.map((row) => (
+                      <tr key={row.bucket}>
+                        <td>{row.bucket}</td>
+                        <td>{row.sessions}</td>
+                        <td>{pct(row.failure_rate)}</td>
+                        <td>{pct(row.stability_score)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </Card>
           </div>
-          <Card title="Blocked-state panels">
-            <div className="stack-list compact">
-              <div className="list-item status-bad"><strong>{blockedStates.product_coverage_quality.decision_blocked}</strong><p>{blockedStates.product_coverage_quality.missing_source}</p><small><strong>still trustworthy:</strong> {blockedStates.product_coverage_quality.still_trustworthy.join(', ')}</small><small><strong>owner:</strong> {blockedStates.product_coverage_quality.owner} · <strong>next action:</strong> {blockedStates.product_coverage_quality.required_action_to_unblock}</small></div>
-              <div className="list-item status-muted"><strong>label discipline</strong><p>All live counts on this page are device-level telemetry proxies, not user counts.</p></div>
-            </div>
-          </Card>
+
+          <div className="two-col">
+            <Card title="Cohort comparison · firmware">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Firmware</th><th>Sessions</th><th>Failure</th><th>Disconnect</th><th>Health</th></tr>
+                  </thead>
+                  <tbody>
+                    {(telemetry?.firmware_health || []).slice(0, 8).map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.key}</td>
+                        <td>{row.sessions}</td>
+                        <td>{pct(row.failure_rate)}</td>
+                        <td>{pct(row.disconnect_rate)}</td>
+                        <td>{pct(row.health_score)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+            <Card title="Cohort comparison · model">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Model</th><th>Sessions</th><th>Failure</th><th>Disconnect</th><th>Health</th></tr>
+                  </thead>
+                  <tbody>
+                    {(telemetry?.grill_type_health || []).slice(0, 8).map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.key}</td>
+                        <td>{row.sessions}</td>
+                        <td>{pct(row.failure_rate)}</td>
+                        <td>{pct(row.disconnect_rate)}</td>
+                        <td>{pct(row.health_score)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+
+          <div className="three-col">
+            <Card title="Derived metric · overshoot rate"><div className="hero-metric hero-metric-sm">{pct(derived?.overshoot_rate)}</div><div className="state-message">Rendered in top analytics KPI strip.</div></Card>
+            <Card title="Derived metric · time to stabilize"><div className="hero-metric hero-metric-sm">{secondsToMinutes(derived?.time_to_stabilize_seconds)}</div><div className="state-message">Derived from first stable 3-hit target band in stream session heuristic.</div></Card>
+            <Card title="Derived metric · active devices last 15m"><div className="hero-metric hero-metric-sm">{collection?.active_devices_last_15m ?? 0}</div><div className="state-message">Device-level recent activity proxy, not users.</div></Card>
+          </div>
+
+          <div className="two-col">
+            <Card title="Structured issue detection">
+              <div className="stack-list compact">
+                {issueInsights.map((row, index) => (
+                  <div className={`list-item status-${row.confidence === 'high' ? 'bad' : row.confidence === 'medium' ? 'warn' : 'muted'}`} key={`${row.issue}-${index}`}>
+                    <strong>{row.issue}</strong>
+                    <p>{row.signal}</p>
+                    <small><strong>cohort:</strong> {row.cohort} · <strong>confidence:</strong> {row.confidence}</small>
+                    <small><strong>action:</strong> {row.action}</small>
+                  </div>
+                ))}
+                {!issueInsights.length ? <div className="state-message">No structured issue insight crossed threshold in the current observed slice.</div> : null}
+              </div>
+            </Card>
+            <Card title="Telemetry health / truth handling">
+              <div className="stack-list compact">
+                <div className="list-item status-muted"><strong>coverage summary</strong><p>{collection?.coverage_summary || 'No telemetry coverage summary returned.'}</p><small>latest sample {formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)}</small></div>
+                <div className="list-item status-neutral"><strong>truth_state proof</strong><p>Cook lifecycle, stability, overshoot, disconnect proxy, and cohort analytics remain <strong>{analyticsTruthState}</strong>; coverage/generalization remains <strong>{coverageTruthState}</strong>.</p><small>This preserves the existing truth_state system and blocks fleet-general conclusions.</small></div>
+                <div className="list-item status-bad"><strong>{blockedStates.product_coverage_quality.decision_blocked}</strong><p>{blockedStates.product_coverage_quality.missing_source}</p><small><strong>still trustworthy:</strong> {blockedStates.product_coverage_quality.still_trustworthy.join(', ')}</small><small><strong>next action:</strong> {blockedStates.product_coverage_quality.required_action_to_unblock}</small></div>
+              </div>
+            </Card>
+          </div>
         </>
       ) : null}
     </div>

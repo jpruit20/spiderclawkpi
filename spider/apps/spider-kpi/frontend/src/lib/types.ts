@@ -292,6 +292,74 @@ export interface TelemetrySliceSnapshot {
   target_temp_distribution: Array<{ target_temp: string, count: number }>
 }
 
+export interface TelemetryFunnelStep {
+  step: string
+  sessions: number
+  rate: number
+}
+
+export interface TelemetryDropoffReason {
+  reason: string
+  sessions: number
+  rate: number
+}
+
+export interface TelemetryCurvePoint {
+  minute_bucket: number
+  p50_temp_delta: number | null
+  p90_temp_delta: number | null
+  sessions: number
+}
+
+export interface TelemetryArchetypeRow {
+  archetype: string
+  sessions: number
+  rate: number
+  description: string
+}
+
+export interface TelemetryProbeRow {
+  probe_count: number
+  sessions: number
+  rate: number
+}
+
+export interface TelemetryConnectivityBucket {
+  bucket: string
+  sessions: number
+  failure_rate: number
+  stability_score: number | null
+}
+
+export interface TelemetryIssueInsight {
+  issue: string
+  signal: string
+  cohort: string
+  confidence: 'low' | 'medium' | 'high'
+  action: string
+}
+
+export interface TelemetryDerivedMetrics {
+  stability_score?: number | null
+  overshoot_rate?: number | null
+  time_to_stabilize_seconds?: number | null
+  disconnect_proxy_rate?: number | null
+  session_success_rate?: number | null
+}
+
+export interface TelemetryAnalytics {
+  cook_lifecycle_funnel: TelemetryFunnelStep[]
+  dropoff_reasons: TelemetryDropoffReason[]
+  pit_temperature_curve: TelemetryCurvePoint[]
+  session_archetypes: TelemetryArchetypeRow[]
+  probe_usage: TelemetryProbeRow[]
+  probe_failure_rate?: number | null
+  pit_probe_delta_avg?: number | null
+  connectivity_buckets: TelemetryConnectivityBucket[]
+  issue_insights: TelemetryIssueInsight[]
+  derived_metrics?: TelemetryDerivedMetrics
+}
+
 export interface TelemetrySummary {
   latest?: TelemetryLatestSummary | null
   daily: Array<Record<string, any>>
@@ -302,6 +370,7 @@ export interface TelemetrySummary {
   slice_snapshot?: TelemetrySliceSnapshot
   collection_metadata?: TelemetryCollectionMetadata
   confidence?: TelemetryConfidence
+  analytics?: TelemetryAnalytics
 }
 
 export interface OverviewResponse {
