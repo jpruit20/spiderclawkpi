@@ -7,6 +7,17 @@ import { currency, summarizeTrust } from '../lib/operatingModel'
 import { BlockedStateOutput, KPIDaily, KPIObject, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject, truthStateFromSource } from '../lib/divisionContract'
 
+function formatTelemetryFreshness(timestamp?: string | null) {
+  if (!timestamp) return 'n/a'
+  const parsed = Date.parse(timestamp)
+  if (Number.isNaN(parsed)) return 'n/a'
+  const ageMinutes = Math.max(0, Math.round((Date.now() - parsed) / 60000))
+  if (ageMinutes < 60) return `${ageMinutes}m ago`
+  const hours = Math.floor(ageMinutes / 60)
+  const minutes = ageMinutes % 60
+  return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`
+}
+
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
   return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
 }
@@ -183,6 +194,22 @@ export function CommandCenter() {
               <span className="badge badge-neutral">telemetry truth {overview?.telemetry?.confidence?.global_completeness || 'unknown'}</span>
               <span className="badge badge-neutral">telemetry sample {telemetrySampleReliability}</span>
             </div>
+          </div>
+          <div className="three-col">
+            <Card title="Live telemetry escalation">
+              <div className="hero-metric">{overview?.telemetry?.collection_metadata?.active_devices_last_15m ?? overview?.telemetry?.slice_snapshot?.sessions_derived ?? 0}</div>
+              <div className="state-message">active devices last 15m · freshness {formatTelemetryFreshness(overview?.telemetry?.collection_metadata?.newest_sample_timestamp_seen)}</div>
+              <div className="state-message">reliability {telemetryLatest ? `${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'n/a'} · sample {telemetrySampleReliability} · observed-slice only</div>
+            </Card>
+            <Card title="Telemetry risk context">
+              <div className="hero-metric">{overview?.telemetry?.collection_metadata?.engaged_latest_devices ?? overview?.telemetry?.collection_metadata?.distinct_engaged_devices_observed ?? 0}</div>
+              <div className="state-message">engaged latest-state devices · 5m/60m {(overview?.telemetry?.collection_metadata?.active_devices_last_5m ?? 0)}/{(overview?.telemetry?.collection_metadata?.active_devices_last_60m ?? 0)}</div>
+              <div className="state-message">disconnect {(telemetryLatest?.disconnect_rate || 0 * 100).toFixed ? `${((telemetryLatest?.disconnect_rate || 0) * 100).toFixed(1)}%` : 'n/a'} · error {(telemetryLatest?.error_rate || 0 * 100).toFixed ? `${((telemetryLatest?.error_rate || 0) * 100).toFixed(1)}%` : 'n/a'}</div>
+            </Card>
+            <Card title="Telemetry confidence">
+              <div className="hero-metric">{overview?.telemetry?.confidence?.session_derivation || 'unknown'}</div>
+              <div className="state-message">{overview?.telemetry?.collection_metadata?.coverage_summary || 'No coverage summary returned.'}</div>
+            </Card>
           </div>
           <DecisionStack actions={actions} />
           <Card title="Diagnostic drill-downs">

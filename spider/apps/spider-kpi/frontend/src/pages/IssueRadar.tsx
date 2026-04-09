@@ -6,6 +6,17 @@ import { currency, frictionRankingScore } from '../lib/operatingModel'
 import { ActionObject, BlockedStateOutput, IssueClusterItem, IssueRadarResponse, KPIObject, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
+function formatTelemetryFreshness(timestamp?: string | null) {
+  if (!timestamp) return 'n/a'
+  const parsed = Date.parse(timestamp)
+  if (Number.isNaN(parsed)) return 'n/a'
+  const ageMinutes = Math.max(0, Math.round((Date.now() - parsed) / 60000))
+  if (ageMinutes < 60) return `${ageMinutes}m ago`
+  const hours = Math.floor(ageMinutes / 60)
+  const minutes = ageMinutes % 60
+  return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`
+}
+
 function ClusterList({ title, rows, mode = 'queue' }: { title: string; rows: IssueClusterItem[]; mode?: 'queue' | 'evidence' }) {
   return (
     <Card title={title}>
@@ -93,6 +104,10 @@ export function IssueRadar() {
   }, [data.clusters, sourceHealth])
   const topThree = sortedClusters.slice(0, 3)
   const telemetryLatest = telemetry?.latest || null
+  const telemetryFreshness = formatTelemetryFreshness(telemetry?.collection_metadata?.newest_sample_timestamp_seen)
+  const dominantFirmware = telemetry?.firmware_health?.[0] || null
+  const dominantModel = telemetry?.grill_type_health?.[0] || null
+  const telemetrySampleReliability = Math.max(telemetry?.collection_metadata?.distinct_devices_observed || 0, telemetry?.collection_metadata?.active_devices_last_15m || 0, telemetry?.slice_snapshot?.sessions_derived || 0) <= 1 || telemetry?.collection_metadata?.scan_truncated || telemetry?.collection_metadata?.max_record_cap_hit ? 'low' : Math.max(telemetry?.collection_metadata?.distinct_devices_observed || 0, telemetry?.collection_metadata?.active_devices_last_15m || 0, telemetry?.slice_snapshot?.sessions_derived || 0) < 10 ? 'medium' : 'high'
   const snapshotTimestamp = new Date().toISOString()
   const topIssueTruthState = truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy')
   const kpis: KPIObject[] = [
@@ -217,7 +232,9 @@ export function IssueRadar() {
                   <strong>{kpis[3].key}</strong>
                   <span className="badge badge-neutral">{kpis[3].truth_state}</span>
                 </div>
-                <p>Sessions {telemetryLatest.sessions} · disconnect {(telemetryLatest.disconnect_rate * 100).toFixed(1)}% · success {(telemetryLatest.cook_success_rate * 100).toFixed(1)}% · reliability {(telemetryLatest.session_reliability_score * 100).toFixed(0)}%</p>
+                <p>Active devices 15m {telemetry?.collection_metadata?.active_devices_last_15m ?? telemetryLatest.sessions} · disconnect {(telemetryLatest.disconnect_rate * 100).toFixed(1)}% · reliability {(telemetryLatest.session_reliability_score * 100).toFixed(0)}%</p>
+                <small><strong>freshness:</strong> {telemetryFreshness} · <strong>sample reliability:</strong> {telemetrySampleReliability} · <strong>coverage:</strong> {telemetry?.collection_metadata?.coverage_summary || 'No coverage summary returned.'}</small>
+                <small><strong>dominant cohort:</strong> firmware {dominantFirmware?.key || 'n/a'} ({dominantFirmware?.sessions || 0}) · model {dominantModel?.key || 'n/a'} ({dominantModel?.sessions || 0})</small>
                 <small><strong>owner:</strong> Kyle · <strong>next action:</strong> {actionItems.find((item) => item.id === 'issue-radar-telemetry-watch')?.required_action}</small>
               </div>
             ) : (
