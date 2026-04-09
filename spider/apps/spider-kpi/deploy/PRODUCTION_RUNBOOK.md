@@ -1,102 +1,292 @@
-# Spider KPI Production Runbook
+# Spider KPI production runbook
 
-## Production topology
+This runbook defines the exact production operating model for the KPI stack.
 
-- Frontend: Vercel (`https://kpi.spidergrills.com`)
-- Backend API: DigitalOcean droplet via nginx + uvicorn (`https://api-kpi.spidergrills.com`)
+Goal:
+- no remembered heroics
+- no implied tribal knowledge
+- every remaining manual step is isolated and written down
+
+## 1. Production topology
+
+- Frontend: Vercel
+  - `https://kpi.spidergrills.com`
+- Backend API: DigitalOcean droplet via nginx + uvicorn
+  - `https://api-kpi.spidergrills.com`
 - Backend service: `spider-kpi.service`
-- Backend repo path on droplet: `/opt/spiderclawkpi/spider/apps/spider-kpi`
-- Database: local Postgres on droplet (`127.0.0.1:5432`)
+- Backend repo path on droplet:
+  - `/opt/spiderclawkpi/spider/apps/spider-kpi`
+- Database: local Postgres on droplet
+  - `127.0.0.1:5432`
 
-## Current deploy model
+## 2. What is automated now
 
-### Frontend
-Frontend changes pushed to GitHub can be auto-deployed by Vercel if the Vercel project is connected to the repo/branch.
+### Source of truth for deploy automation
+- workflow file: `.github/workflows/deploy-kpi.yml`
 
-### Backend
-Backend changes are **not yet fully automatic** unless an external deploy hook / GitHub Action / pull-on-push mechanism is configured on the droplet.
+### Automated on push to `master`
+If the required GitHub secrets are configured, this workflow does the following:
 
-Current reliable backend deploy flow:
-1. push code to GitHub
-2. SSH to droplet
-3. pull latest `origin/master`
-4. restart `spider-kpi.service`
-5. run admin backfill/sync if needed
-6. validate DB + API output
+#### Frontend
+1. checkout repo
+2. install frontend dependencies
+3. build frontend
+4. deploy frontend to Vercel production
 
-## Standard backend deploy
+#### Backend
+1. SSH to the production droplet
+2. `git fetch origin`
+3. `git checkout master`
+4. `git pull --ff-only origin master`
+5. install backend Python requirements into `.venv`
+6. run Alembic migrations to `head`
+7. restart `spider-kpi.service`
+8. verify service is active
+9. verify `http://127.0.0.1:8000/health`
 
-On the droplet:
+### Practical consequence
+For normal application code changes, deploys + migrations are already intended to be automatic on push.
 
+## 3. Required secrets for automation to work
+
+### Frontend deploy secrets
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+### Backend deploy secrets
+- `DO_KPI_HOST`
+- `DO_KPI_USER`
+- `DO_KPI_SSH_KEY`
+- optional: `DO_KPI_PORT`
+
+## 4. Remaining manual production steps
+
+These are the only production tasks still expected to be manual.
+
+### Manual step A - initial infrastructure provisioning
+This includes one-time setup that is not done by the app deploy workflow:
+- creating the droplet
+- installing system packages
+- creating `spider-kpi.service`
+- configuring nginx
+- creating Postgres/database/user
+- creating the backend `.env`
+- configuring Vercel project linkage
+- adding GitHub Actions secrets
+
+This is normal infrastructure setup, not daily operation.
+
+### Manual step B - AWS telemetry stream infrastructure changes
+App deploys do not create or modify AWS telemetry resources.
+These remain separate infrastructure steps:
+- enable DynamoDB Streams on `sg_device_shadows`
+- ensure stream view is `NEW_IMAGE`
+- deploy/update Lambda package
+- set Lambda env vars
+- attach IAM permissions
+- create/update event source mapping
+
+These are documented in:
+- `apps/spider-kpi/deploy/aws-streams/README.md`
+
+### Manual step C - telemetry historical recovery / export
+Historical telemetry backfill is intentionally not part of push deploy.
+It remains a controlled manual/ops workflow because it touches AWS backup/export state and can be expensive.
+
+This is documented in:
+- `apps/spider-kpi/deploy/aws-streams/EXPORT_BACKFILL_RUNBOOK.md`
+
+### Manual step D - incident verification when automation fails
+If GitHub Actions deploy fails, recovery is manual by definition. The exact recovery procedure is documented below so it is not heroic.
+
+## 5. Exact backend recovery runbook if GitHub Actions deploy fails
+
+Use this only if the automated backend deploy failed or backend secrets are missing.
+
+### 5.1 SSH to the droplet
 ```bash
+ssh -p <PORT> <USER>@<HOST>
+```
+
+### 5.2 Pull exact code and migrate
+```bash
+set -euo pipefail
 cd /opt/spiderclawkpi/spider/apps/spider-kpi
 git fetch origin
 git checkout master
 git pull --ff-only origin master
-git rev-parse HEAD
-systemctl restart spider-kpi.service
-systemctl is-active spider-kpi.service
-curl -i http://127.0.0.1:8000/health
+if [ -x .venv/bin/pip ]; then
+  .venv/bin/pip install -r backend/requirements.txt
+fi
+if [ -x .venv/bin/alembic ]; then
+  cd backend
+  ../.venv/bin/alembic upgrade head
+  cd ..
+fi
+sudo systemctl restart spider-kpi.service
+sudo systemctl is-active spider-kpi.service
+curl -fsS http://127.0.0.1:8000/health
 ```
 
-## Shopify truth recovery / validation
+### 5.3 Verify running revision
+```bash
+cd /opt/spiderclawkpi/spider/apps/spider-kpi
+git rev-parse HEAD
+```
 
-### Authenticate for admin endpoints
+## 6. Exact telemetry live-path verification runbook
 
+Use this after any telemetry-related deploy or AWS change.
+
+### 6.1 Backend service health
+On droplet:
+```bash
+curl -fsS http://127.0.0.1:8000/health
+```
+
+### 6.2 Confirm telemetry stream table exists after migrations
+On droplet:
+```bash
+cd /opt/spiderclawkpi/spider/apps/spider-kpi/backend
+../.venv/bin/alembic current
+../.venv/bin/alembic heads
+```
+
+Expected:
+- current revision includes telemetry stream migrations
+- DB is at `head`
+
+### 6.3 Get app password for admin endpoints
+On droplet:
 ```bash
 APP_PASSWORD=$(grep '^APP_PASSWORD=' /opt/spiderclawkpi/spider/apps/spider-kpi/.env | cut -d= -f2-)
 ```
 
-### Run backfill and recent sync
-
+### 6.4 Check stream landing endpoint state
+On droplet:
 ```bash
 python3 - <<'PY'
 from urllib.request import Request, urlopen
 from pathlib import Path
+import json
 pw = Path('/opt/spiderclawkpi/spider/apps/spider-kpi/.env').read_text().split('APP_PASSWORD=',1)[1].splitlines()[0].strip()
-for url in [
-    'http://127.0.0.1:8000/api/admin/backfill/shopify',
-    'http://127.0.0.1:8000/api/admin/run-sync/shopify',
-]:
-    r = Request(url, method='POST')
-    r.add_header('X-App-Password', pw)
-    print(url, urlopen(r).read().decode())
+r = Request('http://127.0.0.1:8000/api/admin/debug/telemetry-stream')
+r.add_header('X-App-Password', pw)
+print(urlopen(r).read().decode())
 PY
 ```
 
-### Validate DB rows directly
+Expected signals:
+- `total > 0`
+- `rows_last_15m` or `rows_last_60m` grows when traffic exists
+- `fallback_active = false` during healthy stream flow
 
-```bash
-python3 scripts/validate_shopify_window.py --db-url "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" --start 2026-03-29 --end 2026-04-05
-```
+### 6.5 Check source health / summary mode in UI or API
+Expected telemetry metadata:
+- `source = sg_device_shadows_stream`
+- `sample_source = dynamodb_stream`
 
-## Fast validation targets
+If `sample_source != dynamodb_stream`, production has fallen back to bounded-scan telemetry.
 
-After a Shopify deploy/backfill, validate all of these:
-- `shopify_orders_daily`
-- `kpi_daily`
-- `GET /api/overview`
-- dashboard UI 7-day window
+## 7. Exact telemetry AWS infrastructure update runbook
 
-## Known important rule
+This is the exact manual path when AWS telemetry infra itself must be changed.
 
-Shopify polling must rebuild touched dates from canonical latest per-order state.
-Do **not** overwrite `shopify_orders_daily` directly from a partial recent poll window.
+### 7.1 Stream source requirements
+- table: `sg_device_shadows`
+- DynamoDB Streams enabled
+- view type: `NEW_IMAGE`
 
-## Backend automation status
+### 7.2 Lambda requirements
+- standalone handler file:
+  - `apps/spider-kpi/deploy/aws-streams/lambda_handler_standalone.py`
+- env vars:
+  - `KPI_API_BASE_URL`
+  - `KPI_API_PASSWORD`
 
-Implemented:
-- GitHub Actions deploy workflow for backend code deploys (`Deploy KPI Backend`)
-- GitHub Actions manual Shopify backfill workflow (`Backfill KPI Shopify`)
-- GitHub Actions manual connector sync workflow (`Run KPI Connectors`)
+### 7.3 Required post-change verification
+After any Lambda or event-source change, verify all of these:
+1. Lambda invocation succeeds in CloudWatch
+2. `/api/admin/debug/telemetry-stream` shows new landed rows
+3. Source Health shows `aws_telemetry_stream`
+4. System Health does not show bounded-scan fallback warning
 
-Current model:
-- backend code changes can auto-deploy on push to `master`
-- historical Shopify repair/backfill is manually triggerable from GitHub Actions with explicit window inputs
+Reference doc:
+- `apps/spider-kpi/deploy/aws-streams/README.md`
 
-## Manual backfill workflow
+## 8. Exact telemetry historical recovery runbook
 
-Use the `Backfill KPI Shopify` workflow in GitHub Actions when you need to:
-- repair historical Shopify days
-- repopulate a wider historical window after connector logic changes
-- validate `shopify_orders_daily` and `kpi_daily` for a specific date range
+Historical telemetry recovery is not part of application deploy.
+It is a separate ops action and must stay that way.
+
+Use:
+- `apps/spider-kpi/deploy/aws-streams/EXPORT_BACKFILL_RUNBOOK.md`
+
+That runbook covers:
+1. enabling PITR
+2. exporting DynamoDB to S3
+3. monitoring export completion
+4. processing export offline
+5. computing distinct `device_id` history
+
+## 9. Failure-mode matrix
+
+### Case: push deploy succeeded
+- no manual action needed
+- verify dashboard/API only if the change was sensitive
+
+### Case: frontend deploy skipped
+Cause:
+- missing Vercel secrets
+
+Action:
+- configure `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`
+
+### Case: backend deploy skipped
+Cause:
+- missing droplet SSH secrets
+
+Action:
+- configure `DO_KPI_HOST`, `DO_KPI_USER`, `DO_KPI_SSH_KEY`
+- temporary fallback: run the backend recovery runbook in section 5
+
+### Case: backend deploy ran but backend unhealthy
+Action:
+- run section 5 exactly
+- verify migrations reached `head`
+- check service logs
+
+### Case: app healthy but telemetry not stream-backed
+Action:
+- run section 6
+- then section 7
+- determine whether stream landing stopped or summary fell back
+
+### Case: need 12-month telemetry history
+Action:
+- do not deep-scan live table as primary path
+- run section 8
+
+## 10. Operational rule
+
+The KPI stack should be treated as:
+- *application deploy automation* via GitHub Actions
+- *telemetry AWS infrastructure* via explicit runbook
+- *historical telemetry recovery* via explicit export/offline runbook
+
+If a step cannot be automated safely yet, it must stay written here exactly.
+
+## 11. Current blunt assessment
+
+### Already eliminated
+- remembered backend deploy / migration sequence
+- remembered telemetry architecture details
+- remembered fallback interpretation
+
+### Still intentionally manual
+- AWS telemetry infrastructure changes
+- historical DynamoDB export/backfill operations
+- incident recovery when platform secrets or infrastructure are missing
+
+Those are now isolated and documented rather than hidden in memory.
