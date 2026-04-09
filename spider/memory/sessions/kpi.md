@@ -10,7 +10,8 @@
 - This session name (`Spider Grills KPI Dashboard Build`) maps to the KPI workstream.
 - The dashboard foundation is strong, but the highest-leverage work is still tuning for truthfulness, actionability, and operator trust.
 - Sidecar review should guide progress but not override validated repo truth.
-- Division-contract enforcement is implemented in the frontend contract/helper layer today; backend/shared payload unification can follow once the shape is validated.
+- The live-forward telemetry path is now production-valid: `sg_device_shadows` DynamoDB Streams -> standalone Lambda -> KPI API ingest endpoint -> `telemetry_stream_events`.
+- Historical telemetry recovery should remain a separate S3 export/offline backfill workflow rather than deeper live-table scans.
 
 ## Active files
 - memory/topics/kpi_dashboard.md
@@ -49,23 +50,14 @@
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 - Telemetry escalation/refinement changes are build-verified only; they still need browser review against live production payloads.
+- 12-month historical telemetry still needs PITR-enabled export to S3 plus offline processing/backfill; live-forward stream health does not recover historical data by itself.
 
 ## Next actions
-- Resume KPI dashboard development from the current contract-enforcement + telemetry integration state.
+- Verify current production telemetry summary and source-health outputs after the successful stream cutover so the UI/business wording matches live stream semantics.
 - Audit the live UI behavior of the contract-enforced pages in-browser and tighten rough UX edges without changing the contract model.
-- Decide whether to promote the shared division contract from frontend helpers into backend/shared API payloads so truth_state and action ranking become source-controlled across surfaces.
-- Verify/record the formal Alembic version state for `20260407_0005_cx_actions` on the production DB host; runtime bootstrap has been removed from production code paths.
-- Apply the formal telemetry Alembic migration on the KPI backend host before enabling live AWS/Venom-backed telemetry outputs.
-- Apply the new telemetry Alembic migration and deploy backend changes to the KPI API host.
-- Validate that live Lambda/DynamoDB stream events are landing in `telemetry_stream_events` and that `/api/telemetry/summary` now prefers fresh stream-backed telemetry when available.
-- Ensure the Lambda runtime DB URL variable matches backend config (`KPI_DATABASE_URL` or `DATABASE_URL`) and validate Lambda-to-Postgres network reachability before enabling the stream mapping broadly.
-- Use the new admin telemetry hooks in production to force bounded telemetry sync (`/api/admin/run-sync/aws_telemetry`) and inspect landed stream rows (`/api/admin/debug/telemetry-stream`) during rollout validation.
-- Apply the follow-up telemetry stream migration adding `updated_at`; production deployed code exposed that the original `telemetry_stream_events` migration created `created_at` but not `updated_at`, which causes live 500s against the SQLAlchemy model.
-- Switch the production Lambda path from direct-Postgres writes to authenticated API ingestion so AWS does not need direct connectivity into the droplet-local KPI Postgres instance.
+- Drive the 12-month telemetry recovery path: enable PITR on `sg_device_shadows`, export to S3, process the export offline, and decide what compact historical telemetry artifacts should be written back into KPI.
 - Treat `device_id` as the correct unique-device proxy for telemetry history work; do not label device-proxy counts as users unless an account join is added.
-- Use DynamoDB export -> S3 -> offline processing as the recommended 12-month history recovery path for `sg_device_shadows`, because the live table is ~314M items / ~169 GB with only 4 RCUs and deep runtime scans hit throughput limits.
 - Refocus the Product / Engineering telemetry UI on forward-looking live metrics: active devices by time window, engaged latest-state devices, stream-backed coverage language, and explicit device-level proxy wording instead of user/session claims.
-- Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Browser-check the new Command Center telemetry escalation card and Issue Radar telemetry signal enrichment against live data so the cohort/corroboration language stays truthful.
@@ -73,6 +65,8 @@
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
+- 2026-04-09 Slack recovery / production rollout pass: verified the complete AWS telemetry stream cutover end-to-end. Production now uses DynamoDB Streams on `sg_device_shadows` -> standalone Lambda -> KPI API ingest -> `telemetry_stream_events`, and `/api/telemetry/summary` flipped to stream-backed metadata (`sg_device_shadows_stream`, `dynamodb_stream`) after live rows began landing.
+- 2026-04-09 telemetry rollout hardening also fixed multiple deployment/runtime blockers: backend now prefers stream rows when present, deploy workflow runs Alembic before restart, corrective migration added `updated_at` to `telemetry_stream_events`, and production Lambda moved from direct-Postgres writes to authenticated API ingestion.
 - 2026-04-07 department operating-system pass: added a new frontend Department Views route that derives leader-specific operating views for Joseph, Bailey, Jeremiah, Kyle, Conor, and David from existing KPI/support/issue/source-health endpoints instead of replacing the current dashboard architecture.
 - 2026-04-07 command-center action model now includes severity, recommended action, and evidence sources, and the decision stack renders those explicitly alongside owner/SLA/impact/confidence.
 - 2026-04-07 source health now explicitly calls out AWS / Venom telemetry-health visibility gaps so product-reliability insights remain trust-limited instead of implied.
