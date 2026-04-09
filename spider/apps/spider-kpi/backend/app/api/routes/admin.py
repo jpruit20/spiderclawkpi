@@ -1,7 +1,8 @@
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_auth
@@ -13,7 +14,7 @@ from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
-from app.models import SourceSyncRun, TelemetryStreamEvent
+from app.models import SourceSyncRun, TelemetrySession, TelemetryStreamEvent
 from app.schemas.overview import TelemetryStreamIngestIn
 from app.services.seed import seed_from_prototype_files
 from app.streaming.telemetry_stream_writer import write_stream_records
@@ -136,4 +137,49 @@ def debug_telemetry_stream(db: Session = Depends(db_session)):
             }
             for row in latest
         ],
+    }
+
+
+@router.get('/debug/telemetry-audit')
+def debug_telemetry_audit(days: int = 180, db: Session = Depends(db_session)):
+    days = max(1, min(days, 3650))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    telemetry_session_rows = int(db.execute(
+        select(func.count()).select_from(TelemetrySession).where(TelemetrySession.session_start >= cutoff)
+    ).scalar() or 0)
+    telemetry_session_devices = int(db.execute(
+        select(func.count(distinct(TelemetrySession.device_id))).where(TelemetrySession.session_start >= cutoff, TelemetrySession.device_id.is_not(None))
+    ).scalar() or 0)
+    telemetry_session_users = int(db.execute(
+        select(func.count(distinct(TelemetrySession.user_id))).where(TelemetrySession.session_start >= cutoff, TelemetrySession.user_id.is_not(None))
+    ).scalar() or 0)
+    telemetry_session_ids = int(db.execute(
+        select(func.count(distinct(TelemetrySession.session_id))).where(TelemetrySession.session_start >= cutoff, TelemetrySession.session_id.is_not(None))
+    ).scalar() or 0)
+
+    stream_rows = int(db.execute(
+        select(func.count()).select_from(TelemetryStreamEvent).where(TelemetryStreamEvent.sample_timestamp >= cutoff)
+    ).scalar() or 0)
+    stream_devices = int(db.execute(
+        select(func.count(distinct(TelemetryStreamEvent.device_id))).where(TelemetryStreamEvent.sample_timestamp >= cutoff)
+    ).scalar() or 0)
+    engaged_stream_devices = int(db.execute(
+        select(func.count(distinct(TelemetryStreamEvent.device_id))).where(TelemetryStreamEvent.sample_timestamp >= cutoff, TelemetryStreamEvent.engaged.is_(True))
+    ).scalar() or 0)
+
+    return {
+        'window_days': days,
+        'cutoff': cutoff.isoformat(),
+        'telemetry_sessions': {
+            'rows': telemetry_session_rows,
+            'distinct_devices': telemetry_session_devices,
+            'distinct_users': telemetry_session_users,
+            'distinct_session_ids': telemetry_session_ids,
+        },
+        'telemetry_stream_events': {
+            'rows': stream_rows,
+            'distinct_devices': stream_devices,
+            'distinct_engaged_devices': engaged_stream_devices,
+        },
     }
