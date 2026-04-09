@@ -1,15 +1,15 @@
 # Session: KPI
 
 ## Objective
-- Define and enforce a universal division operating contract for KPI pages covering KPI structure, truth-state labeling, action generation, ownership, and blocked-state behavior.
-- Apply the contract concretely to the Marketing division page only.
-- Tune and refine the Spider Grills KPI dashboard so the data is more meaningful, actionable, and decision-grade.
+- Build the Spider Grills KPI Dashboard into a decision-grade operating system.
+- Continue tightening KPI structure, truth-state labeling, action generation, ownership, and blocked-state behavior across core surfaces.
+- Keep this session as the active build lane for dashboard implementation, validation, and deployment.
 
 ## Current assumptions
-- The current dashboard is directionally strong but still needs tuning.
-- The main optimization target is better business meaning, not more widgets.
+- This session name (`Spider Grills KPI Dashboard Build`) maps to the KPI workstream.
+- The dashboard foundation is strong, but the highest-leverage work is still tuning for truthfulness, actionability, and operator trust.
 - Sidecar review should guide progress but not override validated repo truth.
-- Division-contract enforcement is currently implemented at the frontend contract/helper layer across the required KPI surfaces; deeper backend payload unification can follow once the shape is validated.
+- Division-contract enforcement is implemented in the frontend contract/helper layer today; backend/shared payload unification can follow once the shape is validated.
 
 ## Active files
 - memory/topics/kpi_dashboard.md
