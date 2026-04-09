@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -142,6 +143,19 @@ def _load_records_from_file() -> list[dict[str, Any]]:
 
 def _csv_tokens(value: str | None) -> set[str]:
     return {token.strip().lower() for token in (value or '').split(',') if token.strip()}
+
+
+@contextmanager
+def _telemetry_setting_overrides(**overrides: Any):
+    original: dict[str, Any] = {}
+    try:
+        for key, value in overrides.items():
+            original[key] = getattr(settings, key)
+            setattr(settings, key, value)
+        yield
+    finally:
+        for key, value in original.items():
+            setattr(settings, key, value)
 
 
 def _load_records_from_dynamodb(max_records: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -462,7 +476,15 @@ def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str
     }
 
 
-def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
+def sync_aws_telemetry(
+    db: Session,
+    max_records: int = 50000,
+    *,
+    lookback_hours: int | None = None,
+    max_scan_pages: int | None = None,
+    target_devices_per_sync: int | None = None,
+    scan_segments: int | None = None,
+) -> dict[str, Any]:
     configured = _configured()
     upsert_source_config(
         db,
@@ -481,12 +503,20 @@ def sync_aws_telemetry(db: Session, max_records: int = 50000) -> dict[str, Any]:
     if not configured:
         return {'ok': False, 'skipped': True, 'records_processed': 0, 'message': 'AWS telemetry source is not configured'}
 
-    run = start_sync_run(db, SOURCE_NAME, 'sync_telemetry', {'max_records': max_records})
+    override_values = {
+        'aws_telemetry_lookback_hours': lookback_hours if lookback_hours is not None else settings.aws_telemetry_lookback_hours,
+        'aws_telemetry_max_scan_pages': max_scan_pages if max_scan_pages is not None else settings.aws_telemetry_max_scan_pages,
+        'aws_telemetry_target_devices_per_sync': target_devices_per_sync if target_devices_per_sync is not None else settings.aws_telemetry_target_devices_per_sync,
+        'aws_telemetry_scan_segments': scan_segments if scan_segments is not None else settings.aws_telemetry_scan_segments,
+    }
+
+    run = start_sync_run(db, SOURCE_NAME, 'sync_telemetry', {'max_records': max_records, **override_values})
     db.commit()
 
     try:
-        records, read_stats = _load_records(max_records)
-        sessions, derivation_stats = _derive_sessions(records)
+        with _telemetry_setting_overrides(**override_values):
+            records, read_stats = _load_records(max_records)
+            sessions, derivation_stats = _derive_sessions(records)
         db.execute(delete(TelemetrySession))
         db.execute(delete(TelemetryDaily))
         db.flush()

@@ -64,7 +64,15 @@ def run_sync(source: str, db: Session = Depends(db_session)):
 
 
 @router.post("/backfill/{source}")
-def backfill_source(source: str, db: Session = Depends(db_session)):
+def backfill_source(
+    source: str,
+    lookback_days: int | None = None,
+    max_records: int | None = None,
+    max_scan_pages: int | None = None,
+    target_devices: int | None = None,
+    scan_segments: int | None = None,
+    db: Session = Depends(db_session),
+):
     if _already_running(db, source):
         return {"ok": True, "skipped": True, "message": f"{source} sync already running"}
 
@@ -79,7 +87,19 @@ def backfill_source(source: str, db: Session = Depends(db_session)):
     elif source == "clarity":
         result = sync_clarity(db, days=min(3, settings.backfill_days))
     elif source == "aws_telemetry":
-        result = sync_aws_telemetry(db, max_records=100000)
+        requested_lookback_days = max(1, min(int(lookback_days or settings.backfill_days), 3650))
+        requested_max_records = max(1000, min(int(max_records or 100000), 2_000_000))
+        requested_max_scan_pages = max(1, min(int(max_scan_pages or settings.aws_telemetry_max_scan_pages), 20000))
+        requested_target_devices = max(1, min(int(target_devices or settings.aws_telemetry_target_devices_per_sync), 500000))
+        requested_scan_segments = max(1, min(int(scan_segments or settings.aws_telemetry_scan_segments), 256))
+        result = sync_aws_telemetry(
+            db,
+            max_records=requested_max_records,
+            lookback_hours=requested_lookback_days * 24,
+            max_scan_pages=requested_max_scan_pages,
+            target_devices_per_sync=requested_target_devices,
+            scan_segments=requested_scan_segments,
+        )
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
