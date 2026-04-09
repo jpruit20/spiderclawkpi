@@ -25,6 +25,8 @@
 - apps/spider-kpi/frontend/src/pages/MarketingDivision.tsx
 - apps/spider-kpi/frontend/src/pages/IssueRadar.tsx
 - apps/spider-kpi/frontend/src/pages/RootCause.tsx
+- apps/spider-kpi/frontend/src/pages/CommandCenter.tsx
+- apps/spider-kpi/frontend/src/components/DecisionStack.tsx
 - apps/spider-kpi/frontend/src/pages/SourceHealth.tsx
 - apps/spider-kpi/frontend/src/components/Layout.tsx
 - apps/spider-kpi/frontend/src/App.tsx
@@ -46,6 +48,7 @@
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
+- Telemetry escalation/refinement changes are build-verified only; they still need browser review against live production payloads.
 
 ## Next actions
 - Resume KPI dashboard development from the current contract-enforcement + telemetry integration state.
@@ -65,6 +68,7 @@
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
+- Browser-check the new Command Center telemetry escalation card and Issue Radar telemetry signal enrichment against live data so the cohort/corroboration language stays truthful.
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Keep implementation-specific notes here instead of polluting durable files.
 
@@ -145,6 +149,8 @@
 - 2026-04-08 production telemetry 500 root cause: deployed code was live, but `telemetry_stream_events` schema drifted from the model because the original Alembic migration created `created_at` without `updated_at` even though the model inherits `TimestampMixin`; added a corrective migration so production can query stream rows without crashing.
 - 2026-04-08 AWS stream runtime root cause: live Lambda is failing with `Runtime.ImportModuleError: No module named app`, its env still contains a placeholder `KPI_DATABASE_URL`, and production Postgres is droplet-local, so direct Lambda->Postgres writes are not the right production path. Added a backend HTTP ingest endpoint and a standalone Lambda handler that forwards normalized stream records to the KPI API instead.
 - 2026-04-09 historical telemetry recommendation locked: `sg_device_shadows` deep live scans are not the primary truth-recovery path under current AWS limits (314M items, ~169 GB, 4 RCUs, throughput exceeded during wider backfill). Added export/offline runbook plus `telemetry_export_audit.py` to recover 12-month distinct `device_id` history via DynamoDB export -> S3 -> offline analysis.
+- 2026-04-09 telemetry UI refinement pass: Command Center now renders a dedicated telemetry escalation card with explicit observed-slice evidence (active devices, low-RSSI/error-vector rates, coverage summary) and stronger escalation scoring; Issue Radar now surfaces telemetry sample quality, telemetry-linked signal/cluster counts, queue corroboration, and telemetry-first evidence ordering so product reliability warnings are visible but still scoped as observed-slice signals. Local frontend build passed.
+- 2026-04-09 live stream health pass: added push-ingest run tracking for `aws_telemetry_stream`, exposed stream-path landed-row growth / freshness / lambda-processing proxy details in source health, expanded `/api/admin/debug/telemetry-stream`, and added a clear System Health warning when telemetry summary falls back from `dynamodb_stream` to bounded-scan mode. Backend compile and frontend build passed.
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.

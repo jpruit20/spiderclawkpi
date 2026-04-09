@@ -1,10 +1,10 @@
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Alert, SourceConfig, SourceSyncRun
+from app.models import Alert, SourceConfig, SourceSyncRun, TelemetryStreamEvent
 
 
 STALE_MINUTES_BY_SOURCE = {
@@ -14,6 +14,7 @@ STALE_MINUTES_BY_SOURCE = {
     "clarity": 240,
     "freshdesk": 360,
     "aws_telemetry": 360,
+    "aws_telemetry_stream": 30,
     "decision-engine": 180,
 }
 SOURCE_TYPES = {
@@ -23,6 +24,7 @@ SOURCE_TYPES = {
     "clarity": "connector",
     "freshdesk": "connector",
     "aws_telemetry": "connector",
+    "aws_telemetry_stream": "connector",
     "decision-engine": "compute",
 }
 
@@ -227,6 +229,53 @@ def refresh_source_health_alerts(db: Session) -> None:
     db.flush()
 
 
+def _stream_health_details(db: Session) -> dict[str, Any]:
+    latest_sample = db.execute(
+        select(TelemetryStreamEvent.sample_timestamp)
+        .where(TelemetryStreamEvent.sample_timestamp.is_not(None))
+        .order_by(desc(TelemetryStreamEvent.sample_timestamp))
+        .limit(1)
+    ).scalar_one_or_none()
+    latest_created = db.execute(
+        select(TelemetryStreamEvent.created_at)
+        .order_by(desc(TelemetryStreamEvent.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+
+    def _count_rows_since(delta: timedelta) -> int:
+        cutoff = datetime.now(timezone.utc) - delta
+        return int(db.execute(
+            select(func.count()).select_from(TelemetryStreamEvent).where(TelemetryStreamEvent.created_at >= cutoff)
+        ).scalar() or 0)
+
+    def _count_devices_since(delta: timedelta) -> int:
+        cutoff = datetime.now(timezone.utc) - delta
+        return int(db.execute(
+            select(func.count(distinct(TelemetryStreamEvent.device_id))).where(TelemetryStreamEvent.created_at >= cutoff)
+        ).scalar() or 0)
+
+    freshness_age_minutes = None
+    reference_ts = latest_sample or latest_created
+    if reference_ts is not None:
+        freshness_age_minutes = int((datetime.now(timezone.utc) - reference_ts).total_seconds() // 60)
+
+    details = {
+        "latest_sample_timestamp": latest_sample,
+        "latest_row_created_at": latest_created,
+        "latest_stream_row_age_minutes": freshness_age_minutes,
+        "rows_inserted_last_15m": _count_rows_since(timedelta(minutes=15)),
+        "rows_inserted_last_60m": _count_rows_since(timedelta(minutes=60)),
+        "rows_inserted_last_24h": _count_rows_since(timedelta(hours=24)),
+        "distinct_devices_seen_last_15m": _count_devices_since(timedelta(minutes=15)),
+        "distinct_devices_seen_last_60m": _count_devices_since(timedelta(minutes=60)),
+        "distinct_devices_seen_last_24h": _count_devices_since(timedelta(hours=24)),
+    }
+    details["landed_row_growth_ok"] = bool(details["rows_inserted_last_60m"] > 0)
+    details["lambda_processing_health"] = "healthy" if (freshness_age_minutes is not None and freshness_age_minutes <= 30 and details["rows_inserted_last_60m"] > 0) else "stale"
+    details["ingest_endpoint_health"] = "healthy" if details["rows_inserted_last_15m"] > 0 else "idle"
+    return details
+
+
 def get_source_health(db: Session) -> list[dict[str, Any]]:
     configs = db.execute(select(SourceConfig).order_by(SourceConfig.source_name)).scalars().all()
     rows: list[dict[str, Any]] = []
@@ -238,6 +287,11 @@ def get_source_health(db: Session) -> list[dict[str, Any]]:
             .limit(1)
         ).scalar_one_or_none()
         derived_status, status_summary, stale_minutes = _derived_status(config, latest_run)
+        details_json = dict(config.config_json or {})
+        if latest_run and latest_run.metadata_json:
+            details_json["latest_run_metadata"] = latest_run.metadata_json
+        if config.source_name == "aws_telemetry_stream":
+            details_json.update(_stream_health_details(db))
         rows.append(
             {
                 "source": config.source_name,
@@ -256,6 +310,7 @@ def get_source_health(db: Session) -> list[dict[str, Any]]:
                 "status_summary": status_summary,
                 "stale_minutes": stale_minutes,
                 "blocks_connector_health": config.config_json.get("source_type", SOURCE_TYPES.get(config.source_name, "connector")) != "compute",
+                "details_json": details_json or None,
             }
         )
     return rows

@@ -17,6 +17,7 @@ from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun, TelemetrySession, TelemetryStreamEvent
 from app.schemas.overview import TelemetryStreamIngestIn
 from app.services.seed import seed_from_prototype_files
+from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
 from app.streaming.telemetry_stream_writer import write_stream_records
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_auth)])
@@ -125,13 +126,50 @@ def debug_ga4():
 
 @router.post('/ingest/telemetry-stream')
 def ingest_telemetry_stream(payload: TelemetryStreamIngestIn, db: Session = Depends(db_session)):
+    source_name = 'aws_telemetry_stream'
+    upsert_source_config(
+        db,
+        source_name,
+        configured=True,
+        enabled=True,
+        sync_mode='push',
+        config_json={
+            'source_type': 'connector',
+            'input': 'kpi_api_ingest',
+            'upstream': 'sg_device_shadows_stream',
+        },
+    )
+    db.commit()
+
     records = [record.model_dump() for record in payload.records]
-    result = write_stream_records(db, records)
-    return {
-        'ok': True,
+    distinct_devices = len({record.get('device_id') for record in records if record.get('device_id')})
+    sample_timestamps = [record.get('sample_timestamp') for record in records if record.get('sample_timestamp') is not None]
+    run = start_sync_run(db, source_name, 'ingest_telemetry_stream', {
         'records_received': len(records),
-        **result,
-    }
+        'distinct_devices_received': distinct_devices,
+    })
+    db.commit()
+    try:
+        result = write_stream_records(db, records)
+        run.metadata_json = {
+            **(run.metadata_json or {}),
+            'inserted': result.get('inserted', 0),
+            'skipped': result.get('skipped', 0),
+            'distinct_devices_received': distinct_devices,
+            'oldest_sample_timestamp': min(sample_timestamps).isoformat() if sample_timestamps else None,
+            'newest_sample_timestamp': max(sample_timestamps).isoformat() if sample_timestamps else None,
+        }
+        finish_sync_run(db, run, status='success', records_processed=int(result.get('inserted', 0)))
+        db.commit()
+        return {
+            'ok': True,
+            'records_received': len(records),
+            **result,
+        }
+    except Exception as exc:
+        finish_sync_run(db, run, status='failed', error_message=str(exc))
+        db.commit()
+        raise
 
 
 @router.get('/debug/telemetry-stream')
@@ -142,8 +180,31 @@ def debug_telemetry_stream(db: Session = Depends(db_session)):
         .order_by(desc(TelemetryStreamEvent.sample_timestamp), desc(TelemetryStreamEvent.created_at))
         .limit(5)
     ).scalars().all()
+    latest_sample_timestamp = db.execute(
+        select(TelemetryStreamEvent.sample_timestamp)
+        .where(TelemetryStreamEvent.sample_timestamp.is_not(None))
+        .order_by(desc(TelemetryStreamEvent.sample_timestamp))
+        .limit(1)
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    rows_last_15m = int(db.execute(
+        select(func.count()).select_from(TelemetryStreamEvent).where(TelemetryStreamEvent.created_at >= now - timedelta(minutes=15))
+    ).scalar() or 0)
+    rows_last_60m = int(db.execute(
+        select(func.count()).select_from(TelemetryStreamEvent).where(TelemetryStreamEvent.created_at >= now - timedelta(minutes=60))
+    ).scalar() or 0)
+    fallback_active = False
+    fallback_reason = None
+    if latest_sample_timestamp is None or latest_sample_timestamp < now - timedelta(minutes=60):
+        fallback_active = True
+        fallback_reason = 'No fresh stream rows landed in the last 60 minutes; production may be relying on bounded-scan telemetry again.'
     return {
         'total': int(total or 0),
+        'rows_last_15m': rows_last_15m,
+        'rows_last_60m': rows_last_60m,
+        'latest_sample_timestamp': latest_sample_timestamp,
+        'fallback_active': fallback_active,
+        'fallback_reason': fallback_reason,
         'latest': [
             {
                 'source_event_id': row.source_event_id,

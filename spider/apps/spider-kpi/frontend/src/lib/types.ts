@@ -145,6 +145,7 @@ export interface SourceHealthItem {
   status_summary: string
   stale_minutes?: number
   blocks_connector_health?: boolean
+  details_json?: Record<string, unknown>
 }
 
 export interface IssueClusterItem {

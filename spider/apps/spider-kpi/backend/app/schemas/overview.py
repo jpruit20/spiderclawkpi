@@ -21,6 +21,7 @@ class SourceHealthOut(BaseModel):
     status_summary: str
     stale_minutes: Optional[int] = None
     blocks_connector_health: bool
+    details_json: Optional[dict[str, Any]] = None
 
 
 class AlertOut(BaseModel):
