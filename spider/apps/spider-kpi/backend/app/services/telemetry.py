@@ -8,7 +8,8 @@ from typing import Any
 from sqlalchemy import desc, inspect, select
 from sqlalchemy.orm import Session
 
-from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession
+from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession, TelemetryStreamEvent
+from app.services.telemetry_stream_summary import summarize_stream_telemetry
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -28,16 +29,35 @@ def telemetry_tables_available(db: Session) -> bool:
     return inspector.has_table('telemetry_daily') and inspector.has_table('telemetry_sessions')
 
 
+def telemetry_stream_table_available(db: Session) -> bool:
+    inspector = inspect(db.bind)
+    return inspector.has_table('telemetry_stream_events')
+
+
+def _empty_telemetry_payload() -> dict[str, Any]:
+    return {
+        "latest": None,
+        "daily": [],
+        "firmware_health": [],
+        "grill_type_health": [],
+        "top_error_codes": [],
+        "top_issue_patterns": [],
+    }
+
+
 def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+    if telemetry_stream_table_available(db):
+        fresh_stream_events = db.execute(
+            select(TelemetryStreamEvent)
+            .where(TelemetryStreamEvent.sample_timestamp >= datetime.now(timezone.utc) - timedelta(days=max(lookback_days, 1)))
+            .order_by(desc(TelemetryStreamEvent.sample_timestamp))
+            .limit(5000)
+        ).scalars().all()
+        if fresh_stream_events:
+            return summarize_stream_telemetry(db, fresh_stream_events)
+
     if not telemetry_tables_available(db):
-        return {
-            "latest": None,
-            "daily": [],
-            "firmware_health": [],
-            "grill_type_health": [],
-            "top_error_codes": [],
-            "top_issue_patterns": [],
-        }
+        return _empty_telemetry_payload()
 
     rows = db.execute(
         select(TelemetryDaily)
@@ -45,14 +65,7 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         .limit(max(lookback_days, 1))
     ).scalars().all()
     if not rows:
-        return {
-            "latest": None,
-            "daily": [],
-            "firmware_health": [],
-            "grill_type_health": [],
-            "top_error_codes": [],
-            "top_issue_patterns": [],
-        }
+        return _empty_telemetry_payload()
 
     latest = rows[0]
     sessions = db.execute(
