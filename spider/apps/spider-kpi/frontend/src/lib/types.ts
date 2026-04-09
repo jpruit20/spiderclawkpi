@@ -240,6 +240,11 @@ export interface TelemetryCollectionMetadata {
   devices_observed?: number
   distinct_devices_observed?: number
   distinct_engaged_devices_observed?: number
+  engaged_latest_devices?: number
+  active_devices_last_5m?: number
+  active_devices_last_15m?: number
+  active_devices_last_60m?: number
+  active_devices_last_24h?: number
   oldest_sample_timestamp_seen?: string | null
   newest_sample_timestamp_seen?: string | null
   samples_retained?: number
@@ -269,10 +274,18 @@ export interface TelemetryConfidence {
 
 export interface TelemetrySliceSnapshot {
   distinct_devices_observed: number
-  distinct_engaged_devices_observed: number
+  distinct_engaged_devices_observed?: number
+  engaged_latest_devices?: number
+  active_devices_last_5m?: number
+  active_devices_last_15m?: number
+  active_devices_last_60m?: number
+  active_devices_last_24h?: number
   sessions_derived: number
-  average_session_duration_seconds: number
-  median_session_duration_seconds: number
+  recent_activity_window_minutes?: number
+  average_session_duration_seconds?: number
+  median_session_duration_seconds?: number
+  average_events_per_device_in_slice?: number
+  median_events_per_device_in_slice?: number
   low_rssi_session_rate: number
   error_vector_presence_rate: number
   target_temp_distribution: Array<{ target_temp: string, count: number }>

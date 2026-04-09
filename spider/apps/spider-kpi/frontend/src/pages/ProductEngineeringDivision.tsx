@@ -5,6 +5,17 @@ import { ApiError, api, getApiBase } from '../lib/api'
 import { ActionObject, BlockedStateOutput, KPIObject, TelemetrySummary } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject } from '../lib/divisionContract'
 
+function formatTelemetryFreshness(timestamp?: string | null) {
+  if (!timestamp) return 'n/a'
+  const parsed = Date.parse(timestamp)
+  if (Number.isNaN(parsed)) return 'n/a'
+  const ageMinutes = Math.max(0, Math.round((Date.now() - parsed) / 60000))
+  if (ageMinutes < 60) return `${ageMinutes}m ago`
+  const hours = Math.floor(ageMinutes / 60)
+  const minutes = ageMinutes % 60
+  return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`
+}
+
 export function ProductEngineeringDivision() {
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -35,8 +46,11 @@ export function ProductEngineeringDivision() {
   const confidence = telemetry?.confidence || null
   const boundedTruthState = latest ? 'proxy' : 'blocked'
   const reliabilityTruthState = latest ? 'estimated' : 'blocked'
-  const sampleSize = Math.max(collection?.distinct_devices_observed || 0, slice?.sessions_derived || 0)
-  const sampleScope = `${collection?.distinct_devices_observed || 0} device(s), ${collection?.samples_retained || 0} samples, bounded scan`
+  const streamBacked = collection?.sample_source === 'dynamodb_stream'
+  const sampleSize = Math.max(collection?.distinct_devices_observed || 0, collection?.active_devices_last_15m || 0, slice?.sessions_derived || 0)
+  const sampleScope = streamBacked
+    ? `${collection?.distinct_devices_observed || 0} device(s) in loaded stream slice, ${collection?.records_loaded || 0} stream rows, ${collection?.active_devices_last_15m || 0} active in last 15m`
+    : `${collection?.distinct_devices_observed || 0} device(s), ${collection?.samples_retained || 0} samples, bounded scan`
   const sampleReliability: KPIObject['sample_reliability'] = sampleSize <= 1 || collection?.scan_truncated || collection?.max_record_cap_hit ? 'low' : sampleSize < 10 ? 'medium' : 'high'
   const limitedSampleNote = sampleReliability === 'low' ? 'Limited sample — directional only' : null
   const lowRssiPct = Math.round((slice?.low_rssi_session_rate || 0) * 100)
@@ -54,9 +68,9 @@ export function ProductEngineeringDivision() {
 
   const kpis: KPIObject[] = useMemo(() => [
     buildNumericKpi({ key: 'product_distinct_devices_observed', currentValue: collection?.distinct_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_distinct_engaged_devices_observed', currentValue: collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_sessions_derived', currentValue: slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
-    buildNumericKpi({ key: 'product_median_session_duration_minutes', currentValue: slice ? slice.median_session_duration_seconds / 60 : null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_active_devices_last_15m', currentValue: collection?.active_devices_last_15m ?? slice?.sessions_derived ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_active_devices_last_60m', currentValue: collection?.active_devices_last_60m ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
+    buildNumericKpi({ key: 'product_engaged_latest_devices', currentValue: collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? null, targetValue: null, priorValue: null, owner: 'Kyle', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildTextKpi({ key: 'product_low_rssi_session_risk', currentValue: slice ? (sampleReliability === 'low' ? `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of ${slice.sessions_derived} observed session(s); potential impact on control stability. ${limitedSampleNote}` : `Observed RSSI below -75 dBm proxy in ${lowRssiPct}% of observed sessions; potential impact on control stability.`) : null, targetValue: 'Low observed low-RSSI risk', owner: 'Kyle', status: (slice?.low_rssi_session_rate || 0) >= 0.2 ? 'red' : 'yellow', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildTextKpi({ key: 'product_error_vector_presence', currentValue: slice ? (sampleReliability === 'low' ? `Observed non-zero error vectors in ${errorPct}% of ${slice.sessions_derived} observed session(s). ${limitedSampleNote}` : `Observed non-zero error vectors in ${errorPct}% of observed sessions.`) : null, targetValue: 'Low observed error-vector presence', owner: 'Kyle', status: (slice?.error_vector_presence_rate || 0) > 0 ? 'yellow' : 'green', truthState: reliabilityTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
     buildTextKpi({ key: 'product_coverage_quality', currentValue: collection?.coverage_summary || 'No telemetry coverage summary', targetValue: 'Broad trustworthy observed slice', owner: 'Joseph', status: collection?.scan_truncated || collection?.max_record_cap_hit ? 'red' : 'yellow', truthState: boundedTruthState, lastUpdated: snapshotTimestamp, sampleSize, sampleScope, sampleReliability }),
@@ -153,7 +167,7 @@ export function ProductEngineeringDivision() {
     <div className="page-grid">
       <div className="page-head">
         <h2>Product / Engineering</h2>
-        <p>Telemetry-backed product reliability view for the observed slice only. No full-fleet claims.</p>
+        <p>Telemetry-backed live operations and reliability view. Stream-backed where available; no canonical fleet-session claims.</p>
         <small className="page-meta">API base: {getApiBase()}</small>
       </div>
       {loading ? <Card title="Product / Engineering"><div className="state-message">Loading telemetry operating view…</div></Card> : null}
@@ -161,22 +175,22 @@ export function ProductEngineeringDivision() {
       {!loading && !error ? (
         <>
           <div className="three-col">
-            <Card title="Telemetry health / coverage snapshot"><div className="hero-metric">{collection?.distinct_devices_observed ?? 0}</div><div className="state-message">distinct devices observed · truth {confidence?.global_completeness || 'unknown'} · sample {sampleReliability}</div></Card>
-            <Card title="Observed device and session slice"><div className="hero-metric">{slice?.sessions_derived ?? 0}</div><div className="state-message">derived sessions · median {(slice?.median_session_duration_seconds || 0 / 60).toFixed ? ((slice?.median_session_duration_seconds || 0) / 60).toFixed(1) : 0} min</div></Card>
-            <Card title="Reliability indicators"><div className="hero-metric">{latest ? `${(latest.session_reliability_score * 100).toFixed(0)}%` : '—'}</div><div className="state-message">observed slice reliability score</div></Card>
+            <Card title="Active devices · last 15m"><div className="hero-metric">{collection?.active_devices_last_15m ?? slice?.sessions_derived ?? 0}</div><div className="state-message">device_id proxy for live active grills · latest sample {formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)}</div></Card>
+            <Card title="Engaged latest-state devices"><div className="hero-metric">{collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? 0}</div><div className="state-message">latest observed device state marked engaged</div></Card>
+            <Card title="Reliability indicators"><div className="hero-metric">{latest ? `${(latest.session_reliability_score * 100).toFixed(0)}%` : '—'}</div><div className="state-message">stream-backed reliability proxy · sample {sampleReliability}</div></Card>
           </div>
           <DecisionStack actions={actions} />
           <div className="two-col">
             <Card title="Telemetry health / coverage snapshot">
               <div className="stack-list compact">
-                <div className="list-item status-warn"><strong>coverage summary</strong><p>{collection?.coverage_summary || 'No telemetry coverage summary returned.'}</p><small><strong>oldest:</strong> {collection?.oldest_sample_timestamp_seen || 'n/a'} · <strong>newest:</strong> {collection?.newest_sample_timestamp_seen || 'n/a'}</small></div>
-                <div className="list-item status-muted"><strong>source truth</strong><p>Direct DynamoDB read from `sg_device_shadows` in the observed bounded slice.</p><small><strong>max cap hit:</strong> {String(collection?.max_record_cap_hit ?? false)} · <strong>scan truncated:</strong> {String(collection?.scan_truncated ?? false)} · <strong>gap timeout:</strong> {collection?.session_gap_timeout_minutes ?? 'n/a'} min</small></div>
+                <div className="list-item status-warn"><strong>coverage summary</strong><p>{collection?.coverage_summary || 'No telemetry coverage summary returned.'}</p><small><strong>oldest:</strong> {collection?.oldest_sample_timestamp_seen || 'n/a'} · <strong>newest:</strong> {collection?.newest_sample_timestamp_seen || 'n/a'} ({formatTelemetryFreshness(collection?.newest_sample_timestamp_seen)})</small><small><strong>active now:</strong> 5m {collection?.active_devices_last_5m ?? 'n/a'} · 15m {collection?.active_devices_last_15m ?? 'n/a'} · 60m {collection?.active_devices_last_60m ?? 'n/a'} · 24h {collection?.active_devices_last_24h ?? 'n/a'}</small></div>
+                <div className="list-item status-muted"><strong>source truth</strong><p>{streamBacked ? 'Live DynamoDB stream events (`sg_device_shadows_stream`) flowing through Lambda -> KPI API -> raw telemetry store.' : 'Direct DynamoDB read from `sg_device_shadows` in a bounded observed slice.'}</p><small><strong>source:</strong> {collection?.source || 'n/a'} · <strong>sample_source:</strong> {collection?.sample_source || 'n/a'} · <strong>gap timeout:</strong> {collection?.session_gap_timeout_minutes ?? 'n/a'} min</small></div>
               </div>
             </Card>
             <Card title="Observed device and session slice">
               <div className="stack-list compact">
-                <div className="list-item status-neutral"><strong>device slice</strong><p>Distinct devices observed: {collection?.distinct_devices_observed ?? 0} · engaged devices: {collection?.distinct_engaged_devices_observed ?? 0}</p></div>
-                <div className="list-item status-neutral"><strong>session slice</strong><p>Sessions derived: {slice?.sessions_derived ?? 0} · average duration: {slice ? (slice.average_session_duration_seconds / 60).toFixed(1) : '0.0'} min · median duration: {slice ? (slice.median_session_duration_seconds / 60).toFixed(1) : '0.0'} min</p><small><strong>sample scope:</strong> {sampleScope} · <strong>sample reliability:</strong> {sampleReliability}</small></div>
+                <div className="list-item status-neutral"><strong>live device activity</strong><p>Active last 5m: {collection?.active_devices_last_5m ?? 0} · last 15m: {collection?.active_devices_last_15m ?? 0} · last 60m: {collection?.active_devices_last_60m ?? 0}</p></div>
+                <div className="list-item status-neutral"><strong>device coverage</strong><p>Distinct devices in loaded slice: {collection?.distinct_devices_observed ?? 0} · engaged latest-state devices: {collection?.engaged_latest_devices ?? slice?.engaged_latest_devices ?? collection?.distinct_engaged_devices_observed ?? 0}</p><small><strong>sample scope:</strong> {sampleScope} · <strong>sample reliability:</strong> {sampleReliability}</small></div>
               </div>
             </Card>
           </div>
@@ -206,12 +220,14 @@ export function ProductEngineeringDivision() {
                 <div className="list-item status-warn"><strong>low signal risk proxy</strong><p>{kpis[4]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[4]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[4]?.sample_reliability || 'n/a'}</small></div>
                 <div className="list-item status-warn"><strong>error-vector presence rate</strong><p>{kpis[5]?.current_value || 'No slice returned'}</p><small><strong>truth_state:</strong> estimated · <strong>sample size:</strong> {kpis[5]?.sample_size ?? 'n/a'} · <strong>sample reliability:</strong> {kpis[5]?.sample_reliability || 'n/a'}</small></div>
                 <div className="list-item status-neutral"><strong>target temp distribution</strong><p>{slice?.target_temp_distribution?.map((row) => `${row.target_temp}°:${row.count}`).join(' · ') || 'No target-temp distribution returned.'}</p></div>
+                <div className="list-item status-neutral"><strong>live active-device windows</strong><p>5m: {collection?.active_devices_last_5m ?? 0} · 15m: {collection?.active_devices_last_15m ?? 0} · 60m: {collection?.active_devices_last_60m ?? 0} · 24h: {collection?.active_devices_last_24h ?? 0}</p></div>
               </div>
             </Card>
           </div>
           <Card title="Blocked-state panels">
             <div className="stack-list compact">
               <div className="list-item status-bad"><strong>{blockedStates.product_coverage_quality.decision_blocked}</strong><p>{blockedStates.product_coverage_quality.missing_source}</p><small><strong>still trustworthy:</strong> {blockedStates.product_coverage_quality.still_trustworthy.join(', ')}</small><small><strong>owner:</strong> {blockedStates.product_coverage_quality.owner} · <strong>next action:</strong> {blockedStates.product_coverage_quality.required_action_to_unblock}</small></div>
+              <div className="list-item status-muted"><strong>label discipline</strong><p>All live counts on this page are device-level telemetry proxies, not user counts.</p></div>
             </div>
           </Card>
         </>

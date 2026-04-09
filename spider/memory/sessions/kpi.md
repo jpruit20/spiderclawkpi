@@ -40,6 +40,8 @@
 - apps/spider-kpi/deploy/aws-streams/README.md
 - apps/spider-kpi/deploy/aws-streams/EXPORT_BACKFILL_RUNBOOK.md
 - apps/spider-kpi/scripts/telemetry_export_audit.py
+- apps/spider-kpi/frontend/src/lib/types.ts
+- apps/spider-kpi/frontend/src/pages/ProductEngineeringDivision.tsx
 
 ## Blockers
 - Source-of-truth and metric-trust rules may still need refinement as implementation evolves.
@@ -59,6 +61,7 @@
 - Switch the production Lambda path from direct-Postgres writes to authenticated API ingestion so AWS does not need direct connectivity into the droplet-local KPI Postgres instance.
 - Treat `device_id` as the correct unique-device proxy for telemetry history work; do not label device-proxy counts as users unless an account join is added.
 - Use DynamoDB export -> S3 -> offline processing as the recommended 12-month history recovery path for `sg_device_shadows`, because the live table is ~314M items / ~169 GB with only 4 RCUs and deep runtime scans hit throughput limits.
+- Refocus the Product / Engineering telemetry UI on forward-looking live metrics: active devices by time window, engaged latest-state devices, stream-backed coverage language, and explicit device-level proxy wording instead of user/session claims.
 - Point `aws_telemetry` at the real AWS/Venom export source (URL or local-path feed) and run an initial sync to validate field mapping.
 - Visually validate the new department-operating page and command-center action metadata in-browser against live data.
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
