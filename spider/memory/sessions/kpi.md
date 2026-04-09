@@ -51,6 +51,7 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 - Telemetry escalation/refinement changes are build-verified only; they still need browser review against live production payloads.
 - 12-month historical telemetry still needs PITR-enabled export to S3 plus offline processing/backfill; live-forward stream health does not recover historical data by itself.
+- 2026-04-09 collaboration blocker: this OpenClaw host does not currently expose any ACP coding harness (no Claude/Codex/Cursor/Gemini agent configured in local OpenClaw config), so GitHub-connected Claude cannot yet be invoked from this session.
 
 ## Next actions
 - Verify current production telemetry summary and source-health outputs after the successful stream cutover so the UI/business wording matches live stream semantics.
@@ -62,6 +63,7 @@
 - Continue sharpening separation between queue pages (Issue Radar) and adjudication/intervention pages (Root Cause/System Health).
 - Browser-check the new Command Center telemetry escalation card and Issue Radar telemetry signal enrichment against live data so the cohort/corroboration language stays truthful.
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
+- Confirm or add local ACP harness configuration for Claude so this session can delegate coding work through OpenClaw.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
