@@ -1,7 +1,8 @@
 # Session: KPI
 
 ## Objective
-- Build the Spider Grills KPI Dashboard into a decision-grade operating system.
+- Continue the Spider Grills KPI Dashboard as the active KPI workstream.
+- Build the dashboard into a decision-grade operating system.
 - Continue tightening KPI structure, truth-state labeling, action generation, ownership, and blocked-state behavior across core surfaces.
 - Keep this session as the active build lane for dashboard implementation, validation, and deployment.
 
@@ -34,6 +35,7 @@
 - No live browser validation was run in this pass, so the new command-center hierarchy is build-verified but not yet visually checked against production data.
 
 ## Next actions
+- Resume KPI dashboard development from the current contract-enforcement + telemetry integration state.
 - Audit the live UI behavior of the contract-enforced pages in-browser and tighten rough UX edges without changing the contract model.
 - Decide whether to promote the shared division contract from frontend helpers into backend/shared API payloads so truth_state and action ranking become source-controlled across surfaces.
 - Verify/record the formal Alembic version state for `20260407_0005_cx_actions` on the production DB host; runtime bootstrap has been removed from production code paths.
