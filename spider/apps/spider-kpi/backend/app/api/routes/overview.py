@@ -13,6 +13,7 @@ from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExper
 from app.services.cx_snapshot import build_customer_experience_snapshot
 from app.services.issue_radar import build_issue_radar
 from app.services.telemetry import summarize_telemetry
+from app.services.telemetry_history_daily import get_telemetry_history_daily
 from app.services.overview import build_kpi_payload, build_overview
 from app.services.source_health import get_source_health
 
@@ -102,7 +103,14 @@ def get_sources(db: Session = Depends(db_session)):
 
 @router.get("/telemetry/summary", response_model=TelemetrySummaryOut)
 def telemetry_summary(db: Session = Depends(db_session)):
-    return summarize_telemetry(db)
+    payload = summarize_telemetry(db)
+    payload['history_daily'] = get_telemetry_history_daily(db)
+    return payload
+
+
+@router.get("/telemetry/history-daily")
+def telemetry_history_daily(db: Session = Depends(db_session)):
+    return get_telemetry_history_daily(db)
 
 
 @router.get("/cx/snapshot", response_model=CXSnapshotOut)

@@ -373,6 +373,20 @@ export interface TelemetryAnalytics {
   derived_metrics?: TelemetryDerivedMetrics
 }
 
+export interface TelemetryHistoryDailyRow {
+  business_date: string
+  active_devices: number
+  engaged_devices: number
+  total_events: number
+  avg_rssi: number | null
+  error_events: number
+  firmware_distribution: Record<string, number>
+  model_distribution: Record<string, number>
+  avg_cook_temp: number | null
+  peak_hour_distribution: Record<string, number>
+  source: string
+}
+
 export interface TelemetrySummary {
   latest?: TelemetryLatestSummary | null
   daily: Array<Record<string, any>>
@@ -384,6 +398,7 @@ export interface TelemetrySummary {
   collection_metadata?: TelemetryCollectionMetadata
   confidence?: TelemetryConfidence
   analytics?: TelemetryAnalytics
+  history_daily?: TelemetryHistoryDailyRow[]
 }
 
 export interface OverviewResponse {

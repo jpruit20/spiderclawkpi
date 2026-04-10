@@ -295,6 +295,24 @@ class TelemetryDaily(TimestampMixin, Base):
     error_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
 
+class TelemetryHistoryDaily(TimestampMixin, Base):
+    __tablename__ = "telemetry_history_daily"
+    __table_args__ = (UniqueConstraint("business_date", name="uq_telemetry_history_daily_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    active_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    engaged_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_events: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_rssi: Mapped[Optional[float]] = mapped_column(Float)
+    error_events: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    firmware_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    model_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    avg_cook_temp: Mapped[Optional[float]] = mapped_column(Float)
+    peak_hour_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), default="ddb_export_backfill", nullable=False)
+
+
 class TelemetryHistoryMonthly(TimestampMixin, Base):
     __tablename__ = "telemetry_history_monthly"
     __table_args__ = (UniqueConstraint("month_start", name="uq_telemetry_history_monthly_month_start"),)

@@ -1026,6 +1026,12 @@ th {
   font-size: 13px;
 }
 
+.venom-chart-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .venom-panel-footer {
   display: block;
   margin-top: 16px;

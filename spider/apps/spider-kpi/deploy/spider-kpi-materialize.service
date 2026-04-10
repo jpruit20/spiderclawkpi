@@ -1,0 +1,11 @@
+[Unit]
+Description=Spider KPI nightly daily telemetry materializer
+After=spider-kpi.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python scripts/materialize_daily.py --days-back 3
+User=spider
+Group=spider
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env

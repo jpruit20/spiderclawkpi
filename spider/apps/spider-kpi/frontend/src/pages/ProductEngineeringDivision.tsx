@@ -2,13 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ApiError, api } from '../lib/api'
-import { TelemetrySummary } from '../lib/types'
+import { TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
 import {
-  LineChart, Line, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
+  LineChart, Line, BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Area, AreaChart, ComposedChart,
 } from 'recharts'
 
 type TimeRange = '1h' | '24h' | '7d' | '30d'
-
 type TruthState = 'canonical' | 'proxy' | 'estimated' | 'degraded' | 'unavailable'
 
 const TRUTH_LEGEND: { state: TruthState; label: string; color: string }[] = [
@@ -86,6 +85,45 @@ function BarIndicator({ value, max, color }: { value: number; max: number; color
   )
 }
 
+function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
+  const hourTotals: Record<string, number> = {}
+  for (const row of historyRows) {
+    for (const [hour, count] of Object.entries(row.peak_hour_distribution || {})) {
+      hourTotals[hour] = (hourTotals[hour] || 0) + (count as number)
+    }
+  }
+  return Array.from({ length: 24 }, (_, i) => {
+    const h = String(i)
+    return { hour: `${String(i).padStart(2, '0')}:00`, events: hourTotals[h] || 0 }
+  })
+}
+
+function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
+  const totals: Record<string, number> = {}
+  for (const row of historyRows.slice(-30)) {
+    for (const [model, count] of Object.entries(row.model_distribution || {})) {
+      totals[model] = (totals[model] || 0) + (count as number)
+    }
+  }
+  return Object.entries(totals)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 8)
+    .map(([model, events]) => ({ model, events }))
+}
+
+function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
+  const totals: Record<string, number> = {}
+  for (const row of historyRows.slice(-30)) {
+    for (const [fw, count] of Object.entries(row.firmware_distribution || {})) {
+      totals[fw] = (totals[fw] || 0) + (count as number)
+    }
+  }
+  return Object.entries(totals)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 8)
+    .map(([firmware, events]) => ({ firmware, events }))
+}
+
 export function ProductEngineeringDivision() {
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -115,6 +153,7 @@ export function ProductEngineeringDivision() {
   const derived = telemetry?.analytics?.derived_metrics || null
   const latest = telemetry?.latest || null
   const analytics = telemetry?.analytics || null
+  const historyDaily = telemetry?.history_daily || []
 
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
   const sampleSize = Math.max(slice?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
@@ -135,15 +174,34 @@ export function ProductEngineeringDivision() {
   const p95Stabilize = derived?.time_to_stabilize_p95_seconds ?? null
   const medianCookDuration = derived?.median_cook_duration_seconds ?? null
   const p95CookDuration = derived?.p95_cook_duration_seconds ?? null
+  const devices24h = collection?.active_devices_last_24h ?? 0
+  const devices60m = collection?.active_devices_last_60m ?? 0
 
-  const chartRows = useMemo(() => {
-    if (!telemetry?.daily?.length) return []
-    return telemetry.daily.slice(-24).map((row: Record<string, any>) => ({
-      label: row.business_date || row.hour_label || '',
-      success_rate: row.session_reliability_score != null ? row.session_reliability_score * 100 : null,
-      disconnect_proxy: row.disconnect_rate != null ? row.disconnect_rate * 100 : null,
+  const fleetChartRows = useMemo(() => {
+    if (!historyDaily.length) return []
+    return historyDaily.map((row) => ({
+      date: row.business_date.slice(5),
+      active_devices: row.active_devices,
+      engaged_devices: row.engaged_devices,
+      error_rate: row.total_events > 0 ? Math.round((row.error_events / row.total_events) * 10000) / 100 : 0,
     }))
-  }, [telemetry])
+  }, [historyDaily])
+
+  const peakHourData = useMemo(() => buildPeakHours(historyDaily), [historyDaily])
+  const modelData = useMemo(() => buildModelBreakdown(historyDaily), [historyDaily])
+  const firmwareData = useMemo(() => buildFirmwareBreakdown(historyDaily), [historyDaily])
+
+  const historyStats = useMemo(() => {
+    if (!historyDaily.length) return null
+    const last30 = historyDaily.slice(-30)
+    const last7 = historyDaily.slice(-7)
+    const avgDevices30 = last30.reduce((s, r) => s + r.active_devices, 0) / (last30.length || 1)
+    const avgDevices7 = last7.reduce((s, r) => s + r.active_devices, 0) / (last7.length || 1)
+    const totalErrors30 = last30.reduce((s, r) => s + r.error_events, 0)
+    const totalEvents30 = last30.reduce((s, r) => s + r.total_events, 0)
+    const peakDay = last30.reduce((best, r) => r.active_devices > (best?.active_devices || 0) ? r : best, last30[0])
+    return { avgDevices30, avgDevices7, totalErrors30, totalEvents30, errorRate30: totalEvents30 > 0 ? totalErrors30 / totalEvents30 : 0, peakDay }
+  }, [historyDaily])
 
   return (
     <div className="page-grid venom-page">
@@ -185,7 +243,7 @@ export function ProductEngineeringDivision() {
               <div className="venom-kpi-sub">{fmtInt(devicesReporting)} devices reporting (5m window)</div>
               <div className="venom-kpi-badges">
                 <TruthBadge state="proxy" />
-                <span className="venom-delta venom-delta-up">+{fmtInt(collection?.active_devices_last_15m ? collection.active_devices_last_15m - (collection?.active_devices_last_5m || 0) : 0)} vs 1h ago</span>
+                {devices60m > 0 ? <span className="venom-delta venom-delta-up">{fmtInt(devices60m)} in 60m · {fmtInt(devices24h)} in 24h</span> : null}
               </div>
             </div>
             <div className="venom-kpi-card">
@@ -194,7 +252,7 @@ export function ProductEngineeringDivision() {
               <div className="venom-kpi-sub">started · {fmtInt(cooksCompleted)} completed (24h)</div>
               <div className="venom-kpi-badges">
                 <TruthBadge state="proxy" />
-                <span className="venom-delta venom-delta-up">+8% vs yesterday</span>
+                {historyStats ? <span className="venom-delta venom-delta-flat">30d avg: {Math.round(historyStats.avgDevices30)} devices/day</span> : null}
               </div>
             </div>
             <div className="venom-kpi-card">
@@ -203,7 +261,7 @@ export function ProductEngineeringDivision() {
               <div className="venom-kpi-sub">session success · n={fmtInt(sampleSize)}</div>
               <div className="venom-kpi-badges">
                 <TruthBadge state="estimated" />
-                <span className="venom-delta venom-delta-flat">{successRate != null ? `${((successRate - 0.95) * 100).toFixed(1)}pp` : '\u2014'} vs 7d avg</span>
+                {historyStats ? <span className="venom-delta venom-delta-flat">30d error rate: {fmtPct(historyStats.errorRate30)}</span> : null}
               </div>
             </div>
             <div className="venom-kpi-card">
@@ -216,6 +274,36 @@ export function ProductEngineeringDivision() {
               </div>
             </div>
           </div>
+
+          {/* Fleet Activity + Error Trend (main chart) */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <div>
+                <strong>Fleet Activity — Daily Active Devices</strong>
+                <p className="venom-chart-sub">Unique Venom controllers reporting each day across Huntsman, Giant Huntsman, and Weber Kettle grills</p>
+              </div>
+              {historyStats?.peakDay ? <span className="venom-panel-hint">Peak: {historyStats.peakDay.active_devices} devices on {historyStats.peakDay.business_date}</span> : null}
+            </div>
+            {fleetChartRows.length > 0 ? (
+              <div className="chart-wrap">
+                <ResponsiveContainer width="100%" height={320}>
+                  <ComposedChart data={fleetChartRows}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
+                    <YAxis yAxisId="left" stroke="#9fb0d4" />
+                    <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" tickFormatter={(v: number) => `${v}%`} />
+                    <Tooltip />
+                    <Legend />
+                    <Area yAxisId="left" type="monotone" name="Active devices" dataKey="active_devices" fill="rgba(110,168,255,0.15)" stroke="var(--blue)" strokeWidth={2} />
+                    <Line yAxisId="left" type="monotone" name="Engaged (cooking)" dataKey="engaged_devices" stroke="var(--green)" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" type="monotone" name="Error rate %" dataKey="error_rate" stroke="var(--red)" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="state-message">No historical daily data available yet. Run the S3 import to populate fleet history.</div>
+            )}
+          </section>
 
           {/* Breakdown panels */}
           <div className="two-col two-col-equal">
@@ -295,31 +383,106 @@ export function ProductEngineeringDivision() {
             </section>
           </div>
 
-          {/* 24h rolling chart */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Session success rate — 24h rolling (hourly)</strong>
-              <Link to="/analysis/session-clusters" className="analysis-link">Analyze trend &#x2197;</Link>
-            </div>
-            {chartRows.length > 0 ? (
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={chartRows}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                    <XAxis dataKey="label" stroke="#9fb0d4" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" stroke="#9fb0d4" domain={[88, 100]} tickFormatter={(v: number) => `${v}%`} />
-                    <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" domain={[0, 10]} tickFormatter={(v: number) => `${v}%`} />
-                    <Tooltip formatter={(value: number, name: string) => [`${value?.toFixed(1)}%`, name]} />
-                    <Legend />
-                    <Line yAxisId="left" type="monotone" name="Success rate" dataKey="success_rate" stroke="var(--blue)" strokeWidth={2} dot={false} />
-                    <Line yAxisId="right" type="monotone" name="Disconnect proxy" dataKey="disconnect_proxy" stroke="var(--red)" strokeWidth={2} strokeDasharray="6 3" dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
+          {/* Usage patterns: peak hours + model/firmware breakdown */}
+          <div className="two-col two-col-equal">
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Peak cooking hours</strong>
+                <span className="venom-panel-hint">When users cook most (all-time)</span>
               </div>
-            ) : (
-              <div className="state-message">No hourly telemetry chart data available for this range.</div>
-            )}
-          </section>
+              {peakHourData.some((r) => r.events > 0) ? (
+                <div className="chart-wrap-short">
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={peakHourData}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                      <XAxis dataKey="hour" stroke="#9fb0d4" tick={{ fontSize: 10 }} interval={2} />
+                      <YAxis stroke="#9fb0d4" />
+                      <Tooltip />
+                      <Bar dataKey="events" name="Events" fill="var(--blue)" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : <div className="state-message">Peak hour data populates after S3 history import.</div>}
+            </section>
+
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Grill model mix</strong>
+                <span className="venom-panel-hint">Last 30 days</span>
+              </div>
+              {modelData.length > 0 ? (
+                <div className="chart-wrap-short">
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={modelData} layout="vertical">
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                      <XAxis type="number" stroke="#9fb0d4" />
+                      <YAxis type="category" dataKey="model" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={120} />
+                      <Tooltip />
+                      <Bar dataKey="events" name="Events" fill="var(--green)" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : <div className="state-message">Model distribution populates after S3 history import.</div>}
+            </section>
+          </div>
+
+          {/* Firmware breakdown + live issues */}
+          <div className="two-col two-col-equal">
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Firmware versions in field</strong>
+                <Link to="/analysis/firmware-model" className="analysis-link">Details &#x2197;</Link>
+              </div>
+              {firmwareData.length > 0 ? (
+                <div className="chart-wrap-short">
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={firmwareData} layout="vertical">
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                      <XAxis type="number" stroke="#9fb0d4" />
+                      <YAxis type="category" dataKey="firmware" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={80} />
+                      <Tooltip />
+                      <Bar dataKey="events" name="Events" fill="var(--orange)" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : <div className="state-message">Firmware data populates after S3 history import.</div>}
+            </section>
+
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Live fleet signals</strong>
+              </div>
+              <div className="stack-list compact">
+                <div className={`list-item status-${(successRate || 0) >= 0.9 ? 'good' : (successRate || 0) >= 0.8 ? 'warn' : 'bad'}`}>
+                  <div className="item-head"><strong>Session reliability</strong><span className="badge badge-{(successRate || 0) >= 0.9 ? 'good' : 'warn'}">{fmtPct(successRate)}</span></div>
+                  <p>{sampleSize} sessions observed · disconnect proxy {fmtPct(disconnectRate)}</p>
+                </div>
+                {(overshootRate || 0) > 0.15 ? (
+                  <div className="list-item status-warn">
+                    <div className="item-head"><strong>Overshoot elevated</strong><span className="badge badge-warn">{fmtPct(overshootRate)}</span></div>
+                    <p>Temperature overshoot above 15% threshold — may indicate PID tuning issue on certain models</p>
+                  </div>
+                ) : null}
+                {(medianRssi || 0) < -75 ? (
+                  <div className="list-item status-warn">
+                    <div className="item-head"><strong>Weak WiFi signal</strong><span className="badge badge-warn">{medianRssi} dBm</span></div>
+                    <p>Median RSSI below -75 dBm across active fleet — connectivity-related disconnects likely</p>
+                  </div>
+                ) : null}
+                {historyStats && historyStats.errorRate30 > 0.05 ? (
+                  <div className="list-item status-bad">
+                    <div className="item-head"><strong>30-day error rate elevated</strong><span className="badge badge-bad">{fmtPct(historyStats.errorRate30)}</span></div>
+                    <p>{fmtInt(historyStats.totalErrors30)} error events out of {fmtInt(historyStats.totalEvents30)} total in last 30 days</p>
+                  </div>
+                ) : null}
+                <div className="list-item status-muted">
+                  <div className="item-head"><strong>Fleet coverage</strong></div>
+                  <p>{fmtInt(devices24h)} devices seen in 24h · {fmtInt(devices60m)} in last hour · {fmtInt(activeCooks)} cooking now</p>
+                  <small>Products: Huntsman, Giant Huntsman, Weber Kettle (via Venom controller)</small>
+                </div>
+              </div>
+            </section>
+          </div>
 
           {/* Drill-down routes */}
           <section className="card">
