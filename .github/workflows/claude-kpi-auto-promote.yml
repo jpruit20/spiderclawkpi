@@ -73,12 +73,9 @@ jobs:
             echo "PR already exists: #$existing_pr"
             echo "PR_NUMBER=$existing_pr" >> "$GITHUB_ENV"
           else
-            pr_body=$(cat <<EOF
-Automated PR for Claude KPI branch `$HEAD_BRANCH`.
-
-Frontend build and backend import validation passed in GitHub Actions, so this PR is eligible for automatic merge into `master`, which then triggers the production deploy workflows.
-EOF
-)
+            printf -v pr_body '%s\n\n%s' \
+              "Automated PR for Claude KPI branch $HEAD_BRANCH." \
+              "Frontend build and backend import validation passed in GitHub Actions, so this PR is eligible for automatic merge into master, which then triggers the production deploy workflows."
             pr_url="$(gh pr create \
               --repo "$REPO" \
               --base master \
