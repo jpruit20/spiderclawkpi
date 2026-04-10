@@ -6,7 +6,7 @@ on:
       - 'claude/**'
     paths:
       - 'spider/apps/spider-kpi/**'
-      - '.github/workflows/claude-auto-promote-kpi.yml'
+      - '.github/workflows/claude-kpi-auto-promote.yml'
       - '.github/workflows/deploy-kpi-backend.yml'
   workflow_dispatch: {}
 
