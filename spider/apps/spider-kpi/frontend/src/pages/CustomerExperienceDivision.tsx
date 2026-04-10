@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
-import { ApiError, api, getApiBase } from '../lib/api'
+import { TruthBadge, TruthState } from '../components/TruthBadge'
+import { TruthLegend } from '../components/TruthLegend'
+import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
+import { ApiError, api } from '../lib/api'
+/* format helpers available: fmtPct, fmtInt, fmtDecimal, currency from '../lib/format' */
 import { CXActionItem, CXMetricItem, CXSnapshotResponse } from '../lib/types'
 
-type ActionStatus = 'open' | 'in_progress' | 'resolved'
+/* ── helpers ── */
 
 function pct(value: number, digits = 1) {
   return `${value.toFixed(digits)}%`
@@ -40,9 +46,32 @@ function priorityScore(item: CXActionItem) {
   return base + (item.escalation_owner ? 20 : 0)
 }
 
-function actionDueDate(item: CXActionItem) {
-  return item.priority === 'critical' ? `${item.snapshot_timestamp.slice(0, 10)} EOD` : item.priority === 'high' ? '24h' : item.priority === 'medium' ? '48h' : '72h'
+function priorityBadgeClass(priority: string) {
+  if (priority === 'critical') return 'badge-bad'
+  if (priority === 'high') return 'badge-warn'
+  if (priority === 'medium') return 'badge-neutral'
+  return 'badge-muted'
 }
+
+function statusBadgeClass(status: string) {
+  if (status === 'resolved') return 'badge-good'
+  if (status === 'in_progress') return 'badge-warn'
+  return 'badge-neutral'
+}
+
+function trendDirection(trend7d: number): 'up' | 'down' | 'flat' {
+  if (trend7d > 1) return 'up'
+  if (trend7d < -1) return 'down'
+  return 'flat'
+}
+
+const DRILL_ROUTES = [
+  { path: '/issues', label: 'Issue Radar', icon: '\u26a0\ufe0f' },
+  { path: '/friction', label: 'Friction Map', icon: '\ud83d\udcc9' },
+  { path: '/root-cause', label: 'Root Cause', icon: '\ud83d\udd0d' },
+]
+
+/* ── page ── */
 
 export function CustomerExperienceDivision() {
   const [snapshot, setSnapshot] = useState<CXSnapshotResponse | null>(null)
@@ -76,116 +105,178 @@ export function CustomerExperienceDivision() {
   const insights = snapshot?.insights || []
   const snapshotTimestamp = snapshot?.snapshot_timestamp || 'n/a'
 
+  /* Map header_metrics -> KpiCardDef[] */
+  const kpiCards: KpiCardDef[] = headerMetrics.map((m) => ({
+    label: m.label,
+    value: metricValue(m),
+    sub: `target ${metricTarget(m)}`,
+    truthState: (m.confidence === 'low' ? 'estimated' : 'canonical') as TruthState,
+    delta: {
+      text: `7d ${m.trend7d > 0 ? '+' : ''}${m.trend7d.toFixed(1)}%`,
+      direction: trendDirection(m.trend7d),
+    },
+  }))
+
   return (
-    <div className="page-grid">
-      <div className="page-head">
-        <h2>Customer Experience</h2>
-        <p>Division-first operating page for Jeremiah’s team using one server-evaluated daily snapshot across KPIs, focus, actions, load, and insights.</p>
-        <small className="page-meta">API base: {getApiBase()} · snapshot: {snapshotTimestamp}</small>
+    <div className="page-grid venom-page">
+      {/* Header */}
+      <div className="venom-header">
+        <div>
+          <h2 className="venom-title">Customer Experience</h2>
+          <p className="venom-subtitle">
+            Jeremiah's team &mdash; snapshot {snapshotTimestamp}
+          </p>
+        </div>
       </div>
-      {loading ? <Card title="Customer Experience"><div className="state-message">Loading customer experience division…</div></Card> : null}
+
+      {loading ? <Card title="Customer Experience"><div className="state-message">Loading customer experience division...</div></Card> : null}
       {error ? <Card title="Customer Experience Error"><div className="state-message error">{error}</div></Card> : null}
+
       {!loading && !error ? (
         <>
-          <div className="four-col">
-            {headerMetrics.map((metric) => (
-              <Card key={metric.key} title={metric.label}>
-                <div className="hero-metric hero-metric-sm">{metricValue(metric)}</div>
-                <div className="inline-badges">
-                  <span className={`badge badge-${statusTone(metric.status)}`}>{metric.status}</span>
-                  <span className="badge badge-neutral">owner {metric.owner}</span>
-                  {metric.confidence === 'low' ? <span className="badge badge-warn">LOW CONFIDENCE</span> : null}
-                </div>
-                <small>Target {metricTarget(metric)} · 7d {metric.trend7d.toFixed(1)}% · 30d {metric.trend30d.toFixed(1)}%</small>
-              </Card>
-            ))}
+          {/* Truth Legend */}
+          <TruthLegend />
+
+          {/* KPI Strip */}
+          <VenomKpiStrip cards={kpiCards} cols={4} />
+
+          {/* Two-col: Performance Metrics + Today's Focus */}
+          <div className="two-col two-col-equal">
+            {/* Left: Performance Metrics */}
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Performance Metrics</strong>
+              </div>
+              <div className="venom-breakdown-list">
+                {gridMetrics.map((metric) => (
+                  <div className="venom-breakdown-row" key={metric.key}>
+                    <span className="venom-breakdown-label">{metric.label}</span>
+                    <span className="venom-breakdown-val">{metricValue(metric)}</span>
+                    <span className={`badge badge-${statusTone(metric.status)}`}>{metric.status}</span>
+                    <span className={`venom-delta venom-delta-${trendDirection(metric.trend7d)}`}>
+                      7d {metric.trend7d > 0 ? '+' : ''}{metric.trend7d.toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+                {!gridMetrics.length ? <div className="state-message">No performance metrics returned.</div> : null}
+              </div>
+            </section>
+
+            {/* Right: Today's Focus */}
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Today's Focus</strong>
+              </div>
+              <div className="stack-list compact">
+                {todayFocus.map((item) => (
+                  <div className="list-item" key={item.id}>
+                    <div className="item-head">
+                      <strong>{item.title}</strong>
+                      <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
+                    </div>
+                    <p>{item.required_action}</p>
+                    <small>Owner: {item.owner}</small>
+                  </div>
+                ))}
+                {!todayFocus.length ? <div className="list-item status-good"><p>No open priority actions from the current daily snapshot.</p></div> : null}
+              </div>
+            </section>
           </div>
 
-          <Card title="KPI Grid">
-            <div className="three-col">
-              {gridMetrics.map((metric) => (
-                <div className={`list-item status-${statusTone(metric.status)}`} key={metric.key}>
-                  <div className="item-head">
-                    <strong>{metric.label}</strong>
-                    <span className={`badge badge-${statusTone(metric.status)}`}>{metric.status}</span>
-                  </div>
-                  <p>{metricValue(metric)} vs target {metricTarget(metric)}</p>
-                  <small>Owner: {metric.owner} · Last updated: {metric.snapshot_timestamp}</small>
-                  <small>7d trend {metric.trend7d.toFixed(1)}% · Consecutive bad days {metric.consecutive_bad_days || 0}</small>
-                </div>
-              ))}
+          {/* Action Queue (full width) */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Action Queue ({actions.length})</strong>
             </div>
-          </Card>
-
-          <Card title="Today Focus">
-            <div className="stack-list">
-              {todayFocus.map((item) => (
-                <div className={`list-item status-${statusTone(item.priority)}`} key={item.id}>
-                  <div className="item-head">
-                    <strong>{item.title}</strong>
-                    <div className="inline-badges">
-                      <span className={`badge badge-${statusTone(item.priority)}`}>{item.priority}</span>
-                      <span className="badge badge-neutral">{item.status}</span>
-                    </div>
-                  </div>
-                  <p>{item.required_action}</p>
-                  <small>Owner: {item.owner}{item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}{item.escalation_owner ? ` · Escalated: ${item.escalation_owner}` : ''}</small>
-                  <small>Due: {actionDueDate(item)} · Trigger: {item.trigger_condition}</small>
-                </div>
-              ))}
-              {!todayFocus.length ? <div className="list-item status-good"><p>No open priority actions from the current daily snapshot.</p></div> : null}
-            </div>
-          </Card>
-
-          <Card title="Action Queue">
-            <div className="stack-list">
+            <div className="stack-list compact">
               {actions.map((item) => (
-                <div className={`list-item status-${statusTone(item.priority)}`} key={item.id}>
+                <div className="list-item" key={item.id}>
                   <div className="item-head">
                     <strong>{item.title}</strong>
                     <div className="inline-badges">
-                      <span className={`badge badge-${statusTone(item.priority)}`}>{item.priority}</span>
-                      <span className="badge badge-neutral">{item.status}</span>
+                      <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
+                      <span className={`badge ${statusBadgeClass(item.status)}`}>{item.status}</span>
                     </div>
                   </div>
                   <p>{item.required_action}</p>
-                  <small>Dedup key: {item.dedup_key}</small>
-                  <small>Owner: {item.owner}{item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}{item.escalation_owner ? ` · Escalation owner: ${item.escalation_owner}` : ''}</small>
-                  <small>Auto-close: {JSON.stringify(item.auto_close_rule)}</small>
-                  <small>Evidence: {(item.evidence || []).map((entry) => typeof entry === 'string' ? entry : JSON.stringify(entry)).join(' · ')}</small>
+                  <small>
+                    Owner: {item.owner}
+                    {item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}
+                    {item.escalation_owner ? ` · Escalation: ${item.escalation_owner}` : ''}
+                  </small>
                 </div>
               ))}
-              {!actions.length ? <div className="list-item status-good"><p>No non-green KPI has met persistence or critical-trigger requirements.</p></div> : null}
+              {!actions.length ? <div className="list-item status-good"><p>No actions in queue.</p></div> : null}
             </div>
-          </Card>
+          </section>
 
-          <Card title="Team Load + Distribution">
-            <div className="three-col">
-              {teamLoad.map((rep) => (
-                <div className={`list-item status-${rep.share_pct > 50 ? 'bad' : rep.share_pct > 40 ? 'warn' : 'good'}`} key={rep.name}>
-                  <div className="item-head"><strong>{rep.name}</strong><span className="badge badge-neutral">share {rep.share_pct.toFixed(1)}%</span></div>
-                  <small>Tickets closed/day: {rep.tickets_closed_per_day.toFixed(1)}</small>
-                  <small>Active queue size: {rep.active_queue_size}</small>
-                  <small>Throughput ratio: {rep.throughput_ratio.toFixed(2)}</small>
-                  <small>Avg close time: {rep.avg_close_time.toFixed(1)}h</small>
-                  <small>Reopen rate: {rep.reopen_rate.toFixed(1)}%</small>
-                </div>
+          {/* Two-col: Team Load + Insights */}
+          <div className="two-col two-col-equal">
+            {/* Left: Team Load */}
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Team Load</strong>
+              </div>
+              <div className="venom-bar-list">
+                {teamLoad.map((rep) => (
+                  <div key={rep.name}>
+                    <div className="venom-bar-row">
+                      <span className="venom-breakdown-label">{rep.name}</span>
+                      <BarIndicator
+                        value={rep.share_pct}
+                        max={50}
+                        color={rep.share_pct >= 50 ? 'var(--red)' : rep.share_pct >= 35 ? 'var(--orange)' : 'var(--green)'}
+                      />
+                      <span className="venom-breakdown-val">{rep.share_pct.toFixed(1)}%</span>
+                    </div>
+                    <small style={{ paddingLeft: 4, opacity: 0.7 }}>
+                      closed/day: {rep.tickets_closed_per_day.toFixed(1)} | queue: {rep.active_queue_size} | reopen: {rep.reopen_rate.toFixed(1)}%
+                    </small>
+                  </div>
+                ))}
+                {!teamLoad.length ? <div className="state-message">No team load data returned.</div> : null}
+              </div>
+            </section>
+
+            {/* Right: Insights */}
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Insights</strong>
+              </div>
+              <div className="stack-list compact">
+                {insights.map((item, idx) => (
+                  <div className="list-item status-muted" key={idx}>
+                    <p>{item.text}</p>
+                    <div className="inline-badges">
+                      {item.evidence.map((ev, evIdx) => (
+                        <span className="badge badge-neutral" key={evIdx}>{ev}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {!insights.length ? <div className="list-item status-muted"><p>No multi-signal insights triggered from the current snapshot.</p></div> : null}
+              </div>
+            </section>
+          </div>
+
+          {/* Navigation tiles */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Drill-down routes</strong>
+              <span className="venom-panel-hint">Click to explore</span>
+            </div>
+            <div className="venom-drill-grid">
+              {DRILL_ROUTES.map((route) => (
+                <Link key={route.path} to={route.path} className="venom-drill-tile">
+                  <span className="venom-drill-icon">{route.icon}</span>
+                  <div>
+                    <strong>{route.label}</strong>
+                    <small>{route.path}</small>
+                  </div>
+                </Link>
               ))}
             </div>
-          </Card>
-
-          <Card title="Root Cause / Insights">
-            <div className="stack-list">
-              {insights.map((item, idx) => (
-                <div className="list-item" key={idx}>
-                  <strong>{item.text}</strong>
-                  <small>Evidence: {item.evidence.join(' · ')}</small>
-                </div>
-              ))}
-              {!insights.length ? <div className="list-item status-muted"><p>No multi-signal insights triggered from the current snapshot.</p></div> : null}
-            </div>
-          </Card>
-
+          </section>
         </>
       ) : null}
     </div>

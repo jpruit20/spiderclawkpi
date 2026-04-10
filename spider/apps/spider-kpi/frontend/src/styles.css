@@ -1158,6 +1158,51 @@ th {
   flex-shrink: 0;
 }
 
+/* KPI strip 3-col variant */
+.venom-kpi-strip-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Briefing card */
+.venom-briefing {
+  background: linear-gradient(180deg, rgba(110,168,255,0.04), rgba(255,255,255,0.015));
+  border-color: rgba(110, 168, 255, 0.22);
+}
+
+/* Funnel visualization */
+.venom-funnel-step {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.venom-funnel-dropoff {
+  font-size: 11px;
+  color: var(--red);
+  margin-top: 2px;
+}
+
+/* Queue rank */
+.venom-queue-rank {
+  font-size: 28px;
+  font-weight: 800;
+  color: rgba(255,255,255,0.16);
+  flex-shrink: 0;
+  width: 40px;
+  text-align: center;
+}
+
+/* Severity dot inline */
+.venom-severity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
 /* Venom responsive */
 @media (max-width: 1200px) {
   .venom-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }

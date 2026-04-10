@@ -1,25 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
-import { DecisionStack } from '../components/DecisionStack'
-import { ApiError, api, getApiBase } from '../lib/api'
-import { compareValue, priorPeriodRows } from '../lib/compare'
-import { currency, summarizeTrust } from '../lib/operatingModel'
-import { BlockedStateOutput, KPIDaily, KPIObject, OverviewResponse, SupportOverviewResponse, IssueRadarResponse } from '../lib/types'
-import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, RankedActionObject, truthStateFromSource } from '../lib/divisionContract'
-
-function formatTelemetryFreshness(timestamp?: string | null) {
-  if (!timestamp) return 'n/a'
-  const parsed = Date.parse(timestamp)
-  if (Number.isNaN(parsed)) return 'n/a'
-  const ageMinutes = Math.max(0, Math.round((Date.now() - parsed) / 60000))
-  if (ageMinutes < 60) return `${ageMinutes}m ago`
-  const hours = Math.floor(ageMinutes / 60)
-  const minutes = ageMinutes % 60
-  return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`
-}
+import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
+import { ApiError, api } from '../lib/api'
+import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
+import { IssueRadarResponse, KPIDaily, OverviewResponse, SourceHealthItem, SupportOverviewResponse } from '../lib/types'
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 
 function sum(rows: KPIDaily[], key: keyof KPIDaily) {
-  return rows.reduce((total, row) => total + Number(row[key] || 0), 0)
+  return rows.reduce((s, r) => s + (Number(r[key]) || 0), 0)
 }
 
 export function CommandCenter() {
@@ -35,17 +24,13 @@ export function CommandCenter() {
       setLoading(true)
       setError(null)
       try {
-        const [overviewPayload, supportPayload, issuesPayload] = await Promise.all([
-          api.overview(),
-          api.supportOverview(),
-          api.issues(),
-        ])
+        const [o, s, i] = await Promise.all([api.overview(), api.supportOverview(), api.issues()])
         if (cancelled) return
-        setOverview(overviewPayload)
-        setSupport(supportPayload)
-        setIssues(issuesPayload)
+        setOverview(o)
+        setSupport(s)
+        setIssues(i)
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load command center')
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load dashboard')
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -54,170 +39,171 @@ export function CommandCenter() {
     return () => { cancelled = true }
   }, [])
 
-  const rows = useMemo(() => [...(overview?.daily_series || [])].sort((a, b) => a.business_date.localeCompare(b.business_date)), [overview])
-  const currentRows = rows.slice(-7)
-  const priorRows = useMemo(() => priorPeriodRows(rows, currentRows[0]?.business_date || '', currentRows.length), [rows, currentRows])
-  const latest = currentRows.at(-1)
+  const rows = overview?.daily_series || []
+  const last7 = rows.slice(-7)
+  const prior7 = rows.slice(-14, -7)
+  const rev7 = sum(last7, 'revenue')
+  const revPrior7 = sum(prior7, 'revenue')
+  const conv7 = last7.length ? last7.reduce((s, r) => s + (r.conversion_rate || 0), 0) / last7.length : 0
+  const convPrior7 = prior7.length ? prior7.reduce((s, r) => s + (r.conversion_rate || 0), 0) / prior7.length : 0
+  const supportRows = (support?.rows || []) as KPIDaily[]
+  const latestSupport = supportRows.length ? supportRows[supportRows.length - 1] : null
+  const openBacklog = latestSupport?.open_backlog ?? 0
+  const telemetry = overview?.telemetry || null
+  const fleetReliability = telemetry?.latest?.session_reliability_score ?? null
   const sourceHealth = overview?.source_health || []
-  const telemetryLatest = overview?.telemetry?.latest || null
-  const telemetrySampleSize = Math.max(overview?.telemetry?.collection_metadata?.distinct_devices_observed || 0, overview?.telemetry?.slice_snapshot?.sessions_derived || 0)
-  const telemetrySampleReliability = telemetrySampleSize <= 1 || overview?.telemetry?.collection_metadata?.scan_truncated || overview?.telemetry?.collection_metadata?.max_record_cap_hit ? 'low' : telemetrySampleSize < 10 ? 'medium' : 'high'
-  const supportRows = support?.rows || []
-  const revenue = sum(currentRows, 'revenue')
-  const priorRevenue = sum(priorRows, 'revenue')
-  const sessions = sum(currentRows, 'sessions')
-  const priorSessions = sum(priorRows, 'sessions')
-  const orders = sum(currentRows, 'orders')
-  const priorOrders = sum(priorRows, 'orders')
-  const conv = sessions ? (orders / sessions) * 100 : 0
-  const priorConv = priorSessions ? (priorOrders / priorSessions) * 100 : 0
-  const revenueDelta = compareValue(revenue, priorRows.length === currentRows.length ? priorRevenue : null, 'Revenue')
-  const convDelta = compareValue(conv, priorRows.length === currentRows.length ? priorConv : null, 'Conversion')
+  const degradedSources = sourceHealth.filter((s: SourceHealthItem) => s.derived_status === 'unhealthy' || s.derived_status === 'stale')
+  const topCluster = issues?.highest_business_risk?.[0] || issues?.clusters?.[0] || null
 
-  const trust = summarizeTrust(sourceHealth)
-  const snapshotTimestamp = latest?.business_date ? `${latest.business_date}T23:59:59Z` : new Date().toISOString()
-  const kpis: KPIObject[] = useMemo(() => [
-    buildNumericKpi({ key: 'command_center_revenue', currentValue: revenue, targetValue: priorRevenue || null, priorValue: priorRevenue || null, owner: 'Joseph', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'command_center_conversion', currentValue: conv, targetValue: priorConv || null, priorValue: priorConv || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
-    buildNumericKpi({ key: 'command_center_support_backlog', currentValue: Number(supportRows.at(-1)?.open_backlog || 0), targetValue: 100, priorValue: null, owner: 'Jeremiah', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'command_center_top_issue', currentValue: issues?.clusters?.[0]?.title || 'No cluster returned', targetValue: 'No high-risk issue', owner: issues?.clusters?.[0]?.owner_team || 'TBD', status: issues?.clusters?.[0] ? 'red' : 'yellow', truthState: truthStateFromSource(sourceHealth, ['freshdesk', 'clarity', 'ga4'], 'proxy'), lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'command_center_data_trust', currentValue: trust.degraded ? `Degraded: ${trust.degradedSources.join(', ')}` : 'Healthy', targetValue: 'Healthy', owner: 'Joseph', status: trust.degraded ? 'red' : 'green', truthState: truthStateFromSource(sourceHealth, ['shopify', 'triplewhale', 'freshdesk', 'clarity', 'ga4'], 'canonical'), lastUpdated: snapshotTimestamp }),
-    buildTextKpi({ key: 'command_center_telemetry_reliability', currentValue: telemetryLatest ? (telemetrySampleReliability === 'low' ? `Early warning signal: reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}% in limited sample` : `disconnect ${(telemetryLatest.disconnect_rate * 100).toFixed(1)}% / reliability ${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%`) : 'Telemetry unavailable', targetValue: 'Low disconnect / high reliability', owner: 'Kyle', status: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'red' : telemetryLatest ? 'yellow' : 'red', truthState: telemetryLatest ? 'proxy' : 'blocked', lastUpdated: snapshotTimestamp, sampleSize: telemetrySampleSize, sampleScope: overview?.telemetry?.collection_metadata?.coverage_summary || null, sampleReliability: telemetrySampleReliability }),
-  ], [revenue, priorRevenue, conv, priorConv, supportRows, issues, sourceHealth, snapshotTimestamp, telemetryLatest, telemetrySampleSize, telemetrySampleReliability, overview])
+  const kpiCards = useMemo<KpiCardDef[]>(() => [
+    {
+      label: 'Revenue (7d)',
+      value: currency(rev7),
+      sub: `${last7.length} days`,
+      truthState: 'canonical',
+      delta: { text: deltaPct(rev7, revPrior7) + ' vs prior 7d', direction: deltaDirection(rev7, revPrior7) },
+    },
+    {
+      label: 'Conversion',
+      value: fmtPct(conv7 / 100, 2),
+      sub: '7-day avg',
+      truthState: 'canonical',
+      delta: { text: deltaPct(conv7, convPrior7) + ' vs prior', direction: deltaDirection(conv7, convPrior7) },
+    },
+    {
+      label: 'Support Queue',
+      value: fmtInt(openBacklog),
+      sub: 'open tickets',
+      truthState: 'canonical',
+      delta: openBacklog > 150 ? { text: 'Above target', direction: 'down' as const } : openBacklog < 80 ? { text: 'Healthy', direction: 'up' as const } : { text: 'Watch', direction: 'flat' as const },
+    },
+    {
+      label: 'Fleet Health',
+      value: fleetReliability != null ? fmtPct(fleetReliability) : '\u2014',
+      sub: `${fmtInt(telemetry?.collection_metadata?.active_devices_last_24h)} devices (24h)`,
+      truthState: telemetry ? 'proxy' : 'unavailable',
+    },
+  ], [rev7, revPrior7, conv7, convPrior7, openBacklog, fleetReliability, telemetry, last7.length])
 
-  const blockedStates: Record<string, BlockedStateOutput> = {
-    command_center_data_trust: buildBlockedState({
-      decision_blocked: 'Whether the top-ranked intervention should be treated as decision-grade',
-      missing_source: trust.degradedSources.join(', ') || 'none',
-      still_trustworthy: ['healthy source subset', 'visible top-line metrics'],
-      owner: 'Joseph',
-      required_action_to_unblock: 'Restore degraded connectors before trusting dependent actions',
-    }),
-    command_center_telemetry_reliability: buildBlockedState({
-      decision_blocked: 'Whether product reliability should pre-empt revenue or CX queue interventions right now',
-      missing_source: telemetryLatest ? 'deeper telemetry history / cohort detail' : 'live telemetry summary',
-      still_trustworthy: ['revenue and conversion KPIs', 'issue radar queue', 'source health'],
-      owner: 'Kyle',
-      required_action_to_unblock: 'Keep telemetry live and expand product-cohort signal before treating reliability silence as trustworthy.',
-    }),
-  }
+  const chartRows = useMemo(() => {
+    return last7.map((r) => ({
+      date: r.business_date.slice(5),
+      revenue: Math.round(r.revenue),
+      orders: r.orders,
+    }))
+  }, [last7])
 
-  const actions: RankedActionObject[] = useMemo(() => enforceActionContract([
-    actionFromKpi({
-      id: 'cc-revenue',
-      triggerKpi: kpis[0],
-      triggerCondition: 'revenue delta negative vs prior period',
-      owner: 'Joseph',
-      requiredAction: 'Review the highest-confidence revenue drag before allocating more budget or staffing.',
-      priority: revenueDelta.deltaPct !== null && revenueDelta.deltaPct < 0 ? 'critical' : 'high',
-      evidence: ['overview', 'diagnostics', 'recommendations'],
-      dueDate: '48h',
-      snapshotTimestamp,
-      baseRankingScore: Math.abs(revenueDelta.deltaPct || 0) + 90,
-    }),
-    actionFromKpi({
-      id: 'cc-top-issue',
-      triggerKpi: kpis[3],
-      triggerCondition: 'highest-business-risk cluster exists',
-      owner: issues?.clusters?.[0]?.owner_team || 'TBD',
-      requiredAction: `Escalate now: ${issues?.clusters?.[0]?.title || 'No priority cluster returned yet.'}`,
-      priority: 'high',
-      evidence: ['issue radar', 'freshdesk', 'clarity', 'ga4'],
-      dueDate: '24h',
-      snapshotTimestamp,
-      baseRankingScore: Number(issues?.clusters?.[0]?.details_json?.priority_score || 60),
-    }),
-    actionFromKpi({
-      id: 'cc-support-backlog',
-      triggerKpi: kpis[2],
-      triggerCondition: 'support backlog elevated',
-      owner: 'Jeremiah',
-      requiredAction: 'Reduce support backlog before it suppresses conversion and repeat contact volume rises.',
-      priority: Number(supportRows.at(-1)?.open_backlog || 0) > 150 ? 'critical' : 'high',
-      evidence: ['support overview', 'freshdesk'],
-      dueDate: '24h',
-      snapshotTimestamp,
-      baseRankingScore: Number(supportRows.at(-1)?.open_backlog || 0),
-    }),
-    actionFromKpi({
-      id: 'cc-data-trust',
-      triggerKpi: kpis[4],
-      triggerCondition: 'source health degraded',
-      owner: 'Joseph',
-      requiredAction: 'Restore degraded sources before changing spend, UX, or queue priorities.',
-      priority: trust.degraded ? 'critical' : 'medium',
-      evidence: trust.degradedSources,
-      dueDate: '4h',
-      snapshotTimestamp,
-      baseRankingScore: trust.degraded ? 120 : 30,
-      blockedState: blockedStates.command_center_data_trust,
-    }),
-    actionFromKpi({
-      id: 'cc-telemetry-reliability',
-      triggerKpi: kpis[5],
-      triggerCondition: telemetryLatest ? 'telemetry reliability below target' : 'truth_state = blocked',
-      owner: 'Kyle',
-      coOwner: 'Joseph',
-      requiredAction: telemetryLatest ? (telemetrySampleReliability === 'low' ? 'Treat telemetry as an early warning signal and investigate further before scaling the conclusion.' : 'Review telemetry reliability before deprioritizing product / firmware intervention.') : 'Unblock telemetry summary before assuming product reliability is stable.',
-      priority: telemetryLatest && telemetryLatest.session_reliability_score < 0.7 ? 'critical' : 'high',
-      evidence: ['aws_telemetry', 'overview telemetry', 'issue radar'],
-      dueDate: '24h',
-      snapshotTimestamp,
-      baseRankingScore: telemetryLatest ? Math.round((1 - telemetryLatest.session_reliability_score) * 100) + (telemetrySampleReliability === 'low' ? 15 : 40) : 50,
-      blockedState: blockedStates.command_center_telemetry_reliability,
-      scope: 'observed_slice',
-      confidence: telemetrySampleReliability === 'low' ? 'low' : telemetrySampleReliability === 'medium' ? 'medium' : 'high',
-    }),
-  ]).slice(0, 5), [kpis, revenueDelta.deltaPct, issues, supportRows, trust, snapshotTimestamp, telemetryLatest, telemetrySampleReliability])
+  const divisions = [
+    { path: '/division/customer-experience', label: 'Customer Experience', status: `${fmtInt(openBacklog)} open tickets`, owner: 'Jeremiah' },
+    { path: '/division/marketing', label: 'Marketing', status: `Conv ${fmtPct(conv7 / 100, 2)}`, owner: 'Bailey' },
+    { path: '/division/product-engineering', label: 'Product / Engineering', status: fleetReliability != null ? `Fleet ${fmtPct(fleetReliability)}` : 'Loading', owner: 'Kyle' },
+    { path: '/revenue', label: 'Revenue Engine', status: `${currency(rev7)} (7d)`, owner: 'Finance' },
+    { path: '/issues', label: 'Issue Radar', status: `${issues?.clusters?.length || 0} clusters`, owner: 'Cross-team' },
+    { path: '/system-health', label: 'System Health', status: degradedSources.length ? `${degradedSources.length} degraded` : 'All healthy', owner: 'Ops' },
+  ]
 
   return (
-    <div className="page-grid">
-      <div className="page-head">
-        <h2>Command Center</h2>
-        <p>Only the highest-priority risks and opportunities, with owner, action, impact, and SLA.</p>
-        <small className="page-meta">API base: {getApiBase()}</small>
+    <div className="page-grid venom-page">
+      <div className="venom-header">
+        <div>
+          <h2 className="venom-title">Spider Command Center</h2>
+          <p className="venom-subtitle">Executive overview — real-time company pulse</p>
+        </div>
+        {degradedSources.length > 0 ? (
+          <span className="badge badge-warn">{degradedSources.length} degraded source{degradedSources.length > 1 ? 's' : ''}</span>
+        ) : (
+          <span className="badge badge-good">All sources healthy</span>
+        )}
       </div>
-      {loading ? <Card title="Command Center"><div className="state-message">Loading decision system…</div></Card> : null}
-      {error ? <Card title="Command Center Error"><div className="state-message error">{error}</div></Card> : null}
+
+      {loading ? <Card title="Loading"><div className="state-message">Loading command center…</div></Card> : null}
+      {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}
+
       {!loading && !error ? (
         <>
-          <div className={`trust-banner ${trust.degraded ? 'trust-banner-degraded' : 'trust-banner-healthy'}`}>
-            <div>
-              <strong>{trust.degraded ? 'Decision confidence degraded' : 'Decision confidence healthy'}</strong>
-              <p>{trust.degraded ? `${trust.degradedSources.join(', ')} is limiting confidence on some ranked items.` : 'Core sources are healthy enough for decision-grade prioritization.'}</p>
+          <VenomKpiStrip cards={kpiCards} />
+
+          {/* Today's Briefing */}
+          <section className="card venom-briefing">
+            <div className="venom-panel-head">
+              <strong>Today's Briefing</strong>
+              <span className="venom-panel-hint">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
             </div>
-            <div className="inline-badges">
-              <span className="badge badge-neutral">revenue {currency(revenue)}</span>
-              <span className="badge badge-neutral">revenue Δ {revenueDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
-              <span className="badge badge-neutral">conversion Δ {convDelta.deltaPct?.toFixed(1) ?? 'n/a'}%</span>
-              <span className="badge badge-neutral">telemetry {telemetryLatest ? `${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'blocked'}</span>
-              <span className="badge badge-neutral">telemetry truth {overview?.telemetry?.confidence?.global_completeness || 'unknown'}</span>
-              <span className="badge badge-neutral">telemetry sample {telemetrySampleReliability}</span>
-            </div>
-          </div>
-          <div className="three-col">
-            <Card title="Live telemetry escalation">
-              <div className="hero-metric">{overview?.telemetry?.collection_metadata?.active_devices_last_15m ?? overview?.telemetry?.slice_snapshot?.sessions_derived ?? 0}</div>
-              <div className="state-message">active devices last 15m · freshness {formatTelemetryFreshness(overview?.telemetry?.collection_metadata?.newest_sample_timestamp_seen)}</div>
-              <div className="state-message">reliability {telemetryLatest ? `${(telemetryLatest.session_reliability_score * 100).toFixed(0)}%` : 'n/a'} · sample {telemetrySampleReliability} · observed-slice only</div>
-            </Card>
-            <Card title="Telemetry risk context">
-              <div className="hero-metric">{overview?.telemetry?.collection_metadata?.engaged_latest_devices ?? overview?.telemetry?.collection_metadata?.distinct_engaged_devices_observed ?? 0}</div>
-              <div className="state-message">engaged latest-state devices · 5m/60m {(overview?.telemetry?.collection_metadata?.active_devices_last_5m ?? 0)}/{(overview?.telemetry?.collection_metadata?.active_devices_last_60m ?? 0)}</div>
-              <div className="state-message">disconnect {(telemetryLatest?.disconnect_rate || 0 * 100).toFixed ? `${((telemetryLatest?.disconnect_rate || 0) * 100).toFixed(1)}%` : 'n/a'} · error {(telemetryLatest?.error_rate || 0 * 100).toFixed ? `${((telemetryLatest?.error_rate || 0) * 100).toFixed(1)}%` : 'n/a'}</div>
-            </Card>
-            <Card title="Telemetry confidence">
-              <div className="hero-metric">{overview?.telemetry?.confidence?.session_derivation || 'unknown'}</div>
-              <div className="state-message">{overview?.telemetry?.collection_metadata?.coverage_summary || 'No coverage summary returned.'}</div>
-            </Card>
-          </div>
-          <DecisionStack actions={actions} />
-          <Card title="Diagnostic drill-downs">
             <div className="stack-list compact">
-              <div className="list-item status-muted"><strong>View friction details</strong><p><a href="/friction">Open Friction Map</a></p></div>
-              <div className="list-item status-muted"><strong>View root cause</strong><p><a href="/root-cause">Open Root Cause</a></p></div>
+              {topCluster ? (
+                <div className={`list-item status-${topCluster.severity === 'high' ? 'bad' : 'warn'}`}>
+                  <div className="item-head">
+                    <strong>#1 Issue: {topCluster.title}</strong>
+                    <div className="inline-badges">
+                      <span className={`badge ${topCluster.severity === 'high' ? 'severity-high' : 'severity-medium'}`}>{topCluster.severity}</span>
+                      {topCluster.owner_team ? <span className="badge badge-muted">{topCluster.owner_team}</span> : null}
+                    </div>
+                  </div>
+                  <p>{(topCluster.details_json as any)?.priority_reason_summary || 'Review escalation queue for details'}</p>
+                </div>
+              ) : (
+                <div className="list-item status-good">
+                  <strong>No high-priority issues detected</strong>
+                  <p>Issue radar is clear — focus on growth initiatives</p>
+                </div>
+              )}
+              <div className={`list-item status-${openBacklog > 150 ? 'bad' : openBacklog > 80 ? 'warn' : 'good'}`}>
+                <div className="item-head">
+                  <strong>Support: {fmtInt(openBacklog)} open tickets</strong>
+                  <span className={`badge ${openBacklog > 150 ? 'badge-bad' : openBacklog > 80 ? 'badge-warn' : 'badge-good'}`}>{openBacklog > 150 ? 'Over capacity' : openBacklog > 80 ? 'Elevated' : 'Healthy'}</span>
+                </div>
+              </div>
+              <div className={`list-item status-${degradedSources.length > 0 ? 'warn' : 'muted'}`}>
+                <div className="item-head">
+                  <strong>Data Trust</strong>
+                  <span className={`badge ${degradedSources.length > 0 ? 'badge-warn' : 'badge-good'}`}>{degradedSources.length > 0 ? `${degradedSources.length} degraded` : 'All healthy'}</span>
+                </div>
+                {degradedSources.length > 0 ? <p>Degraded: {degradedSources.map((s: SourceHealthItem) => s.source).join(', ')}</p> : null}
+              </div>
             </div>
-          </Card>
+          </section>
+
+          {/* Revenue Trend */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <div>
+                <strong>Revenue — Last 7 Days</strong>
+                <p className="venom-chart-sub">{currency(rev7)} total</p>
+              </div>
+              <Link to="/revenue" className="analysis-link">Full report &#x2197;</Link>
+            </div>
+            {chartRows.length > 0 ? (
+              <div className="chart-wrap-short">
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={chartRows}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
+                    <YAxis stroke="#9fb0d4" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+                    <Tooltip formatter={(value: number) => [currency(value), 'Revenue']} />
+                    <Area type="monotone" dataKey="revenue" fill="rgba(110,168,255,0.15)" stroke="var(--blue)" strokeWidth={2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <div className="state-message">No revenue data available.</div>}
+          </section>
+
+          {/* Division Status Grid */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Division Overview</strong>
+              <span className="venom-panel-hint">Click to open</span>
+            </div>
+            <div className="venom-drill-grid">
+              {divisions.map((div) => (
+                <Link key={div.path} to={div.path} className="venom-drill-tile">
+                  <div>
+                    <strong>{div.label}</strong>
+                    <small>{div.status} · {div.owner}</small>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
         </>
       ) : null}
     </div>

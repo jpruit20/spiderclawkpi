@@ -1,22 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
+import { BarIndicator } from '../components/BarIndicator'
+import { TruthBadge } from '../components/TruthBadge'
+import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
+import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
 import { TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
 import {
-  LineChart, Line, BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Area, AreaChart, ComposedChart,
+  BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart,
 } from 'recharts'
 
 type TimeRange = '1h' | '24h' | '7d' | '30d'
-type TruthState = 'canonical' | 'proxy' | 'estimated' | 'degraded' | 'unavailable'
-
-const TRUTH_LEGEND: { state: TruthState; label: string; color: string }[] = [
-  { state: 'canonical', label: 'canonical — strong truth', color: 'var(--green)' },
-  { state: 'proxy', label: 'proxy — useful but incomplete', color: 'var(--blue)' },
-  { state: 'estimated', label: 'estimated — modeled / heuristic', color: 'var(--orange)' },
-  { state: 'degraded', label: 'degraded — source unhealthy', color: 'var(--red)' },
-  { state: 'unavailable', label: 'unavailable — data not present', color: 'var(--muted)' },
-]
 
 const DRILL_ROUTES: { path: string; label: string; icon: string }[] = [
   { path: '/analysis/cook-failures', label: 'Cook failures', icon: '\ud83d\udd25' },
@@ -27,63 +22,6 @@ const DRILL_ROUTES: { path: string; label: string; icon: string }[] = [
   { path: '/analysis/firmware-model', label: 'Firmware model', icon: '\u2699\ufe0f' },
 ]
 
-function formatFreshness(timestamp?: string | null) {
-  if (!timestamp) return 'n/a'
-  const parsed = Date.parse(timestamp)
-  if (Number.isNaN(parsed)) return 'n/a'
-  const ageMinutes = Math.max(0, Math.round((Date.now() - parsed) / 60000))
-  if (ageMinutes < 2) return 'just now'
-  if (ageMinutes < 60) return `${ageMinutes}m ago`
-  const hours = Math.floor(ageMinutes / 60)
-  return `${hours}h ago`
-}
-
-function fmtPct(value?: number | null, digits = 1) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '\u2014'
-  return `${(value * 100).toFixed(digits)}%`
-}
-
-function fmtDuration(seconds?: number | null) {
-  if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return '\u2014'
-  const totalMinutes = Math.floor(seconds / 60)
-  const secs = Math.round(seconds % 60)
-  if (totalMinutes >= 60) {
-    const hours = Math.floor(totalMinutes / 60)
-    const mins = totalMinutes % 60
-    return `${hours}h ${String(mins).padStart(2, '0')}m`
-  }
-  return `${totalMinutes}m ${String(secs).padStart(2, '0')}s`
-}
-
-function fmtInt(value?: number | null) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '\u2014'
-  return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
-}
-
-function fmtDecimal(value?: number | null, digits = 2) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '\u2014'
-  return value.toFixed(digits)
-}
-
-function TruthBadge({ state }: { state: TruthState }) {
-  const classMap: Record<TruthState, string> = {
-    canonical: 'badge-good',
-    proxy: 'badge-venom-proxy',
-    estimated: 'badge-warn',
-    degraded: 'badge-bad',
-    unavailable: 'badge-muted',
-  }
-  return <span className={`badge ${classMap[state]}`}>{state}</span>
-}
-
-function BarIndicator({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = Math.min(100, Math.max(0, (value / max) * 100))
-  return (
-    <div className="venom-bar-track">
-      <div className="venom-bar-fill" style={{ width: `${pct}%`, background: color }} />
-    </div>
-  )
-}
 
 function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
   const hourTotals: Record<string, number> = {}
@@ -225,15 +163,7 @@ export function ProductEngineeringDivision() {
 
       {!loading && !error ? (
         <>
-          {/* Truth state legend */}
-          <div className="venom-legend">
-            {TRUTH_LEGEND.map((item) => (
-              <span key={item.state} className="venom-legend-item">
-                <span className="venom-legend-dot" style={{ background: item.color }} />
-                {item.label}
-              </span>
-            ))}
-          </div>
+          <TruthLegend />
 
           {/* Top KPI strip */}
           <div className="venom-kpi-strip">
