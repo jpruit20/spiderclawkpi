@@ -894,3 +894,273 @@ th {
   .telemetry-board-grid,
   .telemetry-board-summary { grid-template-columns: 1fr; }
 }
+
+/* ── Venom Telemetry Product OS ── */
+
+.venom-page { gap: 20px; }
+
+.venom-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.venom-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.venom-subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.venom-range-group {
+  display: flex;
+  gap: 8px;
+}
+
+/* Truth state legend */
+.venom-legend {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.025);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.venom-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.venom-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* KPI strip */
+.venom-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  border: 1px solid rgba(57, 208, 143, 0.22);
+  border-radius: 20px;
+  padding: 18px;
+  background: rgba(57, 208, 143, 0.03);
+}
+
+.venom-kpi-card {
+  display: grid;
+  gap: 6px;
+}
+
+.venom-kpi-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.venom-kpi-value {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.venom-kpi-sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.venom-kpi-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.badge-venom-proxy {
+  background: rgba(110, 168, 255, 0.15);
+  border-color: rgba(110, 168, 255, 0.45);
+}
+
+.venom-delta {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.venom-delta-up { color: var(--green); }
+.venom-delta-flat { color: var(--muted); }
+.venom-delta-down { color: var(--red); }
+.venom-delta-stable { color: var(--muted); }
+
+/* Breakdown panels */
+.venom-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.venom-panel-head strong {
+  font-size: 16px;
+}
+
+.venom-panel-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.venom-panel-footer {
+  display: block;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.venom-breakdown-list {
+  display: grid;
+  gap: 0;
+}
+
+.venom-breakdown-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 14px;
+}
+
+.venom-breakdown-row:last-child {
+  border-bottom: none;
+}
+
+.venom-breakdown-val {
+  font-weight: 700;
+  font-size: 15px;
+  text-align: right;
+}
+
+.venom-breakdown-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+/* Bar indicators for control quality */
+.venom-bar-list {
+  display: grid;
+  gap: 14px;
+}
+
+.venom-bar-row {
+  display: grid;
+  grid-template-columns: 140px 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.venom-bar-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.venom-bar-track {
+  height: 10px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.venom-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.venom-bar-value {
+  font-weight: 700;
+  font-size: 14px;
+  text-align: right;
+  min-width: 60px;
+}
+
+/* Drill-down grid */
+.venom-drill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.venom-drill-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.025);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.venom-drill-tile:hover {
+  border-color: rgba(110, 168, 255, 0.4);
+  background: rgba(110, 168, 255, 0.06);
+}
+
+.venom-drill-tile strong {
+  display: block;
+  font-size: 14px;
+}
+
+.venom-drill-tile small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.venom-drill-icon {
+  font-size: 22px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+
+/* Venom responsive */
+@media (max-width: 1200px) {
+  .venom-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .venom-drill-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .venom-bar-row { grid-template-columns: 120px 1fr auto; }
+}
+
+@media (max-width: 700px) {
+  .venom-kpi-strip { grid-template-columns: 1fr; }
+  .venom-drill-grid { grid-template-columns: 1fr; }
+  .venom-bar-row { grid-template-columns: 100px 1fr auto; }
+}
