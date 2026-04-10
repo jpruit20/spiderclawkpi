@@ -1,0 +1,78 @@
+name: Auto-promote Claude KPI branches
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - 'apps/spider-kpi/**'
+      - '.github/workflows/claude-auto-promote-kpi.yml'
+      - '.github/workflows/deploy-kpi.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-promote-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-promote:
+    name: Validate Claude KPI update and merge to master
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/spider-kpi/frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: apps/spider-kpi/frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: apps/spider-kpi/frontend
+        run: npm run build
+
+      - name: Ensure PR exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          existing_pr="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing_pr" ]; then
+            echo "PR already exists: #$existing_pr"
+            echo "PR_NUMBER=$existing_pr" >> "$GITHUB_ENV"
+          else
+            pr_url="$(gh pr create \
+              --repo "$REPO" \
+              --base master \
+              --head "$HEAD_BRANCH" \
+              --title "Auto-promote KPI update from $HEAD_BRANCH" \
+              --body "Automated PR for Claude KPI branch \
+\`$HEAD_BRANCH\`.")"
+            echo "Created PR: $pr_url"
+            pr_number="$(gh pr view "$pr_url" --repo "$REPO" --json number --jq '.number')"
+            echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+          fi
+
+      - name: Merge PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch
