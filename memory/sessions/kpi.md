@@ -68,10 +68,12 @@
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Confirm or add local ACP harness configuration for Claude so this session can delegate coding work through OpenClaw.
 - Observe one real Claude branch auto-promotion cycle on GitHub to confirm the workflow behaves cleanly end-to-end.
+- Push the repo-root auto-promote workflow fix and verify a real `claude/**` branch run uses the correct `spider/apps/spider-kpi/**` paths.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
 - 2026-04-10 Git deployment automation pass: added `.github/workflows/claude-auto-promote-kpi.yml` so Claude KPI branches (`claude/**`) touching `apps/spider-kpi/**` now auto-build, run backend import validation, auto-open/reuse a PR into `master`, auto-merge on success, and then rely on the existing `master` deploy workflow for production rollout. Documented the flow in `apps/spider-kpi/README.md` and promoted the rule into `MEMORY.md`.
+- 2026-04-10 GitHub workflow repair pass: fixed the auto-promote workflow at the actual repo-root `.github/workflows/` location to use the real monorepo paths (`spider/apps/spider-kpi/**`), updated it to point at `.github/workflows/deploy-kpi-backend.yml`, and re-aligned local `master` to track `origin/master` cleanly again before pushing follow-up fixes.
 - 2026-04-09 Slack recovery / production rollout pass: verified the complete AWS telemetry stream cutover end-to-end. Production now uses DynamoDB Streams on `sg_device_shadows` -> standalone Lambda -> KPI API ingest -> `telemetry_stream_events`, and `/api/telemetry/summary` flipped to stream-backed metadata (`sg_device_shadows_stream`, `dynamodb_stream`) after live rows began landing.
 - 2026-04-09 telemetry rollout hardening also fixed multiple deployment/runtime blockers: backend now prefers stream rows when present, deploy workflow runs Alembic before restart, corrective migration added `updated_at` to `telemetry_stream_events`, and production Lambda moved from direct-Postgres writes to authenticated API ingestion.
 - 2026-04-07 department operating-system pass: added a new frontend Department Views route that derives leader-specific operating views for Joseph, Bailey, Jeremiah, Kyle, Conor, and David from existing KPI/support/issue/source-health endpoints instead of replacing the current dashboard architecture.
