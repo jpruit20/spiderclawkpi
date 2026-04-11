@@ -122,6 +122,7 @@ class TelemetrySummaryOut(BaseModel):
     collection_metadata: Optional[dict[str, Any]] = None
     confidence: Optional[dict[str, Any]] = None
     analytics: Optional[dict[str, Any]] = None
+    history_daily: list[dict[str, Any]] = []
 
 
 class TelemetryHistoryMonthlyIn(BaseModel):
