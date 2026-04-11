@@ -196,6 +196,47 @@ export function MarketingDivision() {
     ? `${currentRows.at(-1)?.business_date}T23:59:59Z`
     : new Date().toISOString()
 
+  /* ---- Clarity AI insights ---- */
+  const clarityInsights = useMemo(() => {
+    if (clarityFriction.length === 0) return []
+
+    // Calculate business impact and generate actionable insights
+    return clarityFriction
+      .map((page) => {
+        const businessImpact = page.friction_score * page.sessions
+
+        // Identify dominant friction type
+        const frictionTypes = [
+          { type: 'rage clicks', count: page.rage_clicks, pct: page.rage_click_pct, action: 'Fix unresponsive UI elements' },
+          { type: 'dead clicks', count: page.dead_clicks, pct: page.dead_click_pct, action: 'Make clickable elements obvious or remove misleading visuals' },
+          { type: 'script errors', count: page.script_errors, pct: page.script_error_pct, action: 'Fix JavaScript errors blocking user actions' },
+          { type: 'quick backs', count: page.quick_backs, pct: page.quick_back_pct, action: 'Improve content relevance or page load experience' },
+        ]
+        const dominantFriction = frictionTypes.reduce((max, curr) => (curr.pct > max.pct ? curr : max), frictionTypes[0])
+
+        // Generate severity level
+        const severity: 'critical' | 'high' | 'medium' = page.friction_score > 50 ? 'critical' : page.friction_score > 25 ? 'high' : 'medium'
+
+        // Generate insight
+        const insight = dominantFriction.pct > 5
+          ? `${dominantFriction.action} — ${dominantFriction.pct.toFixed(1)}% of sessions show ${dominantFriction.type}`
+          : `Moderate friction detected — review user behavior patterns`
+
+        return {
+          pagePath: page.page_path,
+          pageType: page.page_type,
+          sessions: page.sessions,
+          frictionScore: page.friction_score,
+          businessImpact,
+          severity,
+          insight,
+          dominantIssue: dominantFriction.type,
+        }
+      })
+      .sort((a, b) => b.businessImpact - a.businessImpact)
+      .slice(0, 3) // Top 3 most impactful
+  }, [clarityFriction])
+
   /* ---- KPI contract objects ---- */
   const kpis: KPIObject[] = [
     buildNumericKpi({ key: 'marketing_revenue', currentValue: revenue, targetValue: priorRevenue || null, priorValue: priorRevenue || null, owner: 'Bailey', truthState: 'canonical', lastUpdated: snapshotTimestamp }),
@@ -569,44 +610,40 @@ export function MarketingDivision() {
             </div>
           </section>
 
-          {/* ---- Website UX Friction ---- */}
+          {/* ---- UX Friction Insights ---- */}
           <section className="card">
             <div className="venom-panel-head">
-              <strong>Website UX Friction</strong>
-              <span className="venom-panel-hint">Clarity behavioral analytics — top friction pages</span>
+              <strong>UX Friction Insights</strong>
+              <span className="venom-panel-hint">AI-prioritized actions from Clarity data</span>
             </div>
-            {clarityFriction.length > 0 ? (
+            {clarityInsights.length > 0 ? (
               <div className="stack-list compact">
-                {clarityFriction.slice(0, 5).map((page, idx) => (
-                  <div className="list-item status-muted" key={idx}>
+                {clarityInsights.map((item, idx) => (
+                  <div className={`list-item ${item.severity === 'critical' ? 'status-bad' : item.severity === 'high' ? 'status-warn' : 'status-muted'}`} key={idx}>
                     <div className="item-head">
-                      <strong>{page.page_path}</strong>
+                      <strong>{item.pagePath}</strong>
                       <div className="inline-badges">
-                        <span className="badge badge-neutral">{page.page_type}</span>
-                        <span className="badge badge-neutral">{fmtInt(page.sessions)} sessions</span>
+                        <span className={`badge ${item.severity === 'critical' ? 'badge-bad' : item.severity === 'high' ? 'badge-warn' : 'badge-neutral'}`}>
+                          {item.severity}
+                        </span>
+                        <span className="badge badge-neutral">{fmtInt(item.sessions)} sessions</span>
                       </div>
                     </div>
-                    <div className="venom-bar-row" style={{ marginTop: 4 }}>
-                      <span className="venom-bar-label">Friction</span>
-                      <BarIndicator
-                        value={page.friction_score}
-                        max={100}
-                        color={page.friction_score > 50 ? 'var(--red)' : page.friction_score > 25 ? 'var(--orange)' : 'var(--green)'}
-                      />
-                      <span className="venom-bar-value">{page.friction_score.toFixed(1)}</span>
-                    </div>
-                    <div className="inline-badges" style={{ marginTop: 4 }}>
-                      {page.dead_clicks > 0 ? <span className="badge badge-warn">{fmtInt(page.dead_clicks)} dead clicks ({page.dead_click_pct.toFixed(1)}%)</span> : null}
-                      {page.quick_backs > 0 ? <span className="badge badge-warn">{fmtInt(page.quick_backs)} quick backs ({page.quick_back_pct.toFixed(1)}%)</span> : null}
-                      {page.script_errors > 0 ? <span className="badge badge-bad">{fmtInt(page.script_errors)} script errors ({page.script_error_pct.toFixed(1)}%)</span> : null}
-                      {page.rage_clicks > 0 ? <span className="badge badge-bad">{fmtInt(page.rage_clicks)} rage clicks ({page.rage_click_pct.toFixed(1)}%)</span> : null}
-                    </div>
+                    <p style={{ margin: '6px 0 4px', fontSize: 13 }}>{item.insight}</p>
+                    <small style={{ color: 'var(--muted)' }}>
+                      Friction score: {item.frictionScore.toFixed(0)} · Primary issue: {item.dominantIssue}
+                    </small>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="state-message">Clarity UX data will populate after next sync</div>
+              <div className="state-message">Clarity insights will populate after next sync</div>
             )}
+            {clarityInsights.length > 0 ? (
+              <small className="venom-panel-footer">
+                Ranked by business impact (friction × traffic volume)
+              </small>
+            ) : null}
           </section>
 
           {/* ---- Two-col: Blocked States ---- */}
