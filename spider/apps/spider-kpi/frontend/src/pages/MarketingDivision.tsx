@@ -142,13 +142,52 @@ export function MarketingDivision() {
   const purchaseEstimate = orders
   const priorPurchaseEstimate = priorOrders
 
+  /* ---- sparkline data (last 7 days of current range) ---- */
+  const sparklineRows = currentRows.slice(-7)
+  const revenueSparkline = sparklineRows.map((r) => Number(r.revenue || 0))
+  const conversionSparkline = sparklineRows.map((r) => {
+    const s = Number(r.sessions || 0)
+    const o = Number(r.orders || 0)
+    return s ? (o / s) * 100 : 0
+  })
+  const merSparkline = sparklineRows.map((r) => {
+    const rev = Number(r.revenue || 0)
+    const spend = Number(r.ad_spend || 0)
+    return spend ? rev / spend : 0
+  })
+  const adSpendSparkline = sparklineRows.map((r) => Number(r.ad_spend || 0))
+
+  /* ---- funnel leak thresholds ---- */
+  const LEAK_THRESHOLDS: Record<string, number> = {
+    'PDP': 45,           // > 45% drop from sessions to PDP is a leak
+    'Add to Cart': 75,   // > 75% drop from PDP to ATC is a leak
+    'Checkout': 50,      // > 50% drop from ATC to checkout is a leak
+    'Purchase': 50,      // > 50% drop from checkout to purchase is critical
+  }
+
   const funnel = useMemo(() => [
-    { label: 'Sessions', volume: sessions, prior: priorSessions, widthPct: 100, dropoff: 0 },
-    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, widthPct: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - pdpViewsEstimate / sessions) * 100 : 0 },
-    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, widthPct: sessions ? (addToCartEstimate / sessions) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - addToCartEstimate / pdpViewsEstimate) * 100 : 0 },
-    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, widthPct: sessions ? (checkoutEstimate / sessions) * 100 : 0, dropoff: addToCartEstimate ? (1 - checkoutEstimate / addToCartEstimate) * 100 : 0 },
-    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0 },
-  ], [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
+    { label: 'Sessions', volume: sessions, prior: priorSessions, widthPct: 100, dropoff: 0, isLeak: false, leakSeverity: 'none' as const },
+    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, widthPct: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - pdpViewsEstimate / sessions) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
+    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, widthPct: sessions ? (addToCartEstimate / sessions) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - addToCartEstimate / pdpViewsEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
+    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, widthPct: sessions ? (checkoutEstimate / sessions) * 100 : 0, dropoff: addToCartEstimate ? (1 - checkoutEstimate / addToCartEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
+    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
+  ].map((step) => {
+    const threshold = LEAK_THRESHOLDS[step.label]
+    if (!threshold) return step
+    const isLeak = step.dropoff > threshold
+    const leakSeverity = step.dropoff > threshold + 15 ? 'critical' : isLeak ? 'warning' : 'none'
+    return { ...step, isLeak, leakSeverity }
+  }), [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
+
+  const worstLeak = useMemo(() => {
+    const leaks = funnel.filter((s) => s.isLeak)
+    if (leaks.length === 0) return null
+    return leaks.reduce((worst, step) => {
+      const worstExcess = worst.dropoff - (LEAK_THRESHOLDS[worst.label] || 0)
+      const stepExcess = step.dropoff - (LEAK_THRESHOLDS[step.label] || 0)
+      return stepExcess > worstExcess ? step : worst
+    })
+  }, [funnel])
 
   /* ---- issues / friction ---- */
   const topFriction = issues?.highest_business_risk?.[0] || issues?.clusters?.[0]
@@ -280,6 +319,7 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorRevenue)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(revenue, priorRevenue), direction: deltaDirection(revenue, priorRevenue) },
+      sparkline: revenueSparkline,
     },
     {
       label: 'Conversion',
@@ -287,6 +327,7 @@ export function MarketingDivision() {
       sub: `Prior ${priorConversion.toFixed(2)}%`,
       truthState: 'canonical',
       delta: { text: deltaPct(conversion, priorConversion), direction: deltaDirection(conversion, priorConversion) },
+      sparkline: conversionSparkline,
     },
     {
       label: 'MER',
@@ -294,6 +335,7 @@ export function MarketingDivision() {
       sub: `Prior ${priorMer.toFixed(2)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(mer, priorMer), direction: deltaDirection(mer, priorMer) },
+      sparkline: merSparkline,
     },
     {
       label: 'Ad Spend',
@@ -301,8 +343,9 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorAdSpend)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(adSpend, priorAdSpend), direction: deltaDirection(adSpend, priorAdSpend) },
+      sparkline: adSpendSparkline,
     },
-  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend])
+  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend, revenueSparkline, conversionSparkline, merSparkline, adSpendSparkline])
 
   /* ---- dynamic action items ---- */
   const weekActions = useMemo(() => {
@@ -380,17 +423,72 @@ export function MarketingDivision() {
               <strong>Visual Funnel</strong>
               <span className="venom-panel-hint">Sessions to purchase</span>
             </div>
+
+            {/* Funnel Leak Alert Banner */}
+            {worstLeak ? (
+              <div className="funnel-leak-banner" style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '12px 16px',
+                marginBottom: 16,
+                borderRadius: 12,
+                background: worstLeak.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.12)' : 'rgba(255, 178, 87, 0.12)',
+                border: `1px solid ${worstLeak.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.4)' : 'rgba(255, 178, 87, 0.4)'}`,
+              }}>
+                <span style={{ fontSize: 20 }}>{worstLeak.leakSeverity === 'critical' ? '\u26A0\uFE0F' : '\u26A0'}</span>
+                <div>
+                  <strong style={{ color: worstLeak.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)' }}>
+                    {worstLeak.leakSeverity === 'critical' ? 'Critical Leak' : 'Funnel Leak'}: {worstLeak.label}
+                  </strong>
+                  <p style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: 13 }}>
+                    {worstLeak.dropoff.toFixed(1)}% drop-off exceeds {LEAK_THRESHOLDS[worstLeak.label]}% threshold.
+                    {worstLeak.label === 'Add to Cart' ? ' Review PDP engagement and ATC button visibility.' : ''}
+                    {worstLeak.label === 'Checkout' ? ' Check cart abandonment triggers and shipping cost visibility.' : ''}
+                    {worstLeak.label === 'Purchase' ? ' Audit checkout friction, payment failures, and trust signals.' : ''}
+                    {worstLeak.label === 'PDP' ? ' Landing pages may not be driving product discovery.' : ''}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
             <div className="venom-bar-list">
               {funnel.map((step) => (
-                <div key={step.label}>
+                <div key={step.label} style={{
+                  padding: step.isLeak ? '10px 12px' : undefined,
+                  marginLeft: step.isLeak ? -12 : undefined,
+                  marginRight: step.isLeak ? -12 : undefined,
+                  borderRadius: step.isLeak ? 10 : undefined,
+                  background: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.08)' : step.leakSeverity === 'warning' ? 'rgba(255, 178, 87, 0.08)' : undefined,
+                  border: step.isLeak ? `1px solid ${step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.3)' : 'rgba(255, 178, 87, 0.3)'}` : undefined,
+                }}>
                   <div className="venom-bar-row">
-                    <span className="venom-bar-label">{step.label}</span>
-                    <BarIndicator value={step.volume} max={sessions || 1} color={FUNNEL_COLORS[step.label] || 'var(--blue)'} />
+                    <span className="venom-bar-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {step.label}
+                      {step.isLeak ? (
+                        <span className="badge" style={{
+                          fontSize: 10,
+                          padding: '2px 6px',
+                          background: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.2)' : 'rgba(255, 178, 87, 0.2)',
+                          borderColor: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.5)' : 'rgba(255, 178, 87, 0.5)',
+                          color: step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)',
+                        }}>
+                          {step.leakSeverity === 'critical' ? 'LEAK' : 'leak'}
+                        </span>
+                      ) : null}
+                    </span>
+                    <BarIndicator value={step.volume} max={sessions || 1} color={step.isLeak ? (step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)') : (FUNNEL_COLORS[step.label] || 'var(--blue)')} />
                     <span className="venom-bar-value">{fmtInt(Math.round(step.volume))}</span>
                   </div>
                   {step.dropoff > 0 ? (
-                    <small className="venom-panel-footer" style={{ paddingLeft: 140, marginTop: -4 }}>
+                    <small className="venom-panel-footer" style={{
+                      paddingLeft: 140,
+                      marginTop: -4,
+                      color: step.isLeak ? (step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)') : undefined,
+                      fontWeight: step.isLeak ? 600 : undefined,
+                    }}>
                       {step.dropoff.toFixed(1)}% drop-off from prior stage
+                      {step.isLeak ? ` (threshold: ${LEAK_THRESHOLDS[step.label]}%)` : ''}
                     </small>
                   ) : null}
                   {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
@@ -401,7 +499,7 @@ export function MarketingDivision() {
               ))}
             </div>
             <small className="venom-panel-footer">
-              Estimated funnel — stages 2-4 are modeled from behavioral proxies
+              Estimated funnel — stages 2-4 are modeled from behavioral proxies. Leak alerts trigger when drop-off exceeds stage benchmarks.
             </small>
           </section>
 
