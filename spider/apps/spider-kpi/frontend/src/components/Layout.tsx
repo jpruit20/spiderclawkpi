@@ -23,6 +23,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/">Command Center</NavLink>
           <NavLink to="/revenue">Financial / Revenue</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
+          <NavLink to="/social">Social Intelligence</NavLink>
           <NavLink to="/system-health">System Health</NavLink>
           <small className="nav-group-label">Divisions</small>
           <NavLink to="/division/customer-experience">Customer Experience</NavLink>

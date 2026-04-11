@@ -11,7 +11,7 @@ import type {
   OverviewResponse,
   SocialMention,
   SocialPulse,
-  SocialTrend,
+  SocialTrendsResponse,
   TelemetrySummary,
   RecommendationItem,
   SourceHealthItem,
@@ -142,5 +142,5 @@ export const api = {
   socialPulse: (days?: number, signal?: AbortSignal) =>
     request<SocialPulse>(`/api/social/pulse${days ? `?days=${days}` : ''}`, { signal }),
   socialTrends: (days?: number, signal?: AbortSignal) =>
-    request<SocialTrend[]>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
+    request<SocialTrendsResponse>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
 }

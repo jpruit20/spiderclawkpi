@@ -44,6 +44,10 @@ export function CommandCenter() {
   const prior7 = rows.slice(-14, -7)
   const rev7 = sum(last7, 'revenue')
   const revPrior7 = sum(prior7, 'revenue')
+  const ord7 = sum(last7, 'orders')
+  const ordPrior7 = sum(prior7, 'orders')
+  const sess7 = sum(last7, 'sessions')
+  const sessPrior7 = sum(prior7, 'sessions')
   const conv7 = last7.length ? last7.reduce((s, r) => s + (r.conversion_rate || 0), 0) / last7.length : 0
   const convPrior7 = prior7.length ? prior7.reduce((s, r) => s + (r.conversion_rate || 0), 0) / prior7.length : 0
   const supportRows = (support?.rows || []) as KPIDaily[]
@@ -123,6 +127,13 @@ export function CommandCenter() {
         <>
           <VenomKpiStrip cards={kpiCards} />
 
+          {/* Week-over-week deltas */}
+          <div className="scope-note" style={{display:'flex', gap:12, flexWrap:'wrap'}}>
+            <span className={`badge ${deltaDirection(rev7, revPrior7) === 'up' ? 'badge-good' : deltaDirection(rev7, revPrior7) === 'down' ? 'badge-bad' : 'badge-neutral'}`}>Revenue {deltaPct(rev7, revPrior7)}</span>
+            <span className={`badge ${deltaDirection(ord7, ordPrior7) === 'up' ? 'badge-good' : deltaDirection(ord7, ordPrior7) === 'down' ? 'badge-bad' : 'badge-neutral'}`}>Orders {deltaPct(ord7, ordPrior7)}</span>
+            <span className={`badge ${deltaDirection(sess7, sessPrior7) === 'up' ? 'badge-good' : deltaDirection(sess7, sessPrior7) === 'down' ? 'badge-bad' : 'badge-neutral'}`}>Sessions {deltaPct(sess7, sessPrior7)}</span>
+          </div>
+
           {/* Today's Briefing */}
           <section className="card venom-briefing">
             <div className="venom-panel-head">
@@ -143,8 +154,8 @@ export function CommandCenter() {
                 </div>
               ) : (
                 <div className="list-item status-good">
-                  <strong>No high-priority issues detected</strong>
-                  <p>Issue radar is clear — focus on growth initiatives</p>
+                  <strong>{deltaDirection(rev7, revPrior7) === 'up' ? 'All clear — business is growing' : 'No high-priority issues detected'}</strong>
+                  <p>{deltaDirection(rev7, revPrior7) === 'up' ? `Revenue ${deltaPct(rev7, revPrior7)} vs prior week — focus on growth initiatives` : 'Issue radar is clear — focus on growth initiatives'}</p>
                 </div>
               )}
               <div className={`list-item status-${openBacklog > 150 ? 'bad' : openBacklog > 80 ? 'warn' : 'good'}`}>

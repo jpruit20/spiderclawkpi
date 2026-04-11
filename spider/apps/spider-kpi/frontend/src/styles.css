@@ -1203,6 +1203,24 @@ th {
   margin-right: 6px;
 }
 
+/* Sentiment bar */
+.venom-sentiment-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+.venom-sentiment-bar > div {
+  transition: width 0.3s ease;
+}
+.venom-sentiment-labels {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* Social listening */
 .venom-social-stat {
   display: flex;

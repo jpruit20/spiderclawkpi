@@ -12,7 +12,7 @@ import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLast
 import { currency, fmtInt, fmtPct, deltaPct, deltaDirection } from '../lib/format'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { CompareMode as Mode } from '../lib/compare'
-import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrend, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 /* ------------------------------------------------------------------ */
@@ -51,7 +51,7 @@ export function MarketingDivision() {
   const [rows, setRows] = useState<KPIDaily[]>([])
   const [overview, setOverview] = useState<OverviewResponse | null>(null)
   const [issues, setIssues] = useState<IssueRadarResponse | null>(null)
-  const [socialTrends, setSocialTrends] = useState<SocialTrend[]>([])
+  const [socialTrends, setSocialTrends] = useState<SocialTrendsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '30d', startDate: '', endDate: '' })
@@ -68,7 +68,7 @@ export function MarketingDivision() {
           api.dailyKpis(),
           api.overview(),
           api.issues(),
-          api.socialTrends(30).catch(() => [] as SocialTrend[]),
+          api.socialTrends(30).catch(() => null as SocialTrendsResponse | null),
         ])
         if (cancelled) return
         const ordered = [...dailyPayload].sort((a, b) => a.business_date.localeCompare(b.business_date))
@@ -487,22 +487,17 @@ export function MarketingDivision() {
               <strong>Industry Pulse — Charcoal Grilling</strong>
               <span className="venom-panel-hint">Reddit + YouTube</span>
             </div>
-            {socialTrends.length > 0 ? (
+            {socialTrends?.trending_topics && socialTrends.trending_topics.length > 0 ? (
               <div className="stack-list compact">
-                {socialTrends.slice(0, 5).map((trend, idx) => (
+                {socialTrends.trending_topics.slice(0, 5).map((trend, idx) => (
                   <div className="list-item status-muted" key={idx}>
                     <div className="item-head">
                       <strong>{trend.topic}</strong>
                       <div className="inline-badges">
                         <span className="badge badge-neutral">{fmtInt(trend.mention_count)} mentions</span>
-                        <span className={`badge ${trend.avg_sentiment >= 0.3 ? 'badge-good' : trend.avg_sentiment <= -0.3 ? 'badge-bad' : 'badge-neutral'}`}>
-                          sentiment {trend.avg_sentiment >= 0 ? '+' : ''}{trend.avg_sentiment.toFixed(2)}
-                        </span>
+                        <span className="badge badge-neutral">{fmtInt(trend.total_engagement)} engagement</span>
                       </div>
                     </div>
-                    {trend.top_subreddits.length > 0 ? (
-                      <small>r/{trend.top_subreddits.join(', r/')}</small>
-                    ) : null}
                   </div>
                 ))}
               </div>

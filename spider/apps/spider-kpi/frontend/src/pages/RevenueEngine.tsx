@@ -21,6 +21,23 @@ function avg(rows: KPIDaily[], key: keyof KPIDaily) {
   return sum(rows, key) / rows.length
 }
 
+function generateRevenueInsight(rev: number, revPrior: number, sessions: number, sessionsPrior: number, conv: number, convPrior: number, aov: number, aovPrior: number): string {
+  const revDelta = revPrior ? ((rev - revPrior) / revPrior * 100) : 0
+  const direction = revDelta > 1 ? 'up' : revDelta < -1 ? 'down' : 'flat'
+  const drivers = [
+    { name: 'traffic', delta: sessionsPrior ? ((sessions - sessionsPrior) / sessionsPrior * 100) : 0 },
+    { name: 'conversion', delta: convPrior ? ((conv - convPrior) / convPrior * 100) : 0 },
+    { name: 'AOV', delta: aovPrior ? ((aov - aovPrior) / aovPrior * 100) : 0 },
+  ].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+  const primary = drivers[0]
+  let insight = `Revenue is ${direction} ${revDelta >= 0 ? '+' : ''}${revDelta.toFixed(1)}% vs prior period, driven primarily by ${primary.name}.`
+  if (primary.name === 'traffic' && primary.delta < -5) insight += ' Consider increasing acquisition spend or reviewing SEO performance.'
+  else if (primary.name === 'conversion' && primary.delta < -5) insight += ' Review the friction map for conversion blockers.'
+  else if (primary.name === 'AOV' && primary.delta > 5) insight += ' Strong AOV suggests upsell strategies are working.'
+  else if (direction === 'up') insight += ' Maintain current trajectory.'
+  return insight
+}
+
 export function RevenueEngine() {
   const [allRows, setAllRows] = useState<KPIDaily[]>([])
   const [loading, setLoading] = useState(true)
@@ -135,7 +152,7 @@ export function RevenueEngine() {
                 </div>
                 <div className="venom-bar-row">
                   <span className="venom-bar-label">AOV</span>
-                  <BarIndicator value={aovAvg} max={600} color="var(--orange)" />
+                  <BarIndicator value={aovAvg} max={Math.max(aovAvg, aovPrior, 200) * 1.2} color="var(--orange)" />
                   <span className="venom-bar-value">{currency(aovAvg)}</span>
                 </div>
                 <div className="venom-bar-row">
@@ -172,6 +189,16 @@ export function RevenueEngine() {
                 </ResponsiveContainer>
               </div>
             ) : <div className="state-message">No trend data available.</div>}
+          </section>
+
+          {/* Insight */}
+          <section className="card">
+            <div className="venom-panel-head"><strong>Insight</strong></div>
+            <div className="stack-list compact">
+              <div className="list-item status-muted">
+                <p>{generateRevenueInsight(rev, revPrior, sessions, sessionsPrior, convAvg, convPrior, aovAvg, aovPrior)}</p>
+              </div>
+            </div>
           </section>
 
           {/* Channel Revenue — blocked */}

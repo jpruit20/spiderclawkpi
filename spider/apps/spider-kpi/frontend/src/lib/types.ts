@@ -542,19 +542,21 @@ export interface SocialMention {
 }
 
 export interface SocialPulse {
+  period_days: number
   total_mentions: number
   brand_mentions: number
-  sentiment_breakdown: { positive: number, negative: number, neutral: number, mixed: number }
+  avg_sentiment_score: number
+  sentiment_breakdown: Record<string, number>
+  by_platform: Record<string, number>
   top_mentions: SocialMention[]
-  platforms: { platform: string, count: number }[]
-  avg_sentiment: number
 }
 
-export interface SocialTrend {
-  topic: string
-  mention_count: number
-  avg_sentiment: number
-  avg_engagement: number
-  top_subreddits: string[]
-  sample_titles: string[]
+export interface SocialTrendsResponse {
+  period_days: number
+  total_mentions: number
+  trending_topics: { topic: string; mention_count: number; total_engagement: number }[]
+  by_classification: Record<string, number>
+  by_platform: Record<string, number>
+  competitor_mentions: Record<string, number>
+  product_mentions: Record<string, number>
 }
