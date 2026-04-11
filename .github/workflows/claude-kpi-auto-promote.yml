@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: auto-promote-${{ github.ref }}
@@ -61,37 +60,90 @@ jobs:
         working-directory: spider/apps/spider-kpi/backend
         run: python -m compileall app
 
-      - name: Ensure PR exists
+      - name: Merge validated branch into master
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          existing_pr="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
-          if [ -n "$existing_pr" ]; then
-            echo "PR already exists: #$existing_pr"
-            echo "PR_NUMBER=$existing_pr" >> "$GITHUB_ENV"
-          else
-            printf -v pr_body '%s\n\n%s' \
-              "Automated PR for Claude KPI branch $HEAD_BRANCH." \
-              "Frontend build and backend import validation passed in GitHub Actions, so this PR is eligible for automatic merge into master, which then triggers the production deploy workflows."
-            pr_url="$(gh pr create \
-              --repo "$REPO" \
-              --base master \
-              --head "$HEAD_BRANCH" \
-              --title "Auto-promote KPI update from $HEAD_BRANCH" \
-              --body "$pr_body")"
-            echo "Created PR: $pr_url"
-            pr_number="$(gh pr view "$pr_url" --repo "$REPO" --json number --jq '.number')"
-            echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin master "$HEAD_BRANCH"
+          git checkout -B master origin/master
+          git merge --no-ff --no-edit "origin/$HEAD_BRANCH"
+          git push origin master
 
-      - name: Merge PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ env.PR_NUMBER }}
+  deploy-backend:
+    name: Deploy KPI backend after Claude merge
+    runs-on: ubuntu-latest
+    needs: validate-and-promote
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DO_KPI_SSH_KEY }}
+
+      - name: Add droplet host to known_hosts
         run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy backend on droplet
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          git fetch origin
+          git checkout master
+          git pull --ff-only origin master
+          ./.venv/bin/pip install -r backend/requirements.txt
+          if [ -x ./.venv/bin/alembic ]; then
+            (cd backend && ../.venv/bin/alembic upgrade head)
+          fi
+          systemctl restart spider-kpi.service
+          systemctl is-active spider-kpi.service
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "backend health check did not recover in time" >&2
+          systemctl status spider-kpi.service --no-pager || true
+          journalctl -u spider-kpi.service -n 80 --no-pager || true
+          exit 1
+          EOF
+
+      - name: Post-deploy connector sync + validation
+        env:
+          DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
+          DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
+          DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+        run: |
+          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
+          set -euo pipefail
+          cd /opt/spiderclawkpi/spider/apps/spider-kpi
+          ./.venv/bin/python - <<'PY'
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          pw = Path('.env').read_text().split('APP_PASSWORD=', 1)[1].splitlines()[0].strip()
+          base = 'http://127.0.0.1:8000'
+          for source in ['shopify', 'triplewhale', 'freshdesk']:
+              req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
+              req.add_header('X-App-Password', pw)
+              print(source, urlopen(req).read().decode())
+          for endpoint in ['/api/telemetry/summary', '/api/admin/debug/telemetry-stream']:
+              req = Request(base + endpoint)
+              req.add_header('X-App-Password', pw)
+              print(endpoint, urlopen(req).read().decode())
+          PY
+          DB_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
+          ./.venv/bin/python scripts/validate_shopify_window.py --db-url "$DB_URL" --start 2026-03-29 --end 2026-04-05 || true
+          curl -fsS http://127.0.0.1:8000/api/source-health
+          EOF
