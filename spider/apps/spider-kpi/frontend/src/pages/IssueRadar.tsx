@@ -8,7 +8,7 @@ import { TruthLegend } from '../components/TruthLegend'
 import { fmtPct, fmtInt, formatFreshness } from '../lib/format'
 import { ApiError, api } from '../lib/api'
 import { frictionRankingScore } from '../lib/operatingModel'
-import { IssueClusterItem, IssueRadarResponse, SourceHealthItem, TelemetrySummary } from '../lib/types'
+import { IssueClusterItem, IssueRadarResponse, SocialMention, SocialTrendsResponse, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { truthStateFromSource } from '../lib/divisionContract'
 
 function severityBadgeClass(severity: string): string {
@@ -43,6 +43,8 @@ export function IssueRadar() {
   })
   const [sourceHealth, setSourceHealth] = useState<SourceHealthItem[]>([])
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
+  const [socialMentions, setSocialMentions] = useState<SocialMention[]>([])
+  const [socialTrends, setSocialTrends] = useState<SocialTrendsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -52,15 +54,19 @@ export function IssueRadar() {
       setLoading(true)
       setError(null)
       try {
-        const [issueData, sourceHealthData, telemetryData] = await Promise.all([
+        const [issueData, sourceHealthData, telemetryData, mentionsData, trendsData] = await Promise.all([
           api.issues(),
           api.sourceHealth(),
           api.telemetrySummary(),
+          api.socialMentions({days: 7}).catch(() => [] as SocialMention[]),
+          api.socialTrends(30).catch(() => null as SocialTrendsResponse | null),
         ])
         if (!cancelled) {
           setData(issueData)
           setSourceHealth(sourceHealthData)
           setTelemetry(telemetryData)
+          setSocialMentions(mentionsData)
+          setSocialTrends(trendsData)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load issues')
@@ -319,6 +325,71 @@ export function IssueRadar() {
               </div>
             </section>
           </div>
+
+          {/* Social Early Warning */}
+          {(() => {
+            const clusterKeywords = data.clusters.flatMap((c) => c.title.toLowerCase().split(/\s+/))
+            const negativeMentions = socialMentions.filter((m) =>
+              (m.sentiment === 'negative' || m.classification === 'complaint') &&
+              m.title && clusterKeywords.some((kw) => kw.length > 3 && (m.title?.toLowerCase().includes(kw) || m.body?.toLowerCase().includes(kw)))
+            ).slice(0, 5)
+            return negativeMentions.length > 0 ? (
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Social Early Warning</strong>
+                  <span className="venom-panel-hint">Negative mentions matching issue clusters</span>
+                </div>
+                <div className="stack-list compact">
+                  {negativeMentions.map((mention) => (
+                    <div className="list-item status-warn" key={mention.id}>
+                      <div className="item-head">
+                        <strong>{mention.title || 'Untitled mention'}</strong>
+                        <div className="inline-badges">
+                          <span className="badge badge-neutral">{mention.platform}</span>
+                          <span className={`badge ${mention.sentiment === 'negative' ? 'badge-bad' : 'badge-warn'}`}>{mention.sentiment}</span>
+                        </div>
+                      </div>
+                      {mention.body ? <p>{mention.body.length > 150 ? `${mention.body.slice(0, 150)}...` : mention.body}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Social Early Warning</strong>
+                  <span className="venom-panel-hint">Last 7 days</span>
+                </div>
+                <div className="state-message">No negative social mentions match current issue clusters.</div>
+              </section>
+            )
+          })()}
+
+          {/* Competitor Issue Comparison */}
+          {socialTrends?.competitor_mentions && Object.keys(socialTrends.competitor_mentions).length > 0 ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Competitor Issue Comparison</strong>
+                <span className="venom-panel-hint">Are current issues unique to Spider Grills or industry-wide?</span>
+              </div>
+              <div className="venom-breakdown-list">
+                {Object.entries(socialTrends.competitor_mentions).map(([name, count]) => (
+                  <div className="venom-breakdown-row" key={name}>
+                    <span>{name}</span>
+                    <span className="venom-breakdown-val">{fmtInt(count as number)} mentions</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Competitor Issue Comparison</strong>
+                <span className="venom-panel-hint">30-day window</span>
+              </div>
+              <div className="state-message">Competitor mention data will populate after social sync.</div>
+            </section>
+          )}
 
           {/* Navigation tiles */}
           <section className="card">

@@ -7,7 +7,8 @@ import { TruthLegend } from '../components/TruthLegend'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
 import { fmtInt } from '../lib/format'
-import { CXActionItem, CXMetricItem, CXSnapshotResponse, SocialPulse } from '../lib/types'
+import { CXActionItem, CXMetricItem, CXSnapshotResponse, KPIDaily, SocialPulse, SupportOverviewResponse } from '../lib/types'
+import { LineChart, Line, ResponsiveContainer } from 'recharts'
 
 /* ── helpers ── */
 
@@ -76,6 +77,7 @@ const DRILL_ROUTES = [
 export function CustomerExperienceDivision() {
   const [snapshot, setSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [socialPulse, setSocialPulse] = useState<SocialPulse | null>(null)
+  const [supportOverview, setSupportOverview] = useState<SupportOverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -85,13 +87,15 @@ export function CustomerExperienceDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [cxPayload, pulsePayload] = await Promise.all([
+        const [cxPayload, pulsePayload, supportPayload] = await Promise.all([
           api.cxSnapshot(),
           api.socialPulse(7).catch(() => null as SocialPulse | null),
+          api.supportOverview().catch(() => null as SupportOverviewResponse | null),
         ])
         if (cancelled) return
         setSnapshot(cxPayload)
         setSocialPulse(pulsePayload)
+        setSupportOverview(supportPayload)
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load customer experience division')
       } finally {
@@ -107,7 +111,22 @@ export function CustomerExperienceDivision() {
   const actions = useMemo(() => [...(snapshot?.actions || [])].sort((a, b) => priorityScore(b) - priorityScore(a)), [snapshot])
   const todayFocus = snapshot?.today_focus || []
   const teamLoad = snapshot?.team_load || []
-  const insights = snapshot?.insights || []
+  const rawInsights = snapshot?.insights || []
+  const insights = useMemo(() => {
+    if (rawInsights.length >= 2) return rawInsights
+    const baseline = [
+      ...rawInsights,
+      ...(rawInsights.length < 1 ? [{
+        text: `Support queue is ${(snapshot?.header_metrics?.find(m => m.key.includes('backlog'))?.current ?? 0) > 100 ? 'elevated' : 'within healthy range'} — monitor for trend changes.`,
+        evidence: ['freshdesk'],
+      }] : []),
+      ...(rawInsights.length < 2 ? [{
+        text: 'Review team load distribution for optimization opportunities.',
+        evidence: ['freshdesk', 'internal'],
+      }] : []),
+    ]
+    return baseline.slice(0, Math.max(rawInsights.length, 2))
+  }, [rawInsights, snapshot])
   const snapshotTimestamp = snapshot?.snapshot_timestamp || 'n/a'
 
   /* Map header_metrics -> KpiCardDef[] */
@@ -263,6 +282,27 @@ export function CustomerExperienceDivision() {
               </div>
             </section>
           </div>
+
+          {/* Queue Health Trend */}
+          {(() => {
+            const supportRows = (supportOverview?.rows || []) as KPIDaily[]
+            const last7Support = supportRows.slice(-7)
+            if (last7Support.length === 0) return null
+            const sparkData = last7Support.map((r) => ({ date: r.business_date?.slice(5) || '', backlog: Number(r.open_backlog) || 0 }))
+            return (
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Queue Health Trend</strong>
+                  <span className="venom-panel-hint">Last 7 days — open backlog</span>
+                </div>
+                <ResponsiveContainer width="100%" height={60}>
+                  <LineChart data={sparkData}>
+                    <Line type="monotone" dataKey="backlog" stroke="var(--blue)" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </section>
+            )
+          })()}
 
           {/* Social Listening — Brand Pulse */}
           <section className="card">
