@@ -161,6 +161,16 @@
 - 2026-04-09 Product / Engineering telemetry UX + analytics rebuild: restructured the page into a decision-layer KPI strip, funnel, temperature-performance, session-pattern, connectivity, probe, cohort, and automated-insight sections; added analysis drill-down routes under `/analysis/*`; preserved truth-state/sample-reliability handling on KPI cards and blocked states; and expanded stream-derived metrics to include active cooks, throughput, duration percentiles, timeout/oscillation proxies, RSSI median, and richer cohort/connectivity outputs.
 - 2026-04-09 historical telemetry flow wiring: added `telemetry_history_monthly` plus Alembic migration `20260409_0008`, added admin ingest route `/api/admin/ingest/telemetry-history`, added script `apps/spider-kpi/scripts/import_telemetry_history.py` to push export-audit JSON into KPI, and updated telemetry summary/schema so stream-backed responses now expose `analytics` and can carry `historical_monthly` backfill data into the product telemetry flow.
 - 2026-04-09 telemetry UX clarity refinement: kept ingestion, metric set, page structure, and drill-down routes fixed, but upgraded the KPI strip to show explicit status + delta text, made the funnel visually dominant with automatic largest-dropoff highlighting, annotated temperature/RSSI charts with risk zones, highlighted worst cohorts, and tightened action copy into concrete test steps.
+- 2026-04-11 Product Engineering actionability upgrade: implemented all 8 recommended improvements to make the page more actionable for the engineering team:
+  1. **WoW Delta Indicators**: KPI cards now show week-over-week change arrows with percentage deltas
+  2. **Anomaly Alerts Panel**: "Needs Attention" section at top auto-surfaces reliability drops, error spikes, firmware outliers, overshoot, and disconnect issues with suggested actions
+  3. **Error Classification Breakdown**: Errors categorized by root cause (WiFi/Connectivity, Probe, Temp Control, Timeout/Firmware) with trend indicators
+  4. **Firmware Rollout Progress Tracker**: Shows target version adoption %, deprecated firmware %, and version breakdown
+  5. **Engineering SLA Target Bands**: Fleet Activity chart now shows target error rate line (3%)
+  6. **Release Impact Overlay**: Firmware release dates annotated on Fleet Activity chart for correlation analysis
+  7. **Device Cohort Comparison Table**: Compare metrics across Model, Firmware Version, and WiFi signal bands with filterable view
+  8. **P0/P1 Open Issues Widget**: Critical engineering issues displayed with priority badges and labels
+  - Pushed to `claude/slack-session-GkwGY` branch, commit `d84a76d`
 
 ## Connector plan
 - Phase 1 connectors should be implemented before widening dashboard scope.
