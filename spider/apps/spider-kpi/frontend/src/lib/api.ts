@@ -1,4 +1,5 @@
 import type {
+  ClarityPageMetric,
   CXActionItem,
   CXSnapshotResponse,
   DataQualityResponse,
@@ -143,4 +144,6 @@ export const api = {
     request<SocialPulse>(`/api/social/pulse${days ? `?days=${days}` : ''}`, { signal }),
   socialTrends: (days?: number, signal?: AbortSignal) =>
     request<SocialTrendsResponse>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
+  clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
+  clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
 }

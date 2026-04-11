@@ -490,6 +490,28 @@ class SocialMention(TimestampMixin, Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class ClarityPageMetric(TimestampMixin, Base):
+    __tablename__ = "clarity_page_metrics"
+    __table_args__ = (UniqueConstraint("page_path", "snapshot_date", name="uq_clarity_page_metrics_path_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    page_path: Mapped[Optional[str]] = mapped_column(String(512))
+    page_type: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    dead_clicks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    dead_click_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    rage_clicks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rage_click_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    quick_backs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    quick_back_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    script_errors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    script_error_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    excessive_scroll: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    friction_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+
 class ReviewMention(TimestampMixin, Base):
     __tablename__ = "review_mentions"
 

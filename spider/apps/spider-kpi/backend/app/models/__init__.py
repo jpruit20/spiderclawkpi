@@ -1,5 +1,6 @@
 from app.models.entities import (
     Alert,
+    ClarityPageMetric,
     CommunityMessage,
     CXAction,
     DriverDiagnostic,
@@ -34,6 +35,7 @@ from app.models.entities import (
 
 __all__ = [
     "Alert",
+    "ClarityPageMetric",
     "CommunityMessage",
     "CXAction",
     "DriverDiagnostic",

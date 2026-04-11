@@ -12,7 +12,7 @@ import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLast
 import { currency, fmtInt, fmtPct, deltaPct, deltaDirection } from '../lib/format'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { CompareMode as Mode } from '../lib/compare'
-import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 /* ------------------------------------------------------------------ */
@@ -52,6 +52,7 @@ export function MarketingDivision() {
   const [overview, setOverview] = useState<OverviewResponse | null>(null)
   const [issues, setIssues] = useState<IssueRadarResponse | null>(null)
   const [socialTrends, setSocialTrends] = useState<SocialTrendsResponse | null>(null)
+  const [clarityFriction, setClarityFriction] = useState<ClarityPageMetric[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '30d', startDate: '', endDate: '' })
@@ -64,11 +65,12 @@ export function MarketingDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [dailyPayload, overviewPayload, issuesPayload, trendsPayload] = await Promise.all([
+        const [dailyPayload, overviewPayload, issuesPayload, trendsPayload, frictionPayload] = await Promise.all([
           api.dailyKpis(),
           api.overview(),
           api.issues(),
           api.socialTrends(30).catch(() => null as SocialTrendsResponse | null),
+          api.clarityFriction().catch(() => [] as ClarityPageMetric[]),
         ])
         if (cancelled) return
         const ordered = [...dailyPayload].sort((a, b) => a.business_date.localeCompare(b.business_date))
@@ -76,6 +78,7 @@ export function MarketingDivision() {
         setOverview(overviewPayload)
         setIssues(issuesPayload)
         setSocialTrends(trendsPayload)
+        setClarityFriction(frictionPayload)
         setRange((current) =>
           current.startDate && current.endDate ? current : buildPresetRange('30d', ordered, { anchorDate: todayDate }),
         )
@@ -390,6 +393,10 @@ export function MarketingDivision() {
                       {step.dropoff.toFixed(1)}% drop-off from prior stage
                     </small>
                   ) : null}
+                  {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
+                  {step.label === 'Add to Cart' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: uses GA4 add_to_cart_rate x PDP estimate</small> : null}
+                  {step.label === 'Checkout' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: ATC x 0.58</small> : null}
+                  {step.label === 'Purchase' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Canonical: Shopify order count</small> : null}
                 </div>
               ))}
             </div>
@@ -439,6 +446,70 @@ export function MarketingDivision() {
               </div>
             </section>
           </div>
+
+          {/* ---- Marketing Efficiency ---- */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Marketing Efficiency</strong>
+            </div>
+            <div className="venom-breakdown-list">
+              <div className="venom-breakdown-row">
+                <span>MER (Marketing Efficiency Ratio)</span>
+                <span className="venom-breakdown-val">{mer > 0 ? `${mer.toFixed(2)}x` : '\u2014'}</span>
+                <span className={`badge ${deltaDirection(mer, priorMer) === 'up' ? 'badge-good' : deltaDirection(mer, priorMer) === 'down' ? 'badge-bad' : 'badge-neutral'}`}>{deltaPct(mer, priorMer)}</span>
+              </div>
+              <div className="venom-breakdown-row">
+                <span>Ad Spend / Revenue</span>
+                <span className="venom-breakdown-val">{revenue > 0 ? fmtPct(adSpend / revenue) : '\u2014'}</span>
+                <span className="badge badge-neutral">ratio</span>
+              </div>
+              <div className="venom-breakdown-row">
+                <span>Cost per Acquisition</span>
+                <span className="venom-breakdown-val">{orders > 0 ? currency(adSpend / orders) : '\u2014'}</span>
+                <span className={`badge ${priorOrders > 0 && orders > 0 ? (deltaDirection(priorAdSpend / priorOrders, adSpend / orders) === 'up' ? 'badge-good' : deltaDirection(priorAdSpend / priorOrders, adSpend / orders) === 'down' ? 'badge-bad' : 'badge-neutral') : 'badge-neutral'}`}>{priorOrders > 0 && orders > 0 ? deltaPct(priorAdSpend / priorOrders, adSpend / orders) : 'n/a'}</span>
+              </div>
+            </div>
+          </section>
+
+          {/* ---- Website UX Friction ---- */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Website UX Friction</strong>
+              <span className="venom-panel-hint">Clarity behavioral analytics — top friction pages</span>
+            </div>
+            {clarityFriction.length > 0 ? (
+              <div className="stack-list compact">
+                {clarityFriction.slice(0, 5).map((page, idx) => (
+                  <div className="list-item status-muted" key={idx}>
+                    <div className="item-head">
+                      <strong>{page.page_path}</strong>
+                      <div className="inline-badges">
+                        <span className="badge badge-neutral">{page.page_type}</span>
+                        <span className="badge badge-neutral">{fmtInt(page.sessions)} sessions</span>
+                      </div>
+                    </div>
+                    <div className="venom-bar-row" style={{ marginTop: 4 }}>
+                      <span className="venom-bar-label">Friction</span>
+                      <BarIndicator
+                        value={page.friction_score}
+                        max={100}
+                        color={page.friction_score > 50 ? 'var(--red)' : page.friction_score > 25 ? 'var(--orange)' : 'var(--green)'}
+                      />
+                      <span className="venom-bar-value">{page.friction_score.toFixed(1)}</span>
+                    </div>
+                    <div className="inline-badges" style={{ marginTop: 4 }}>
+                      {page.dead_clicks > 0 ? <span className="badge badge-warn">{fmtInt(page.dead_clicks)} dead clicks ({page.dead_click_pct.toFixed(1)}%)</span> : null}
+                      {page.quick_backs > 0 ? <span className="badge badge-warn">{fmtInt(page.quick_backs)} quick backs ({page.quick_back_pct.toFixed(1)}%)</span> : null}
+                      {page.script_errors > 0 ? <span className="badge badge-bad">{fmtInt(page.script_errors)} script errors ({page.script_error_pct.toFixed(1)}%)</span> : null}
+                      {page.rage_clicks > 0 ? <span className="badge badge-bad">{fmtInt(page.rage_clicks)} rage clicks ({page.rage_click_pct.toFixed(1)}%)</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="state-message">Clarity UX data will populate after next sync</div>
+            )}
+          </section>
 
           {/* ---- Two-col: Blocked States ---- */}
           <div className="two-col two-col-equal">

@@ -6,7 +6,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
-import { TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
+import { ClarityPageMetric, TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
 import {
   BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart,
 } from 'recharts'
@@ -64,6 +64,7 @@ function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
 
 export function ProductEngineeringDivision() {
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
+  const [productPageHealth, setProductPageHealth] = useState<ClarityPageMetric[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<TimeRange>('24h')
@@ -74,8 +75,14 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.telemetrySummary()
-        if (!cancelled) setTelemetry(payload)
+        const [payload, pageHealth] = await Promise.all([
+          api.telemetrySummary(),
+          api.clarityPageHealth().catch(() => [] as ClarityPageMetric[]),
+        ])
+        if (!cancelled) {
+          setTelemetry(payload)
+          setProductPageHealth(pageHealth)
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load telemetry summary')
       } finally {
@@ -413,6 +420,54 @@ export function ProductEngineeringDivision() {
               </div>
             </section>
           </div>
+
+          {/* Product Page UX Health */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Product Page UX Health</strong>
+              <span className="venom-panel-hint">Clarity behavioral analytics — product pages</span>
+            </div>
+            {productPageHealth.length > 0 ? (
+              <div className="venom-breakdown-list">
+                {productPageHealth.map((page, idx) => {
+                  const pageName = page.page_path.replace('/products/', '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || page.page_path
+                  return (
+                    <div className="venom-breakdown-row" key={idx} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, padding: '10px 0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <strong>{pageName}</strong>
+                        <div className="inline-badges">
+                          <span className="badge badge-neutral">{fmtInt(page.sessions)} sessions</span>
+                          <span className={`badge ${page.friction_score > 50 ? 'badge-bad' : page.friction_score > 25 ? 'badge-warn' : 'badge-good'}`}>
+                            friction: {page.friction_score.toFixed(1)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="venom-breakdown-list" style={{ paddingLeft: 12, fontSize: '0.9em' }}>
+                        <div className="venom-breakdown-row">
+                          <span>Dead clicks</span>
+                          <span className="venom-breakdown-val">{fmtInt(page.dead_clicks)} ({page.dead_click_pct.toFixed(1)}%)</span>
+                        </div>
+                        <div className="venom-breakdown-row">
+                          <span>Rage clicks</span>
+                          <span className="venom-breakdown-val">{fmtInt(page.rage_clicks)} ({page.rage_click_pct.toFixed(1)}%)</span>
+                        </div>
+                        <div className="venom-breakdown-row">
+                          <span>Quick backs</span>
+                          <span className="venom-breakdown-val">{fmtInt(page.quick_backs)} ({page.quick_back_pct.toFixed(1)}%)</span>
+                        </div>
+                        <div className="venom-breakdown-row">
+                          <span>Script errors</span>
+                          <span className="venom-breakdown-val">{fmtInt(page.script_errors)} ({page.script_error_pct.toFixed(1)}%)</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="state-message">Product page UX data will populate after next Clarity sync</div>
+            )}
+          </section>
 
           {/* Drill-down routes */}
           <section className="card">

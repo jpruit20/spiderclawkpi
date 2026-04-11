@@ -551,6 +551,24 @@ export interface SocialPulse {
   top_mentions: SocialMention[]
 }
 
+export interface ClarityPageMetric {
+  url: string
+  page_path: string
+  page_type: string
+  sessions: number
+  dead_clicks: number
+  dead_click_pct: number
+  rage_clicks: number
+  rage_click_pct: number
+  quick_backs: number
+  quick_back_pct: number
+  script_errors: number
+  script_error_pct: number
+  excessive_scroll: number
+  friction_score: number
+  snapshot_date: string
+}
+
 export interface SocialTrendsResponse {
   period_days: number
   total_mentions: number

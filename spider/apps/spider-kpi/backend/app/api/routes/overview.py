@@ -14,6 +14,7 @@ from app.services.cx_snapshot import build_customer_experience_snapshot
 from app.services.issue_radar import build_issue_radar
 from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_telemetry_history_daily
+from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
 from app.services.overview import build_kpi_payload, build_overview
 from app.services.social_listening import get_brand_pulse, get_social_mentions, get_social_trends
 from app.services.source_health import get_source_health
@@ -161,6 +162,16 @@ def get_social_pulse(days: int = 7, db: Session = Depends(db_session)):
 @router.get("/social/trends")
 def get_social_trends_endpoint(days: int = 30, db: Session = Depends(db_session)):
     return get_social_trends(db, days)
+
+
+@router.get("/clarity/friction")
+def get_clarity_friction(db: Session = Depends(db_session)):
+    return get_ux_friction_report(db)
+
+
+@router.get("/clarity/page-health")
+def get_clarity_page_health(db: Session = Depends(db_session)):
+    return get_product_page_health(db)
 
 
 @router.get("/data-quality", response_model=DataQualityOut)
