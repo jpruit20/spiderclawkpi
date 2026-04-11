@@ -130,6 +130,21 @@ Use:
 See `DEPLOYMENT.md` for the locked deploy path.
 See `deploy/PRODUCTION_RUNBOOK.md` for the current Vercel + DigitalOcean production deploy and validation workflow.
 
+## Git / deployment flow
+
+Production deploys from `master`.
+
+For Claude-authored KPI updates, the repo now supports an auto-promotion path:
+- push the KPI change to a branch matching `claude/**`
+- if the change touches `apps/spider-kpi/**`, GitHub Actions runs frontend build validation and backend import validation
+- the workflow auto-creates or reuses a PR from that Claude branch into `master`
+- if validation passes, the workflow auto-merges into `master`
+- deploy then runs from either:
+  - a normal `push` to `master`, or
+  - a successful completion of `Auto-promote Claude KPI branches`
+
+This closes the GitHub Actions token handoff gap where an action-driven merge to `master` may not reliably trigger a second workflow via the usual `push` event alone.
+
 ## Notes
 
 - The old Flask dashboard and JSON prototype files remain in-repo, but they are now legacy/prototype artifacts.

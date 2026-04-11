@@ -6,6 +6,11 @@ on:
     paths:
       - 'apps/spider-kpi/**'
       - '.github/workflows/deploy-kpi.yml'
+  workflow_run:
+    workflows:
+      - Auto-promote Claude KPI branches
+    types:
+      - completed
   workflow_dispatch:
 
 concurrency:
@@ -15,13 +20,23 @@ concurrency:
 jobs:
   frontend-vercel:
     name: Deploy KPI Frontend (Vercel)
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'
+      )
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/spider-kpi/frontend
     steps:
-      - name: Checkout
+      - name: Checkout master
         uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -58,8 +73,11 @@ jobs:
     needs: frontend-vercel
     if: ${{ secrets.DO_KPI_HOST != '' && secrets.DO_KPI_USER != '' && secrets.DO_KPI_SSH_KEY != '' }}
     steps:
-      - name: Checkout
+      - name: Checkout master
         uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
 
       - name: Setup SSH key
         run: |

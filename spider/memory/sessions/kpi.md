@@ -18,6 +18,9 @@
 - MEMORY.md
 - AGENTS.md
 - TOOLS.md
+- .github/workflows/claude-auto-promote-kpi.yml
+- .github/workflows/deploy-kpi.yml
+- apps/spider-kpi/README.md
 - apps/spider-kpi/frontend/src/components/DecisionStack.tsx
 - apps/spider-kpi/frontend/src/lib/operatingModel.ts
 - apps/spider-kpi/frontend/src/lib/departmentViews.ts
@@ -64,9 +67,11 @@
 - Browser-check the new Command Center telemetry escalation card and Issue Radar telemetry signal enrichment against live data so the cohort/corroboration language stays truthful.
 - Implement a true inventory / fulfillment risk layer once Dynamics / Business Central data is live.
 - Confirm or add local ACP harness configuration for Claude so this session can delegate coding work through OpenClaw.
+- Observe one real Claude branch auto-promotion cycle on GitHub to confirm the workflow behaves cleanly end-to-end.
 - Keep implementation-specific notes here instead of polluting durable files.
 
 ## Current implementation notes
+- 2026-04-10 Git deployment automation pass: added `.github/workflows/claude-auto-promote-kpi.yml` so Claude KPI branches (`claude/**`) touching `apps/spider-kpi/**` now auto-build, run backend import validation, auto-open/reuse a PR into `master`, and auto-merge on success. Follow-up deployment hardening updated `.github/workflows/deploy-kpi.yml` so production deploy runs not just on direct `master` pushes but also on successful completion of `Auto-promote Claude KPI branches`, closing the GitHub Actions token handoff gap where action-authored merges may not trigger a second workflow reliably. Documented the flow in `apps/spider-kpi/README.md` and promoted the rule into `MEMORY.md`.
 - 2026-04-09 Slack recovery / production rollout pass: verified the complete AWS telemetry stream cutover end-to-end. Production now uses DynamoDB Streams on `sg_device_shadows` -> standalone Lambda -> KPI API ingest -> `telemetry_stream_events`, and `/api/telemetry/summary` flipped to stream-backed metadata (`sg_device_shadows_stream`, `dynamodb_stream`) after live rows began landing.
 - 2026-04-09 telemetry rollout hardening also fixed multiple deployment/runtime blockers: backend now prefers stream rows when present, deploy workflow runs Alembic before restart, corrective migration added `updated_at` to `telemetry_stream_events`, and production Lambda moved from direct-Postgres writes to authenticated API ingestion.
 - 2026-04-07 department operating-system pass: added a new frontend Department Views route that derives leader-specific operating views for Joseph, Bailey, Jeremiah, Kyle, Conor, and David from existing KPI/support/issue/source-health endpoints instead of replacing the current dashboard architecture.
