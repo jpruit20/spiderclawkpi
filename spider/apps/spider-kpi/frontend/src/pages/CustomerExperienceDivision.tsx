@@ -31,14 +31,24 @@ function statusTone(status: string) {
 }
 
 function metricValue(metric: CXMetricItem) {
-  if (metric.key.includes('time')) return hrs(metric.current)
+  // Time-based metrics (display as hours)
+  if (metric.key.includes('time') || metric.key.includes('response')) return hrs(metric.current)
+  // Percentage and rate metrics
   if (metric.key.includes('rate') || metric.key.includes('pct') || metric.key.includes('burden') || metric.key.includes('sla')) return pct(metric.current)
+  // Engagement depth (display with decimal)
+  if (metric.key.includes('engagement') || metric.key.includes('depth')) return metric.current.toFixed(1)
+  // Whole number metrics (ticket counts, etc)
   return whole(metric.current)
 }
 
 function metricTarget(metric: CXMetricItem) {
-  if (metric.key.includes('time')) return hrs(metric.target)
+  // Time-based metrics (display as hours)
+  if (metric.key.includes('time') || metric.key.includes('response')) return hrs(metric.target)
+  // Percentage and rate metrics
   if (metric.key.includes('rate') || metric.key.includes('pct') || metric.key.includes('burden') || metric.key.includes('sla')) return pct(metric.target)
+  // Engagement depth (display with decimal)
+  if (metric.key.includes('engagement') || metric.key.includes('depth')) return metric.target.toFixed(1)
+  // Whole number metrics (ticket counts, etc)
   return whole(metric.target)
 }
 
