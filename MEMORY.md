@@ -9,6 +9,7 @@
 - Disk files are the only durable memory for this workspace
 - Prefer compact checkpoint summaries over long transcript carry-forward
 - Stable design intent belongs in topic memory, not transient session chatter
+- Slack KPI channels are persistent memory-backed workstreams: after meaningful discussions/decisions, update `memory/sessions/kpi.md` with checkpoints, promote validated rules to `memory/topics/kpi_dashboard.md`, and promote cross-topic rules to `MEMORY.md`
 - For major KPI dashboard/frontend/backend updates, done means commit, push, and deploy/verify production rather than leaving changes local-only
 - Claude-authored KPI Git branches (`claude/**`) now auto-promote into `master` after GitHub validation, and production deploy still runs from `master`
 - External voice-of-customer monitoring should be kept distinct from internal support operations

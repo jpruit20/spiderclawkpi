@@ -183,3 +183,14 @@
 3. add connector health panel
 4. stand up VOC Phase 1 ingestion
 5. tune dashboard cards using validated aggregates
+
+---
+
+## 2026-04-11 Marketing Channel Session Checkpoint
+- Established Slack KPI channels as persistent memory-backed workstreams
+- Created `memory/topics/kpi_dashboard.md` with validated Marketing page patterns
+- Promoted Slack workstream rule to `MEMORY.md`
+- Marketing page improvements deployed via PR #2:
+  - Clarity data replaced with AI-prioritized UX Friction Insights
+  - KPI sparklines added for trajectory visibility
+  - Funnel leak alerts with "Biggest Leak" badge
