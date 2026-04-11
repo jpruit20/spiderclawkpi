@@ -155,4 +155,3 @@ This closes the GitHub Actions token handoff gap where an action-driven merge to
 
 - 2026-04-11: Deployment flow test from `claude/slack-session-M2Y3u`
 
-- 2026-04-11 smoke test: fresh Claude branches from current master should validate, merge, and deploy without PR creation.
