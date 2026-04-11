@@ -1,8 +1,9 @@
 from collections.abc import Generator
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.routes.auth import COOKIE_NAME, verify_session_token
 from app.core.config import get_settings
 from app.db.session import get_db
 
@@ -21,3 +22,11 @@ def require_auth(x_app_password: str | None = Header(default=None, alias="X-App-
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     if x_app_password != settings.app_password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+
+def require_dashboard_session(request: Request) -> None:
+    if settings.auth_disabled:
+        return
+    token = request.cookies.get(COOKIE_NAME)
+    if not verify_session_token(token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Dashboard session required")

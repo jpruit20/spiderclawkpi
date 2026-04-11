@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_session
+from app.api.deps import db_session, require_dashboard_session
 from app.compute.kpis import get_data_quality
 from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
 from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, CXSnapshotOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
@@ -19,7 +19,7 @@ from app.services.overview import build_kpi_payload, build_overview
 from app.services.social_listening import get_brand_pulse, get_social_mentions, get_social_trends
 from app.services.source_health import get_source_health
 
-router = APIRouter(prefix="/api", tags=["overview"])
+router = APIRouter(prefix="/api", tags=["overview"], dependencies=[Depends(require_dashboard_session)])
 BUSINESS_TZ = ZoneInfo("America/New_York")
 
 

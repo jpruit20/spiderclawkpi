@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { AuthGate } from './components/AuthGate'
 
 const CommandCenter = lazy(() => import('./pages/CommandCenter').then((m) => ({ default: m.CommandCenter })))
 const CustomerExperienceDivision = lazy(() => import('./pages/CustomerExperienceDivision').then((m) => ({ default: m.CustomerExperienceDivision })))
@@ -30,8 +31,9 @@ function withBoundary(label: string, node: React.ReactNode) {
 
 export function App() {
   return (
-    <Layout>
-      <Routes>
+    <AuthGate>
+      <Layout>
+        <Routes>
         <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
@@ -57,7 +59,8 @@ export function App() {
         <Route path="/analysis/rssi-impact" element={withBoundary('RSSI Impact Analysis', <TelemetryAnalysisPage />)} />
         <Route path="/analysis/probe-health" element={withBoundary('Probe Health Analysis', <TelemetryAnalysisPage />)} />
         <Route path="/analysis/firmware-model" element={withBoundary('Firmware Model Analysis', <TelemetryAnalysisPage />)} />
-      </Routes>
-    </Layout>
+        </Routes>
+      </Layout>
+    </AuthGate>
   )
 }

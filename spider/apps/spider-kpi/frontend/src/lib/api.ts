@@ -1,4 +1,5 @@
 import type {
+  AuthStatusResponse,
   ClarityPageMetric,
   CXActionItem,
   CXSnapshotResponse,
@@ -27,7 +28,7 @@ function resolveApiBase() {
   if (typeof window !== 'undefined') {
     const { hostname, origin } = window.location
     if (hostname === 'kpi.spidergrills.com') {
-      return 'https://api-kpi.spidergrills.com'
+      return ''
     }
     if (configured && configured === origin) {
       return ''
@@ -69,7 +70,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     console.info('[kpi-ui] api_request_start', { path, attempt })
 
     try {
-      const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal })
+      const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal, credentials: 'include' })
       if (!response.ok) {
         const detail = await response.text().catch(() => '')
         throw new ApiError(`API error ${response.status} for ${path}${detail ? `: ${detail}` : ''}`, response.status, path)
@@ -111,6 +112,30 @@ export function getApiBase() {
 }
 
 export const api = {
+  authStatus: (signal?: AbortSignal) => request<AuthStatusResponse>('/api/auth/status', { signal, retries: 0 }),
+  login: async (password: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new ApiError(`API error ${response.status} for /api/auth/login${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/login')
+    }
+    return response.json() as Promise<AuthStatusResponse>
+  },
+  logout: async () => {
+    const response = await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      throw new ApiError(`API error ${response.status} for /api/auth/logout`, response.status, '/api/auth/logout')
+    }
+    return response.json() as Promise<AuthStatusResponse>
+  },
   overview: (signal?: AbortSignal) => request<OverviewResponse>('/api/overview', { signal }),
   dailyKpis: (signal?: AbortSignal) => request<KPIDaily[]>('/api/kpis/daily', { signal }),
   currentKpi: async (signal?: AbortSignal) => {
