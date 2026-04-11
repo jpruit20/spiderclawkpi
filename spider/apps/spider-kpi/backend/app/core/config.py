@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     aws_telemetry_test_device_ids: str = ''
 
     reddit_enabled: bool = Field(default=True)
+    reddit_client_id: Optional[str] = None
+    reddit_client_secret: Optional[str] = None
     reddit_sync_interval_minutes: int = 30
     youtube_api_key: Optional[str] = None
     google_places_api_key: Optional[str] = None

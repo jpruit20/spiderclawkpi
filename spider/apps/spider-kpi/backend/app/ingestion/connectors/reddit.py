@@ -29,8 +29,12 @@ if not logger.handlers:
     logger.addHandler(stream_handler)
 
 TIMEOUT_SECONDS = 15
-RATE_LIMIT_DELAY = 2.0  # Reddit requires >= 1 req per 2 seconds for public API
-USER_AGENT = "SpiderGrillsKPI/1.0"
+RATE_LIMIT_DELAY = 1.2  # Reddit OAuth allows ~60 req/min
+USER_AGENT = "SpiderGrillsKPI/1.0 (by /u/spidergrills)"
+
+# OAuth2 token cache
+_oauth_token: str | None = None
+_oauth_expires: float = 0
 
 BRAND_QUERIES = [
     "spider grills",
@@ -220,17 +224,54 @@ def classify_mention(title: str, body: str) -> dict[str, Any]:
     }
 
 
-# ── Reddit API helpers ──────────────────────────────────────────────
+# ── Reddit OAuth2 + API helpers ────────────────────────────────────
+
+def _get_oauth_token() -> str | None:
+    """Get Reddit OAuth2 bearer token using 'script' app type (read-only, no user context)."""
+    global _oauth_token, _oauth_expires
+    if _oauth_token and time.time() < _oauth_expires:
+        return _oauth_token
+    client_id = settings.reddit_client_id
+    client_secret = settings.reddit_client_secret
+    if not client_id or not client_secret:
+        logger.warning("reddit OAuth credentials not configured (REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET)")
+        return None
+    try:
+        resp = requests.post(
+            "https://www.reddit.com/api/v1/access_token",
+            auth=(client_id, client_secret),
+            data={"grant_type": "client_credentials"},
+            headers={"User-Agent": USER_AGENT},
+            timeout=TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 200:
+            logger.warning("reddit oauth failed: %d %s", resp.status_code, resp.text[:200])
+            return None
+        data = resp.json()
+        _oauth_token = data.get("access_token")
+        _oauth_expires = time.time() + data.get("expires_in", 3600) - 60
+        logger.info("reddit oauth token acquired, expires in %ds", data.get("expires_in", 0))
+        return _oauth_token
+    except requests.RequestException as exc:
+        logger.warning("reddit oauth request failed: %s", exc)
+        return None
+
 
 def _reddit_headers() -> dict[str, str]:
-    return {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    }
+    token = _get_oauth_token()
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _api_base() -> str:
+    """Use oauth.reddit.com when we have a token, else fallback to www.reddit.com."""
+    return "https://oauth.reddit.com" if _get_oauth_token() else "https://www.reddit.com"
 
 
 def _reddit_get(url: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Make a rate-limited GET request to Reddit's public JSON API."""
+    """Make a rate-limited GET request to Reddit's OAuth API."""
     time.sleep(RATE_LIMIT_DELAY)
     try:
         resp = requests.get(url, headers=_reddit_headers(), params=params, timeout=TIMEOUT_SECONDS)
@@ -239,6 +280,11 @@ def _reddit_get(url: str, params: dict[str, Any] | None = None) -> dict[str, Any
             logger.warning("reddit rate limited, sleeping %ds", retry_after)
             time.sleep(retry_after)
             resp = requests.get(url, headers=_reddit_headers(), params=params, timeout=TIMEOUT_SECONDS)
+        if resp.status_code == 401:
+            global _oauth_token
+            _oauth_token = None
+            logger.warning("reddit oauth token expired, will refresh on next call")
+            return None
         if resp.status_code != 200:
             logger.warning("reddit api returned %d for %s", resp.status_code, url)
             return None
@@ -251,9 +297,9 @@ def _reddit_get(url: str, params: dict[str, Any] | None = None) -> dict[str, Any
 def _search_reddit(query: str, subreddit: str | None = None, limit: int = 25) -> list[dict[str, Any]]:
     """Search Reddit for posts matching *query*."""
     if subreddit:
-        url = f"https://www.reddit.com/r/{subreddit}/search.json"
+        url = f"{_api_base()}/r/{subreddit}/search.json"
     else:
-        url = "https://www.reddit.com/search.json"
+        url = f"{_api_base()}/search.json"
     params: dict[str, Any] = {"q": query, "sort": "new", "limit": limit, "restrict_sr": "on" if subreddit else "off", "t": "week"}
     data = _reddit_get(url, params)
     if not data or "data" not in data:
@@ -263,7 +309,7 @@ def _search_reddit(query: str, subreddit: str | None = None, limit: int = 25) ->
 
 def _hot_posts(subreddit: str, limit: int = 25) -> list[dict[str, Any]]:
     """Get hot posts from a subreddit."""
-    url = f"https://www.reddit.com/r/{subreddit}/hot.json"
+    url = f"{_api_base()}/r/{subreddit}/hot.json"
     data = _reddit_get(url, {"limit": limit})
     if not data or "data" not in data:
         return []
