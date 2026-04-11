@@ -142,52 +142,13 @@ export function MarketingDivision() {
   const purchaseEstimate = orders
   const priorPurchaseEstimate = priorOrders
 
-  /* ---- sparkline data (last 7 days of current range) ---- */
-  const sparklineRows = currentRows.slice(-7)
-  const revenueSparkline = sparklineRows.map((r) => Number(r.revenue || 0))
-  const conversionSparkline = sparklineRows.map((r) => {
-    const s = Number(r.sessions || 0)
-    const o = Number(r.orders || 0)
-    return s ? (o / s) * 100 : 0
-  })
-  const merSparkline = sparklineRows.map((r) => {
-    const rev = Number(r.revenue || 0)
-    const spend = Number(r.ad_spend || 0)
-    return spend ? rev / spend : 0
-  })
-  const adSpendSparkline = sparklineRows.map((r) => Number(r.ad_spend || 0))
-
-  /* ---- funnel leak thresholds ---- */
-  const LEAK_THRESHOLDS: Record<string, number> = {
-    'PDP': 45,           // > 45% drop from sessions to PDP is a leak
-    'Add to Cart': 75,   // > 75% drop from PDP to ATC is a leak
-    'Checkout': 50,      // > 50% drop from ATC to checkout is a leak
-    'Purchase': 50,      // > 50% drop from checkout to purchase is critical
-  }
-
   const funnel = useMemo(() => [
-    { label: 'Sessions', volume: sessions, prior: priorSessions, widthPct: 100, dropoff: 0, isLeak: false, leakSeverity: 'none' as const },
-    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, widthPct: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - pdpViewsEstimate / sessions) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
-    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, widthPct: sessions ? (addToCartEstimate / sessions) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - addToCartEstimate / pdpViewsEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
-    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, widthPct: sessions ? (checkoutEstimate / sessions) * 100 : 0, dropoff: addToCartEstimate ? (1 - checkoutEstimate / addToCartEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
-    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0, isLeak: false, leakSeverity: 'none' as const },
-  ].map((step) => {
-    const threshold = LEAK_THRESHOLDS[step.label]
-    if (!threshold) return step
-    const isLeak = step.dropoff > threshold
-    const leakSeverity = step.dropoff > threshold + 15 ? 'critical' : isLeak ? 'warning' : 'none'
-    return { ...step, isLeak, leakSeverity }
-  }), [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
-
-  const worstLeak = useMemo(() => {
-    const leaks = funnel.filter((s) => s.isLeak)
-    if (leaks.length === 0) return null
-    return leaks.reduce((worst, step) => {
-      const worstExcess = worst.dropoff - (LEAK_THRESHOLDS[worst.label] || 0)
-      const stepExcess = step.dropoff - (LEAK_THRESHOLDS[step.label] || 0)
-      return stepExcess > worstExcess ? step : worst
-    })
-  }, [funnel])
+    { label: 'Sessions', volume: sessions, prior: priorSessions, widthPct: 100, dropoff: 0 },
+    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, widthPct: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - pdpViewsEstimate / sessions) * 100 : 0 },
+    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, widthPct: sessions ? (addToCartEstimate / sessions) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - addToCartEstimate / pdpViewsEstimate) * 100 : 0 },
+    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, widthPct: sessions ? (checkoutEstimate / sessions) * 100 : 0, dropoff: addToCartEstimate ? (1 - checkoutEstimate / addToCartEstimate) * 100 : 0 },
+    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0 },
+  ], [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
 
   /* ---- issues / friction ---- */
   const topFriction = issues?.highest_business_risk?.[0] || issues?.clusters?.[0]
@@ -195,47 +156,6 @@ export function MarketingDivision() {
   const snapshotTimestamp = currentRows.at(-1)?.business_date
     ? `${currentRows.at(-1)?.business_date}T23:59:59Z`
     : new Date().toISOString()
-
-  /* ---- Clarity AI insights ---- */
-  const clarityInsights = useMemo(() => {
-    if (clarityFriction.length === 0) return []
-
-    // Calculate business impact and generate actionable insights
-    return clarityFriction
-      .map((page) => {
-        const businessImpact = page.friction_score * page.sessions
-
-        // Identify dominant friction type
-        const frictionTypes = [
-          { type: 'rage clicks', count: page.rage_clicks, pct: page.rage_click_pct, action: 'Fix unresponsive UI elements' },
-          { type: 'dead clicks', count: page.dead_clicks, pct: page.dead_click_pct, action: 'Make clickable elements obvious or remove misleading visuals' },
-          { type: 'script errors', count: page.script_errors, pct: page.script_error_pct, action: 'Fix JavaScript errors blocking user actions' },
-          { type: 'quick backs', count: page.quick_backs, pct: page.quick_back_pct, action: 'Improve content relevance or page load experience' },
-        ]
-        const dominantFriction = frictionTypes.reduce((max, curr) => (curr.pct > max.pct ? curr : max), frictionTypes[0])
-
-        // Generate severity level
-        const severity: 'critical' | 'high' | 'medium' = page.friction_score > 50 ? 'critical' : page.friction_score > 25 ? 'high' : 'medium'
-
-        // Generate insight
-        const insight = dominantFriction.pct > 5
-          ? `${dominantFriction.action} — ${dominantFriction.pct.toFixed(1)}% of sessions show ${dominantFriction.type}`
-          : `Moderate friction detected — review user behavior patterns`
-
-        return {
-          pagePath: page.page_path,
-          pageType: page.page_type,
-          sessions: page.sessions,
-          frictionScore: page.friction_score,
-          businessImpact,
-          severity,
-          insight,
-          dominantIssue: dominantFriction.type,
-        }
-      })
-      .sort((a, b) => b.businessImpact - a.businessImpact)
-      .slice(0, 3) // Top 3 most impactful
-  }, [clarityFriction])
 
   /* ---- KPI contract objects ---- */
   const kpis: KPIObject[] = [
@@ -360,7 +280,6 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorRevenue)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(revenue, priorRevenue), direction: deltaDirection(revenue, priorRevenue) },
-      sparkline: revenueSparkline,
     },
     {
       label: 'Conversion',
@@ -368,7 +287,6 @@ export function MarketingDivision() {
       sub: `Prior ${priorConversion.toFixed(2)}%`,
       truthState: 'canonical',
       delta: { text: deltaPct(conversion, priorConversion), direction: deltaDirection(conversion, priorConversion) },
-      sparkline: conversionSparkline,
     },
     {
       label: 'MER',
@@ -376,7 +294,6 @@ export function MarketingDivision() {
       sub: `Prior ${priorMer.toFixed(2)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(mer, priorMer), direction: deltaDirection(mer, priorMer) },
-      sparkline: merSparkline,
     },
     {
       label: 'Ad Spend',
@@ -384,9 +301,8 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorAdSpend)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(adSpend, priorAdSpend), direction: deltaDirection(adSpend, priorAdSpend) },
-      sparkline: adSpendSparkline,
     },
-  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend, revenueSparkline, conversionSparkline, merSparkline, adSpendSparkline])
+  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend])
 
   /* ---- dynamic action items ---- */
   const weekActions = useMemo(() => {
@@ -464,72 +380,17 @@ export function MarketingDivision() {
               <strong>Visual Funnel</strong>
               <span className="venom-panel-hint">Sessions to purchase</span>
             </div>
-
-            {/* Funnel Leak Alert Banner */}
-            {worstLeak ? (
-              <div className="funnel-leak-banner" style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                padding: '12px 16px',
-                marginBottom: 16,
-                borderRadius: 12,
-                background: worstLeak.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.12)' : 'rgba(255, 178, 87, 0.12)',
-                border: `1px solid ${worstLeak.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.4)' : 'rgba(255, 178, 87, 0.4)'}`,
-              }}>
-                <span style={{ fontSize: 20 }}>{worstLeak.leakSeverity === 'critical' ? '\u26A0\uFE0F' : '\u26A0'}</span>
-                <div>
-                  <strong style={{ color: worstLeak.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)' }}>
-                    {worstLeak.leakSeverity === 'critical' ? 'Critical Leak' : 'Funnel Leak'}: {worstLeak.label}
-                  </strong>
-                  <p style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: 13 }}>
-                    {worstLeak.dropoff.toFixed(1)}% drop-off exceeds {LEAK_THRESHOLDS[worstLeak.label]}% threshold.
-                    {worstLeak.label === 'Add to Cart' ? ' Review PDP engagement and ATC button visibility.' : ''}
-                    {worstLeak.label === 'Checkout' ? ' Check cart abandonment triggers and shipping cost visibility.' : ''}
-                    {worstLeak.label === 'Purchase' ? ' Audit checkout friction, payment failures, and trust signals.' : ''}
-                    {worstLeak.label === 'PDP' ? ' Landing pages may not be driving product discovery.' : ''}
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
             <div className="venom-bar-list">
               {funnel.map((step) => (
-                <div key={step.label} style={{
-                  padding: step.isLeak ? '10px 12px' : undefined,
-                  marginLeft: step.isLeak ? -12 : undefined,
-                  marginRight: step.isLeak ? -12 : undefined,
-                  borderRadius: step.isLeak ? 10 : undefined,
-                  background: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.08)' : step.leakSeverity === 'warning' ? 'rgba(255, 178, 87, 0.08)' : undefined,
-                  border: step.isLeak ? `1px solid ${step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.3)' : 'rgba(255, 178, 87, 0.3)'}` : undefined,
-                }}>
+                <div key={step.label}>
                   <div className="venom-bar-row">
-                    <span className="venom-bar-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {step.label}
-                      {step.isLeak ? (
-                        <span className="badge" style={{
-                          fontSize: 10,
-                          padding: '2px 6px',
-                          background: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.2)' : 'rgba(255, 178, 87, 0.2)',
-                          borderColor: step.leakSeverity === 'critical' ? 'rgba(255, 109, 122, 0.5)' : 'rgba(255, 178, 87, 0.5)',
-                          color: step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)',
-                        }}>
-                          {step.leakSeverity === 'critical' ? 'LEAK' : 'leak'}
-                        </span>
-                      ) : null}
-                    </span>
-                    <BarIndicator value={step.volume} max={sessions || 1} color={step.isLeak ? (step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)') : (FUNNEL_COLORS[step.label] || 'var(--blue)')} />
+                    <span className="venom-bar-label">{step.label}</span>
+                    <BarIndicator value={step.volume} max={sessions || 1} color={FUNNEL_COLORS[step.label] || 'var(--blue)'} />
                     <span className="venom-bar-value">{fmtInt(Math.round(step.volume))}</span>
                   </div>
                   {step.dropoff > 0 ? (
-                    <small className="venom-panel-footer" style={{
-                      paddingLeft: 140,
-                      marginTop: -4,
-                      color: step.isLeak ? (step.leakSeverity === 'critical' ? 'var(--red)' : 'var(--orange)') : undefined,
-                      fontWeight: step.isLeak ? 600 : undefined,
-                    }}>
+                    <small className="venom-panel-footer" style={{ paddingLeft: 140, marginTop: -4 }}>
                       {step.dropoff.toFixed(1)}% drop-off from prior stage
-                      {step.isLeak ? ` (threshold: ${LEAK_THRESHOLDS[step.label]}%)` : ''}
                     </small>
                   ) : null}
                   {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
@@ -540,7 +401,7 @@ export function MarketingDivision() {
               ))}
             </div>
             <small className="venom-panel-footer">
-              Estimated funnel — stages 2-4 are modeled from behavioral proxies. Leak alerts trigger when drop-off exceeds stage benchmarks.
+              Estimated funnel — stages 2-4 are modeled from behavioral proxies
             </small>
           </section>
 
@@ -610,40 +471,44 @@ export function MarketingDivision() {
             </div>
           </section>
 
-          {/* ---- UX Friction Insights ---- */}
+          {/* ---- Website UX Friction ---- */}
           <section className="card">
             <div className="venom-panel-head">
-              <strong>UX Friction Insights</strong>
-              <span className="venom-panel-hint">AI-prioritized actions from Clarity data</span>
+              <strong>Website UX Friction</strong>
+              <span className="venom-panel-hint">Clarity behavioral analytics — top friction pages</span>
             </div>
-            {clarityInsights.length > 0 ? (
+            {clarityFriction.length > 0 ? (
               <div className="stack-list compact">
-                {clarityInsights.map((item, idx) => (
-                  <div className={`list-item ${item.severity === 'critical' ? 'status-bad' : item.severity === 'high' ? 'status-warn' : 'status-muted'}`} key={idx}>
+                {clarityFriction.slice(0, 5).map((page, idx) => (
+                  <div className="list-item status-muted" key={idx}>
                     <div className="item-head">
-                      <strong>{item.pagePath}</strong>
+                      <strong>{page.page_path}</strong>
                       <div className="inline-badges">
-                        <span className={`badge ${item.severity === 'critical' ? 'badge-bad' : item.severity === 'high' ? 'badge-warn' : 'badge-neutral'}`}>
-                          {item.severity}
-                        </span>
-                        <span className="badge badge-neutral">{fmtInt(item.sessions)} sessions</span>
+                        <span className="badge badge-neutral">{page.page_type}</span>
+                        <span className="badge badge-neutral">{fmtInt(page.sessions)} sessions</span>
                       </div>
                     </div>
-                    <p style={{ margin: '6px 0 4px', fontSize: 13 }}>{item.insight}</p>
-                    <small style={{ color: 'var(--muted)' }}>
-                      Friction score: {item.frictionScore.toFixed(0)} · Primary issue: {item.dominantIssue}
-                    </small>
+                    <div className="venom-bar-row" style={{ marginTop: 4 }}>
+                      <span className="venom-bar-label">Friction</span>
+                      <BarIndicator
+                        value={page.friction_score}
+                        max={100}
+                        color={page.friction_score > 50 ? 'var(--red)' : page.friction_score > 25 ? 'var(--orange)' : 'var(--green)'}
+                      />
+                      <span className="venom-bar-value">{page.friction_score.toFixed(1)}</span>
+                    </div>
+                    <div className="inline-badges" style={{ marginTop: 4 }}>
+                      {page.dead_clicks > 0 ? <span className="badge badge-warn">{fmtInt(page.dead_clicks)} dead clicks ({page.dead_click_pct.toFixed(1)}%)</span> : null}
+                      {page.quick_backs > 0 ? <span className="badge badge-warn">{fmtInt(page.quick_backs)} quick backs ({page.quick_back_pct.toFixed(1)}%)</span> : null}
+                      {page.script_errors > 0 ? <span className="badge badge-bad">{fmtInt(page.script_errors)} script errors ({page.script_error_pct.toFixed(1)}%)</span> : null}
+                      {page.rage_clicks > 0 ? <span className="badge badge-bad">{fmtInt(page.rage_clicks)} rage clicks ({page.rage_click_pct.toFixed(1)}%)</span> : null}
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="state-message">Clarity insights will populate after next sync</div>
+              <div className="state-message">Clarity UX data will populate after next sync</div>
             )}
-            {clarityInsights.length > 0 ? (
-              <small className="venom-panel-footer">
-                Ranked by business impact (friction × traffic volume)
-              </small>
-            ) : null}
           </section>
 
           {/* ---- Two-col: Blocked States ---- */}

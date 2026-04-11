@@ -10,8 +10,10 @@
 - Prefer compact checkpoint summaries over long transcript carry-forward
 - Stable design intent belongs in topic memory, not transient session chatter
 - For major KPI dashboard/frontend/backend updates, done means commit, push, and deploy/verify production rather than leaving changes local-only
+- Claude-authored KPI Git branches (`claude/**`) now auto-promote into `master` after GitHub validation, and production deploy still runs from `master`
 - External voice-of-customer monitoring should be kept distinct from internal support operations
 - Use APIs, approved exports, or compliant connectors where possible instead of brittle blind scraping
+- `#spider-kpi` should be treated as a persistent memory-backed KPI workstream: after each meaningful discussion or decision, write a concise checkpoint to `memory/sessions/kpi.md`, promote validated KPI rules to `memory/topics/kpi_dashboard.md`, promote cross-topic operating rules to `MEMORY.md` when relevant, and do not store raw transcript unless explicitly requested
 
 ## Cross-topic operating decisions
 - 2026-04-03 - KPI dashboard optimization standard adopted - prioritize meaningful, actionable, decision-grade representation over decorative analytics

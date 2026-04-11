@@ -150,8 +150,3 @@ This closes the GitHub Actions token handoff gap where an action-driven merge to
 - The old Flask dashboard and JSON prototype files remain in-repo, but they are now legacy/prototype artifacts.
 - Docker compose is present, but local Docker access may still depend on host permissions.
 - The database-backed backend is the preferred path forward.
-
-## Deployment test log
-
-- 2026-04-11: Deployment flow test from `claude/slack-session-M2Y3u`
-

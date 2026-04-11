@@ -10,33 +10,23 @@ from sqlalchemy.orm import Session
 from app.models import CXAction, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, KPIDaily
 
 KPI_CONFIG: dict[str, dict[str, Any]] = {
-    # Primary focus: How quickly we respond to customers (not closure time)
-    'avg_response_time': {
-        'label': 'Avg response time', 'owner': 'Jeremiah', 'target': 4.0, 'red': 8.0, 'critical': 12.0,
-        'title': 'Improve team response speed',
-        'required_action': 'Prioritize first touch on waiting tickets. Aim for sub-4-hour initial response.',
-        'inverse_good': True,
-    },
-    # Only tickets where customer is waiting on US (not customer-owned tickets)
-    'awaiting_team_reply': {
-        'label': 'Awaiting our reply', 'owner': 'Jeremiah', 'target': 30.0, 'red': 50.0, 'critical': 70.0,
-        'title': 'Clear team-owned backlog',
-        'required_action': 'Focus on tickets where customer is waiting on us, not tickets waiting on customer.',
-        'inverse_good': True,
-    },
-    # Total open (context only - not penalized for customer-owned tickets)
     'open_backlog': {
-        'label': 'Total open tickets', 'owner': 'Jeremiah', 'target': 120.0, 'red': 180.0, 'critical': 220.0,
-        'title': 'Monitor total queue size',
-        'required_action': 'Review queue composition: customer-owned vs team-owned. Prioritize team-owned.',
+        'label': 'Open backlog', 'owner': 'Jeremiah', 'target': 90.0, 'red': 140.0, 'critical': 180.0,
+        'title': 'Reduce active queue backlog',
+        'required_action': 'Redistribute queue work immediately and clear the oldest backlog first.',
         'inverse_good': True,
     },
-    # Track engagement depth - meaningful interactions per ticket
-    'engagement_depth': {
-        'label': 'Engagement depth', 'owner': 'Jeremiah', 'target': 2.5, 'red': 1.5, 'critical': 1.0,
-        'title': 'Ensure thorough customer engagement',
-        'required_action': 'Low engagement may indicate rushed responses. Review ticket quality.',
-        'inverse_good': False,  # Higher is better
+    'aged_tickets_24h': {
+        'label': 'Aged tickets >24h', 'owner': 'Jeremiah', 'target': 50.0, 'red': 90.0, 'critical': 120.0,
+        'title': 'Clear aged ticket queue',
+        'required_action': 'Assign same-day ownership on aged tickets and stop new tickets from aging into the bucket.',
+        'inverse_good': True,
+    },
+    'avg_close_time': {
+        'label': 'Avg close time', 'owner': 'Jeremiah', 'target': 24.0, 'red': 48.0, 'critical': 60.0,
+        'title': 'Reduce slow resolution cycle',
+        'required_action': 'Review slow categories and rebalance work away from the slowest closure path.',
+        'inverse_good': True,
     },
     'reopen_rate': {
         'label': 'Reopen rate', 'owner': 'Jeremiah', 'target': 5.0, 'red': 8.0, 'critical': 12.0,
@@ -90,67 +80,12 @@ def _pct_change(recent: list[float], prior: list[float]) -> float:
     return ((recent_avg - prior_avg) / prior_avg) * 100.0
 
 
-def _status_for(current: float, target: float, red: float, inverse_good: bool = True) -> str:
-    """Determine status based on thresholds. inverse_good=True means lower is better."""
-    if inverse_good:
-        if current > red:
-            return 'red'
-        if current > target:
-            return 'yellow'
-        return 'green'
-    else:
-        # Higher is better (e.g., engagement depth)
-        if current < red:
-            return 'red'
-        if current < target:
-            return 'yellow'
-        return 'green'
-
-
-def _is_customer_owned(ticket: FreshdeskTicket) -> bool:
-    """Determine if ticket is currently owned by customer (waiting on their reply).
-
-    Freshdesk status codes:
-    - 2 = Open (team-owned, waiting on agent)
-    - 3 = Pending (customer-owned, waiting on customer reply)
-    - 4 = Resolved
-    - 5 = Closed
-
-    We consider a ticket "customer-owned" if it's in Pending status.
-    """
-    status = str(ticket.status or '').lower()
-    # Pending status means customer needs to respond
-    if 'pending' in status or status == '3':
-        return True
-    # Open status means team needs to respond
-    return False
-
-
-def _estimate_engagement_depth(ticket: FreshdeskTicket) -> float:
-    """Estimate engagement depth from ticket metadata.
-
-    Uses raw_payload stats to estimate number of interactions.
-    Higher engagement depth indicates more thorough customer support.
-    """
-    raw = ticket.raw_payload or {}
-    stats = raw.get('stats', {})
-
-    # Try to get reply count from various possible fields
-    agent_responded_at = stats.get('agent_responded_at')
-    first_responded_at = stats.get('first_responded_at')
-
-    # Estimate based on resolution hours vs first response
-    # If resolution took much longer than first response, likely more interactions
-    fr_hours = ticket.first_response_hours or 0
-    res_hours = ticket.resolution_hours or 0
-
-    if res_hours > 0 and fr_hours > 0:
-        # Rough heuristic: more time = more interactions
-        interaction_ratio = res_hours / max(fr_hours, 1)
-        return min(max(1.0, interaction_ratio * 0.5), 10.0)
-
-    # Default baseline engagement
-    return 2.0
+def _status_for(current: float, target: float, red: float) -> str:
+    if current > red:
+        return 'red'
+    if current > target:
+        return 'yellow'
+    return 'green'
 
 
 def _metric_period_series(rows: list[KPIDaily], tickets: list[FreshdeskTicket]) -> dict[date, dict[str, float]]:
@@ -159,71 +94,41 @@ def _metric_period_series(rows: list[KPIDaily], tickets: list[FreshdeskTicket]) 
     for current_date in ordered_dates:
         start7 = ordered_dates[max(0, ordered_dates.index(current_date) - 6)]
         open_tickets = []
-        team_owned_tickets = []  # Tickets waiting on US (not customer)
+        aged_open_tickets = []
         recent_tickets = []
         assigned_counts: dict[str, int] = {}
         escalated = 0
-        response_times: list[float] = []
-        engagement_scores: list[float] = []
-
         for ticket in tickets:
             created = _normalize_date(ticket.created_at_source)
             resolved = _normalize_date(ticket.resolved_at_source)
             if not created or created > current_date:
                 continue
-
-            # Track open tickets
             if not (resolved and resolved <= current_date and _is_closed(ticket.status)):
                 open_tickets.append(ticket)
-                # Only count as team-owned if NOT customer-pending
-                if not _is_customer_owned(ticket):
-                    team_owned_tickets.append(ticket)
-
-            # Track recent tickets for other metrics
+                if created < current_date:
+                    aged_open_tickets.append(ticket)
             if created >= start7 and created <= current_date:
                 recent_tickets.append(ticket)
                 agent = str((ticket.raw_payload or {}).get('responder_name') or ticket.agent_id or 'Unassigned')
                 assigned_counts[agent] = assigned_counts.get(agent, 0) + 1
-
-                # Track response times (what we really care about)
-                if ticket.first_response_hours and ticket.first_response_hours > 0:
-                    response_times.append(ticket.first_response_hours)
-
-                # Track engagement depth
-                engagement_scores.append(_estimate_engagement_depth(ticket))
-
-                # Track escalations
                 text = f"{ticket.subject or ''} {ticket.category or ''} {' '.join(ticket.tags_json or [])}".lower()
                 if any(token in text for token in ['escalat', 'engineering', 'urgent', 'firmware']):
                     escalated += 1
-
         total_assigned = sum(assigned_counts.values())
-        queue_concentration = (max(assigned_counts.values()) / total_assigned * 100.0) if total_assigned and assigned_counts else 0.0
+        queue_concentration = (max(assigned_counts.values()) / total_assigned * 100.0) if total_assigned else 0.0
         escalation_rate = (escalated / len(recent_tickets) * 100.0) if recent_tickets else 0.0
-        avg_response_time = _avg(response_times) if response_times else 0.0
-        avg_engagement = _avg(engagement_scores) if engagement_scores else 2.0
-
         kpi_row = next((row for row in rows if row.business_date == current_date), None)
-
         by_date[current_date] = {
-            # New primary metrics (response quality focused)
-            'avg_response_time': float(avg_response_time) if avg_response_time > 0 else float(kpi_row.first_response_time if kpi_row else 0.0),
-            'awaiting_team_reply': float(len(team_owned_tickets)),
-            'open_backlog': float(len(open_tickets)) if open_tickets else float(kpi_row.open_backlog if kpi_row else 0.0),
-            'engagement_depth': float(avg_engagement),
-
-            # Keep existing metrics
+            'open_backlog': float(kpi_row.open_backlog if kpi_row else 0.0),
+            'aged_tickets_24h': float(len(aged_open_tickets)),
+            'avg_close_time': float(kpi_row.resolution_time if kpi_row else 0.0),
             'reopen_rate': float(kpi_row.reopen_rate if kpi_row else 0.0),
             'escalation_rate': float(escalation_rate),
             'queue_concentration_pct': float(queue_concentration),
-
-            # Header metrics (support data)
             'support_burden': float(kpi_row.tickets_per_100_orders if kpi_row else 0.0),
             'closure_sla_pct': float(max(0.0, 100.0 - (kpi_row.sla_breach_rate if kpi_row else 0.0))),
             'first_response_time': float(kpi_row.first_response_time if kpi_row else 0.0),
-
-            # Context metrics (for insights)
-            'customer_owned_tickets': float(len(open_tickets) - len(team_owned_tickets)),
+            'aged_backlog': float(len(aged_open_tickets)),
         }
     return by_date
 
@@ -240,46 +145,28 @@ def getCustomerExperienceMetrics(snapshot: dict[str, Any]) -> dict[str, Any]:
         config = KPI_CONFIG[key]
         values = [series_by_date[d][key] for d in ordered_dates]
         current = series_by_date[current_date][key]
-        inverse_good = config.get('inverse_good', True)
-        status = _status_for(current, config['target'], config['red'], inverse_good)
-
-        # Build trigger condition based on metric direction
+        status = _status_for(current, config['target'], config['red'])
         trigger = None
-        if inverse_good:
-            if status == 'red':
-                trigger = f'{key}_gt_{int(config["red"])}'
-            elif status == 'yellow':
-                trigger = f'{key}_gt_{int(config["target"])}'
-        else:
-            if status == 'red':
-                trigger = f'{key}_lt_{int(config["red"])}'
-            elif status == 'yellow':
-                trigger = f'{key}_lt_{int(config["target"])}'
-
-        # Calculate consecutive days based on metric direction
+        if status == 'red':
+            trigger = f'{key}_gt_{int(config["red"])}'
+        elif status == 'yellow':
+            trigger = f'{key}_gt_{int(config["target"])}'
         consecutive_bad_days = 0
         consecutive_green_days = 0
         for d in reversed(ordered_dates):
-            is_bad = series_by_date[d][key] > config['target'] if inverse_good else series_by_date[d][key] < config['target']
-            if is_bad:
+            if series_by_date[d][key] > config['target']:
                 consecutive_bad_days += 1
             else:
                 break
         for d in reversed(ordered_dates):
-            is_good = series_by_date[d][key] <= config['target'] if inverse_good else series_by_date[d][key] >= config['target']
-            if is_good:
+            if series_by_date[d][key] <= config['target']:
                 consecutive_green_days += 1
             else:
                 break
-
         recent7 = values[-7:]
         prior7 = values[-14:-7]
         recent30 = values[-30:]
         prior30 = values[-60:-30]
-
-        # For non-inverse metrics (higher is better), flip the critical check
-        is_critical = current > config['critical'] if inverse_good else current < config['critical']
-
         metric_map[key] = {
             'key': key,
             'label': config['label'],
@@ -293,44 +180,43 @@ def getCustomerExperienceMetrics(snapshot: dict[str, Any]) -> dict[str, Any]:
             'trend30d': _pct_change(recent30, prior30),
             'status': status,
             'trigger_condition': trigger,
-            'critical_immediate': is_critical,
+            'critical_immediate': current > config['critical'],
             'consecutive_bad_days': consecutive_bad_days,
             'consecutive_green_days': consecutive_green_days,
-            'inverse_good': inverse_good,
             'snapshot_timestamp': datetime.combine(current_date, datetime.min.time(), tzinfo=timezone.utc),
         }
 
-    # Header metrics focused on response quality (what really matters)
+    latest_row = snapshot['latest_row']
     header_metrics = [
         {
-            'key': 'avg_response_time', 'label': 'Avg Response Time', 'owner': 'Jeremiah',
-            'current': series_by_date[current_date]['avg_response_time'], 'target': 4.0,
-            'delta': series_by_date[current_date]['avg_response_time'] - 4.0,
-            'trend7d': _pct_change([series_by_date[d]['avg_response_time'] for d in ordered_dates[-7:]], [series_by_date[d]['avg_response_time'] for d in ordered_dates[-14:-7]]),
-            'trend30d': _pct_change([series_by_date[d]['avg_response_time'] for d in ordered_dates[-30:]], [series_by_date[d]['avg_response_time'] for d in ordered_dates[-60:-30]]),
-            'status': 'green' if series_by_date[current_date]['avg_response_time'] <= 4 else 'yellow' if series_by_date[current_date]['avg_response_time'] <= 8 else 'red',
+            'key': 'closure_sla_pct', 'label': 'Ticket Closure SLA %', 'owner': 'Jeremiah',
+            'current': series_by_date[current_date]['closure_sla_pct'], 'target': 90.0,
+            'delta': series_by_date[current_date]['closure_sla_pct'] - 90.0,
+            'trend7d': _pct_change([series_by_date[d]['closure_sla_pct'] for d in ordered_dates[-7:]], [series_by_date[d]['closure_sla_pct'] for d in ordered_dates[-14:-7]]),
+            'trend30d': _pct_change([series_by_date[d]['closure_sla_pct'] for d in ordered_dates[-30:]], [series_by_date[d]['closure_sla_pct'] for d in ordered_dates[-60:-30]]),
+            'status': 'green' if series_by_date[current_date]['closure_sla_pct'] >= 90 else 'yellow' if series_by_date[current_date]['closure_sla_pct'] >= 80 else 'red',
             'confidence': 'normal', 'snapshot_timestamp': datetime.combine(current_date, datetime.min.time(), tzinfo=timezone.utc),
         },
         {
-            'key': 'awaiting_team_reply', 'label': 'Awaiting Our Reply', 'owner': 'Jeremiah',
-            'current': series_by_date[current_date]['awaiting_team_reply'], 'target': 30.0,
-            'delta': series_by_date[current_date]['awaiting_team_reply'] - 30.0,
-            'trend7d': _pct_change([series_by_date[d]['awaiting_team_reply'] for d in ordered_dates[-7:]], [series_by_date[d]['awaiting_team_reply'] for d in ordered_dates[-14:-7]]),
-            'trend30d': _pct_change([series_by_date[d]['awaiting_team_reply'] for d in ordered_dates[-30:]], [series_by_date[d]['awaiting_team_reply'] for d in ordered_dates[-60:-30]]),
-            'status': 'green' if series_by_date[current_date]['awaiting_team_reply'] <= 30 else 'yellow' if series_by_date[current_date]['awaiting_team_reply'] <= 50 else 'red',
+            'key': 'first_response_time', 'label': 'First Response Time', 'owner': 'Jeremiah',
+            'current': series_by_date[current_date]['first_response_time'], 'target': 4.0,
+            'delta': series_by_date[current_date]['first_response_time'] - 4.0,
+            'trend7d': _pct_change([series_by_date[d]['first_response_time'] for d in ordered_dates[-7:]], [series_by_date[d]['first_response_time'] for d in ordered_dates[-14:-7]]),
+            'trend30d': _pct_change([series_by_date[d]['first_response_time'] for d in ordered_dates[-30:]], [series_by_date[d]['first_response_time'] for d in ordered_dates[-60:-30]]),
+            'status': 'green' if series_by_date[current_date]['first_response_time'] <= 4 else 'yellow' if series_by_date[current_date]['first_response_time'] <= 8 else 'red',
             'confidence': 'normal', 'snapshot_timestamp': datetime.combine(current_date, datetime.min.time(), tzinfo=timezone.utc),
         },
         {
-            'key': 'engagement_depth', 'label': 'Engagement Depth', 'owner': 'Jeremiah',
-            'current': series_by_date[current_date]['engagement_depth'], 'target': 2.5,
-            'delta': series_by_date[current_date]['engagement_depth'] - 2.5,
-            'trend7d': _pct_change([series_by_date[d]['engagement_depth'] for d in ordered_dates[-7:]], [series_by_date[d]['engagement_depth'] for d in ordered_dates[-14:-7]]),
-            'trend30d': _pct_change([series_by_date[d]['engagement_depth'] for d in ordered_dates[-30:]], [series_by_date[d]['engagement_depth'] for d in ordered_dates[-60:-30]]),
-            'status': 'green' if series_by_date[current_date]['engagement_depth'] >= 2.5 else 'yellow' if series_by_date[current_date]['engagement_depth'] >= 1.5 else 'red',
+            'key': 'aged_backlog', 'label': 'Aged Backlog', 'owner': 'Jeremiah',
+            'current': series_by_date[current_date]['aged_backlog'], 'target': 50.0,
+            'delta': series_by_date[current_date]['aged_backlog'] - 50.0,
+            'trend7d': _pct_change([series_by_date[d]['aged_backlog'] for d in ordered_dates[-7:]], [series_by_date[d]['aged_backlog'] for d in ordered_dates[-14:-7]]),
+            'trend30d': _pct_change([series_by_date[d]['aged_backlog'] for d in ordered_dates[-30:]], [series_by_date[d]['aged_backlog'] for d in ordered_dates[-60:-30]]),
+            'status': 'green' if series_by_date[current_date]['aged_backlog'] <= 50 else 'yellow' if series_by_date[current_date]['aged_backlog'] <= 90 else 'red',
             'confidence': 'normal', 'snapshot_timestamp': datetime.combine(current_date, datetime.min.time(), tzinfo=timezone.utc),
         },
         {
-            'key': 'support_burden', 'label': 'Support Burden', 'owner': 'Jeremiah',
+            'key': 'support_burden', 'label': 'Support burden', 'owner': 'Jeremiah',
             'current': series_by_date[current_date]['support_burden'], 'target': 4.5,
             'delta': series_by_date[current_date]['support_burden'] - 4.5,
             'trend7d': _pct_change([series_by_date[d]['support_burden'] for d in ordered_dates[-7:]], [series_by_date[d]['support_burden'] for d in ordered_dates[-14:-7]]),
@@ -340,59 +226,31 @@ def getCustomerExperienceMetrics(snapshot: dict[str, Any]) -> dict[str, Any]:
         },
     ]
 
-    # Build insights based on new KPI framework
-    response_time = metric_map['avg_response_time']
-    awaiting_reply = metric_map['awaiting_team_reply']
-    engagement = metric_map['engagement_depth']
     concentration = metric_map['queue_concentration_pct']
     backlog = metric_map['open_backlog']
+    close_time = metric_map['avg_close_time']
     reopen = metric_map['reopen_rate']
     escalation = metric_map['escalation_rate']
     top_issue = snapshot['top_issue']
-    customer_owned = series_by_date[current_date].get('customer_owned_tickets', 0)
-
     insights: list[dict[str, Any]] = []
-
-    # Insight: Response time health
-    if response_time['status'] != 'green' and awaiting_reply['status'] != 'green':
+    if concentration['status'] != 'green' and backlog['status'] != 'green':
         insights.append({
-            'text': 'Customers are waiting too long for responses. Team response speed needs immediate attention.',
-            'evidence': [f"Avg response time {response_time['current']:.1f}h", f"Awaiting our reply {awaiting_reply['current']:.0f}", 'Both above target'],
+            'text': 'Queue pressure is being driven by workload concentration, not just raw ticket volume.',
+            'evidence': [f"Queue concentration {concentration['current']:.1f}%", f"Open backlog {backlog['current']:.0f}", 'Top rep share exceeds target'],
             'snapshot_timestamp': metric_map['open_backlog']['snapshot_timestamp'],
         })
-
-    # Insight: Engagement quality vs reopen rate
-    if engagement['status'] != 'green' and reopen['status'] != 'green':
+    if close_time['status'] != 'green' and reopen['status'] != 'green':
         insights.append({
-            'text': 'Low engagement depth correlates with higher reopen rate. Tickets may need more thorough initial handling.',
-            'evidence': [f"Engagement depth {engagement['current']:.1f}", f"Reopen rate {reopen['current']:.1f}%", 'Deeper engagement reduces reopens'],
+            'text': 'Repeat-contact risk is tied to slow resolution, not just intake volume.',
+            'evidence': [f"Avg close time {close_time['current']:.1f}h", f"Reopen rate {reopen['current']:.1f}%", 'Both above target in same snapshot'],
             'snapshot_timestamp': metric_map['open_backlog']['snapshot_timestamp'],
         })
-
-    # Insight: Queue composition context
-    if backlog['status'] != 'green':
-        team_owned_pct = (awaiting_reply['current'] / backlog['current'] * 100) if backlog['current'] > 0 else 0
-        if team_owned_pct < 40:
-            insights.append({
-                'text': f'Queue size is elevated but {100 - team_owned_pct:.0f}% of tickets are customer-owned. Focus on team-owned tickets first.',
-                'evidence': [f"Total open {backlog['current']:.0f}", f"Awaiting our reply {awaiting_reply['current']:.0f}", f"Customer-owned {customer_owned:.0f}"],
-                'snapshot_timestamp': metric_map['open_backlog']['snapshot_timestamp'],
-            })
-        elif concentration['status'] != 'green':
-            insights.append({
-                'text': 'Queue pressure is being driven by workload concentration, not just raw ticket volume.',
-                'evidence': [f"Queue concentration {concentration['current']:.1f}%", f"Awaiting our reply {awaiting_reply['current']:.0f}", 'Rebalance assignments'],
-                'snapshot_timestamp': metric_map['open_backlog']['snapshot_timestamp'],
-            })
-
-    # Insight: Escalation clustering
     if top_issue is not None and escalation['status'] != 'green':
         insights.append({
             'text': 'Escalations are clustering around a specific issue family rather than being evenly distributed.',
             'evidence': [f"Escalation rate {escalation['current']:.1f}%", f"Top issue cluster {top_issue.title}", f"Issue owner {top_issue.owner_team or 'TBD'}"],
             'snapshot_timestamp': metric_map['open_backlog']['snapshot_timestamp'],
         })
-
     return {
         'snapshot_timestamp': datetime.combine(current_date, datetime.min.time(), tzinfo=timezone.utc),
         'header_metrics': header_metrics,
