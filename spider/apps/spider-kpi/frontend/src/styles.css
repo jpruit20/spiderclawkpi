@@ -1203,6 +1203,45 @@ th {
   margin-right: 6px;
 }
 
+/* Social listening */
+.venom-social-stat {
+  display: flex;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.venom-social-stat-item {
+  display: grid;
+  gap: 4px;
+}
+
+.venom-social-stat-item small {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.venom-social-stat-item strong {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.venom-mention-body {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+.venom-mention-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
 /* Venom responsive */
 @media (max-width: 1200px) {
   .venom-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }

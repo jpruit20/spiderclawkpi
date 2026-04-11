@@ -56,6 +56,15 @@ def run_sync(source: str, db: Session = Depends(db_session)):
         result = sync_clarity(db, days=min(3, settings.backfill_days))
     elif source == "aws_telemetry":
         result = sync_aws_telemetry(db)
+    elif source == "reddit":
+        from app.ingestion.connectors.reddit import sync_reddit
+        result = sync_reddit(db)
+    elif source == "youtube":
+        from app.ingestion.connectors.youtube import sync_youtube
+        result = sync_youtube(db)
+    elif source == "google_reviews":
+        from app.ingestion.connectors.google_reviews import sync_google_reviews
+        result = sync_google_reviews(db)
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
@@ -102,6 +111,17 @@ def backfill_source(
             target_devices_per_sync=requested_target_devices,
             scan_segments=requested_scan_segments,
         )
+    elif source == "reddit":
+        from app.ingestion.connectors.reddit import sync_reddit
+        requested_lookback_hours = max(1, min(int((lookback_days or 7) * 24), 720))
+        result = sync_reddit(db, lookback_hours=requested_lookback_hours)
+    elif source == "youtube":
+        from app.ingestion.connectors.youtube import sync_youtube
+        requested_lookback_hours = max(1, min(int((lookback_days or 30) * 24), 720))
+        result = sync_youtube(db, lookback_hours=requested_lookback_hours)
+    elif source == "google_reviews":
+        from app.ingestion.connectors.google_reviews import sync_google_reviews
+        result = sync_google_reviews(db)
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 

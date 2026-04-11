@@ -9,6 +9,9 @@ import type {
   KPIIntraday,
   KPIDaily,
   OverviewResponse,
+  SocialMention,
+  SocialPulse,
+  SocialTrend,
   TelemetrySummary,
   RecommendationItem,
   SourceHealthItem,
@@ -134,4 +137,10 @@ export const api = {
     return response.json() as Promise<CXActionItem>
   }),
   dataQuality: (signal?: AbortSignal) => request<DataQualityResponse>('/api/data-quality', { signal }),
+  socialMentions: (params?: { platform?: string, classification?: string, days?: number }, signal?: AbortSignal) =>
+    request<SocialMention[]>(`/api/social/mentions${params ? '?' + new URLSearchParams(Object.entries(params).filter(([,v]) => v != null).map(([k,v]) => [k, String(v)])).toString() : ''}`, { signal }),
+  socialPulse: (days?: number, signal?: AbortSignal) =>
+    request<SocialPulse>(`/api/social/pulse${days ? `?days=${days}` : ''}`, { signal }),
+  socialTrends: (days?: number, signal?: AbortSignal) =>
+    request<SocialTrend[]>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
 }

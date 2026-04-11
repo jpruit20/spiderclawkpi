@@ -6,8 +6,8 @@ import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
-/* format helpers available: fmtPct, fmtInt, fmtDecimal, currency from '../lib/format' */
-import { CXActionItem, CXMetricItem, CXSnapshotResponse } from '../lib/types'
+import { fmtInt } from '../lib/format'
+import { CXActionItem, CXMetricItem, CXSnapshotResponse, SocialPulse } from '../lib/types'
 
 /* ── helpers ── */
 
@@ -75,6 +75,7 @@ const DRILL_ROUTES = [
 
 export function CustomerExperienceDivision() {
   const [snapshot, setSnapshot] = useState<CXSnapshotResponse | null>(null)
+  const [socialPulse, setSocialPulse] = useState<SocialPulse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -84,9 +85,13 @@ export function CustomerExperienceDivision() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.cxSnapshot()
+        const [cxPayload, pulsePayload] = await Promise.all([
+          api.cxSnapshot(),
+          api.socialPulse(7).catch(() => null as SocialPulse | null),
+        ])
         if (cancelled) return
-        setSnapshot(payload)
+        setSnapshot(cxPayload)
+        setSocialPulse(pulsePayload)
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load customer experience division')
       } finally {
@@ -258,6 +263,62 @@ export function CustomerExperienceDivision() {
               </div>
             </section>
           </div>
+
+          {/* Social Listening — Brand Pulse */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Social Listening — Brand Pulse</strong>
+              <span className="venom-panel-hint">Last 7 days</span>
+            </div>
+            {socialPulse ? (
+              <>
+                <div className="venom-social-stat">
+                  <div className="venom-social-stat-item">
+                    <small>Total Mentions</small>
+                    <strong>{fmtInt(socialPulse.total_mentions)}</strong>
+                  </div>
+                  <div className="venom-social-stat-item">
+                    <small>Brand Mentions</small>
+                    <strong>{fmtInt(socialPulse.brand_mentions)}</strong>
+                  </div>
+                  <div className="venom-social-stat-item">
+                    <small>Avg Sentiment</small>
+                    <strong>{socialPulse.avg_sentiment >= 0 ? '+' : ''}{socialPulse.avg_sentiment.toFixed(2)}</strong>
+                  </div>
+                </div>
+                {socialPulse.top_mentions.length > 0 ? (
+                  <div className="stack-list compact">
+                    {socialPulse.top_mentions.slice(0, 5).map((mention) => (
+                      <div className={`list-item ${mention.sentiment === 'positive' ? 'status-good' : mention.sentiment === 'negative' ? 'status-bad' : 'status-warn'}`} key={mention.id}>
+                        <div className="item-head">
+                          <strong>{mention.title || 'Untitled mention'}</strong>
+                          <div className="inline-badges">
+                            <span className="badge badge-neutral">{mention.platform}</span>
+                            {mention.subreddit ? <span className="badge badge-muted">r/{mention.subreddit}</span> : null}
+                            <span className="badge badge-neutral">engagement {mention.engagement_score}</span>
+                          </div>
+                        </div>
+                        {mention.body ? (
+                          <div className="venom-mention-body">
+                            {mention.body.length > 150 ? `${mention.body.slice(0, 150)}...` : mention.body}
+                          </div>
+                        ) : null}
+                        {mention.source_url ? (
+                          <div className="venom-mention-meta">
+                            <a href={mention.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View source</a>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="state-message">No top mentions in the current window</div>
+                )}
+              </>
+            ) : (
+              <div className="state-message">Social listening will populate after first Reddit sync</div>
+            )}
+          </section>
 
           {/* Navigation tiles */}
           <section className="card">

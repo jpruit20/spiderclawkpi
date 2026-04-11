@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -84,6 +84,20 @@ def run_syncs() -> None:
         )
         if clarity_due and not _already_running(db, "clarity"):
             any_success = _successful_result(sync_clarity(db, days=3)) or any_success
+        latest_reddit_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "reddit")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        reddit_due = (
+            latest_reddit_run is None
+            or latest_reddit_run.started_at is None
+            or latest_reddit_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.reddit_sync_interval_minutes)
+        )
+        if reddit_due and not _already_running(db, "reddit"):
+            from app.ingestion.connectors.reddit import sync_reddit
+            any_success = _successful_result(sync_reddit(db)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)

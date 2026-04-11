@@ -12,7 +12,7 @@ import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLast
 import { currency, fmtInt, fmtPct, deltaPct, deltaDirection } from '../lib/format'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { CompareMode as Mode } from '../lib/compare'
-import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SourceHealthItem } from '../lib/types'
+import { ActionObject, BlockedStateOutput, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrend, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 
 /* ------------------------------------------------------------------ */
@@ -51,6 +51,7 @@ export function MarketingDivision() {
   const [rows, setRows] = useState<KPIDaily[]>([])
   const [overview, setOverview] = useState<OverviewResponse | null>(null)
   const [issues, setIssues] = useState<IssueRadarResponse | null>(null)
+  const [socialTrends, setSocialTrends] = useState<SocialTrend[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '30d', startDate: '', endDate: '' })
@@ -63,16 +64,18 @@ export function MarketingDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [dailyPayload, overviewPayload, issuesPayload] = await Promise.all([
+        const [dailyPayload, overviewPayload, issuesPayload, trendsPayload] = await Promise.all([
           api.dailyKpis(),
           api.overview(),
           api.issues(),
+          api.socialTrends(30).catch(() => [] as SocialTrend[]),
         ])
         if (cancelled) return
         const ordered = [...dailyPayload].sort((a, b) => a.business_date.localeCompare(b.business_date))
         setRows(ordered)
         setOverview(overviewPayload)
         setIssues(issuesPayload)
+        setSocialTrends(trendsPayload)
         setRange((current) =>
           current.startDate && current.endDate ? current : buildPresetRange('30d', ordered, { anchorDate: todayDate }),
         )
@@ -477,6 +480,36 @@ export function MarketingDivision() {
               </div>
             </section>
           </div>
+
+          {/* ---- Industry Pulse — Social Listening ---- */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Industry Pulse — Charcoal Grilling</strong>
+              <span className="venom-panel-hint">Reddit + YouTube</span>
+            </div>
+            {socialTrends.length > 0 ? (
+              <div className="stack-list compact">
+                {socialTrends.slice(0, 5).map((trend, idx) => (
+                  <div className="list-item status-muted" key={idx}>
+                    <div className="item-head">
+                      <strong>{trend.topic}</strong>
+                      <div className="inline-badges">
+                        <span className="badge badge-neutral">{fmtInt(trend.mention_count)} mentions</span>
+                        <span className={`badge ${trend.avg_sentiment >= 0.3 ? 'badge-good' : trend.avg_sentiment <= -0.3 ? 'badge-bad' : 'badge-neutral'}`}>
+                          sentiment {trend.avg_sentiment >= 0 ? '+' : ''}{trend.avg_sentiment.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    {trend.top_subreddits.length > 0 ? (
+                      <small>r/{trend.top_subreddits.join(', r/')}</small>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="state-message">Social listening will populate after first Reddit sync</div>
+            )}
+          </section>
 
           {/* ---- Navigation Tiles ---- */}
           <section className="card">

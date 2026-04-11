@@ -15,6 +15,7 @@ from app.services.issue_radar import build_issue_radar
 from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_telemetry_history_daily
 from app.services.overview import build_kpi_payload, build_overview
+from app.services.social_listening import get_brand_pulse, get_social_mentions, get_social_trends
 from app.services.source_health import get_source_health
 
 router = APIRouter(prefix="/api", tags=["overview"])
@@ -145,6 +146,21 @@ def update_cx_action(action_id: str, payload: CXActionUpdateIn, db: Session = De
     db.commit()
     db.refresh(action)
     return action
+
+
+@router.get("/social/mentions")
+def get_social_mentions_endpoint(platform: str | None = None, classification: str | None = None, days: int = 7, db: Session = Depends(db_session)):
+    return get_social_mentions(db, platform, classification, days)
+
+
+@router.get("/social/pulse")
+def get_social_pulse(days: int = 7, db: Session = Depends(db_session)):
+    return get_brand_pulse(db, days)
+
+
+@router.get("/social/trends")
+def get_social_trends_endpoint(days: int = 30, db: Session = Depends(db_session)):
+    return get_social_trends(db, days)
 
 
 @router.get("/data-quality", response_model=DataQualityOut)

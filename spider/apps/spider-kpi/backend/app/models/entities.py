@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -465,21 +465,29 @@ class IssueCluster(TimestampMixin, Base):
 
 class SocialMention(TimestampMixin, Base):
     __tablename__ = "social_mentions"
+    __table_args__ = (UniqueConstraint("platform", "external_id", name="uq_social_mentions_platform_external_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    external_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
-    url: Mapped[Optional[str]] = mapped_column(Text)
-    author: Mapped[Optional[str]] = mapped_column(String(255))
-    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    sentiment: Mapped[Optional[str]] = mapped_column(String(32), index=True)
-    severity: Mapped[Optional[str]] = mapped_column(String(32), index=True)
-    topic: Mapped[Optional[str]] = mapped_column(String(128), index=True)
-    product: Mapped[Optional[str]] = mapped_column(String(128), index=True)
-    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="new", nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text)
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    body: Mapped[Optional[str]] = mapped_column(Text)
+    author: Mapped[Optional[str]] = mapped_column(String(128))
+    subreddit: Mapped[Optional[str]] = mapped_column(String(128))
+    engagement_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    comment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sentiment: Mapped[str] = mapped_column(String(16), default="neutral", nullable=False, index=True)
+    sentiment_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    classification: Mapped[str] = mapped_column(String(64), default="unknown", nullable=False, index=True)
+    brand_mentioned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    product_mentioned: Mapped[Optional[str]] = mapped_column(String(128))
+    competitor_mentioned: Mapped[Optional[str]] = mapped_column(String(128))
+    trend_topic: Mapped[Optional[str]] = mapped_column(String(128))
+    relevance_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class ReviewMention(TimestampMixin, Base):

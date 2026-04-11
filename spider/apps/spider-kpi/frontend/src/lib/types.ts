@@ -518,3 +518,43 @@ export interface CXSnapshotResponse {
 export type KpiDisplayMode = 'latest_complete_day' | 'today_intraday' | 'selected_range_summary'
 export type IntradayStatus = 'live' | 'partial' | 'delayed' | 'unavailable'
 export type RangeOption = 7 | 14 | 30 | 90
+
+export interface SocialMention {
+  id: number
+  platform: string
+  external_id: string
+  source_url?: string
+  title?: string
+  body?: string
+  author?: string
+  subreddit?: string
+  engagement_score: number
+  comment_count: number
+  sentiment: 'positive' | 'negative' | 'neutral' | 'mixed'
+  sentiment_score: number
+  classification: string
+  brand_mentioned: boolean
+  product_mentioned?: string
+  competitor_mentioned?: string
+  trend_topic?: string
+  relevance_score: number
+  published_at?: string
+}
+
+export interface SocialPulse {
+  total_mentions: number
+  brand_mentions: number
+  sentiment_breakdown: { positive: number, negative: number, neutral: number, mixed: number }
+  top_mentions: SocialMention[]
+  platforms: { platform: string, count: number }[]
+  avg_sentiment: number
+}
+
+export interface SocialTrend {
+  topic: string
+  mention_count: number
+  avg_sentiment: number
+  avg_engagement: number
+  top_subreddits: string[]
+  sample_titles: string[]
+}

@@ -148,6 +148,12 @@ class Settings(BaseSettings):
     aws_telemetry_test_models: str = ''
     aws_telemetry_test_device_ids: str = ''
 
+    reddit_enabled: bool = Field(default=True)
+    reddit_sync_interval_minutes: int = 30
+    youtube_api_key: Optional[str] = None
+    google_places_api_key: Optional[str] = None
+    google_places_id: Optional[str] = None  # Spider Grills place ID
+
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 30
     historical_start_date: str = "2024-01-01"
