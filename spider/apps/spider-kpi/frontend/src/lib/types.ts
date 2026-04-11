@@ -476,6 +476,8 @@ export interface CXMetricItem {
   owner: string
   current: number
   target: number
+  red_threshold?: number
+  critical_threshold?: number
   delta: number
   trend7d: number
   trend30d: number
@@ -485,6 +487,7 @@ export interface CXMetricItem {
   critical_immediate?: boolean
   consecutive_bad_days?: number
   consecutive_green_days?: number
+  inverse_good?: boolean  // true = lower is better (default), false = higher is better
   snapshot_timestamp: string
 }
 
