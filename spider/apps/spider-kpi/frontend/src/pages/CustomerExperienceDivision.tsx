@@ -323,13 +323,13 @@ export function CustomerExperienceDivision() {
                   </div>
                   <div className="venom-social-stat-item">
                     <small>Avg Sentiment</small>
-                    <strong>{socialPulse.avg_sentiment >= 0 ? '+' : ''}{socialPulse.avg_sentiment.toFixed(2)}</strong>
+                    <strong>{(socialPulse.avg_sentiment_score ?? 0) >= 0 ? '+' : ''}{(socialPulse.avg_sentiment_score ?? 0).toFixed(2)}</strong>
                   </div>
                 </div>
                 {socialPulse.top_mentions.length > 0 ? (
                   <div className="stack-list compact">
                     {socialPulse.top_mentions.slice(0, 5).map((mention) => (
-                      <div className={`list-item ${mention.sentiment === 'positive' ? 'status-good' : mention.sentiment === 'negative' ? 'status-bad' : 'status-warn'}`} key={mention.id}>
+                      <div className={`list-item ${mention.sentiment === 'positive' ? 'status-good' : mention.sentiment === 'negative' ? 'status-bad' : 'status-warn'}`} key={mention.external_id || mention.id}>
                         <div className="item-head">
                           <strong>{mention.title || 'Untitled mention'}</strong>
                           <div className="inline-badges">

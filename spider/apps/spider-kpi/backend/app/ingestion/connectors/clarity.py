@@ -109,13 +109,17 @@ def _compute_friction_score(
     script_error_pct: float,
     excessive_scroll_pct: float,
 ) -> float:
-    """Compute composite friction score 0-100."""
+    """Compute composite friction score 0-100.
+
+    Input percentages are 0-100 scale (e.g. 50 means 50%).
+    Weights sum to 1.0 so the output is also 0-100.
+    """
     score = (
-        dead_click_pct * 20
-        + rage_click_pct * 30
-        + quick_back_pct * 25
-        + script_error_pct * 15
-        + excessive_scroll_pct * 10
+        dead_click_pct * 0.20
+        + rage_click_pct * 0.30
+        + quick_back_pct * 0.25
+        + script_error_pct * 0.15
+        + excessive_scroll_pct * 0.10
     )
     return min(100.0, max(0.0, score))
 
