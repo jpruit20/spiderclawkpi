@@ -122,31 +122,35 @@ export function ProductEngineeringDivision() {
   const devices24h = collection?.active_devices_last_24h ?? 0
   const devices60m = collection?.active_devices_last_60m ?? 0
 
-  const fleetChartRows = useMemo(() => {
+  const rangedHistory = useMemo(() => {
     if (!historyDaily.length) return []
-    return historyDaily.map((row) => ({
+    const rangeDays: Record<TimeRange, number> = { '1h': 1, '24h': 1, '7d': 7, '30d': 30 }
+    const days = rangeDays[range] || 30
+    return historyDaily.slice(-days)
+  }, [historyDaily, range])
+
+  const fleetChartRows = useMemo(() => {
+    if (!rangedHistory.length) return []
+    return rangedHistory.map((row) => ({
       date: row.business_date.slice(5),
       active_devices: row.active_devices,
       engaged_devices: row.engaged_devices,
       error_rate: row.total_events > 0 ? Math.round((row.error_events / row.total_events) * 10000) / 100 : 0,
     }))
-  }, [historyDaily])
+  }, [rangedHistory])
 
-  const peakHourData = useMemo(() => buildPeakHours(historyDaily), [historyDaily])
-  const modelData = useMemo(() => buildModelBreakdown(historyDaily), [historyDaily])
-  const firmwareData = useMemo(() => buildFirmwareBreakdown(historyDaily), [historyDaily])
+  const peakHourData = useMemo(() => buildPeakHours(rangedHistory), [rangedHistory])
+  const modelData = useMemo(() => buildModelBreakdown(rangedHistory), [rangedHistory])
+  const firmwareData = useMemo(() => buildFirmwareBreakdown(rangedHistory), [rangedHistory])
 
   const historyStats = useMemo(() => {
-    if (!historyDaily.length) return null
-    const last30 = historyDaily.slice(-30)
-    const last7 = historyDaily.slice(-7)
-    const avgDevices30 = last30.reduce((s, r) => s + r.active_devices, 0) / (last30.length || 1)
-    const avgDevices7 = last7.reduce((s, r) => s + r.active_devices, 0) / (last7.length || 1)
-    const totalErrors30 = last30.reduce((s, r) => s + r.error_events, 0)
-    const totalEvents30 = last30.reduce((s, r) => s + r.total_events, 0)
-    const peakDay = last30.reduce((best, r) => r.active_devices > (best?.active_devices || 0) ? r : best, last30[0])
-    return { avgDevices30, avgDevices7, totalErrors30, totalEvents30, errorRate30: totalEvents30 > 0 ? totalErrors30 / totalEvents30 : 0, peakDay }
-  }, [historyDaily])
+    if (!rangedHistory.length) return null
+    const avgDevices = rangedHistory.reduce((s, r) => s + r.active_devices, 0) / rangedHistory.length
+    const totalErrors = rangedHistory.reduce((s, r) => s + r.error_events, 0)
+    const totalEvents = rangedHistory.reduce((s, r) => s + r.total_events, 0)
+    const peakDay = rangedHistory.reduce((best, r) => r.active_devices > (best?.active_devices || 0) ? r : best, rangedHistory[0])
+    return { avgDevices30: avgDevices, avgDevices7: avgDevices, totalErrors30: totalErrors, totalEvents30: totalEvents, errorRate30: totalEvents > 0 ? totalErrors / totalEvents : 0, peakDay }
+  }, [rangedHistory])
 
   return (
     <div className="page-grid venom-page">
