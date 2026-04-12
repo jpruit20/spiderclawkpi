@@ -301,6 +301,195 @@ export function CustomerExperienceDivision() {
       }))
   }, [frictionData, tickets])
 
+  /* ─── NEW IMPROVEMENTS ─── */
+
+  /* 1. First Contact Resolution (FCR) Rate */
+  const fcrMetrics = useMemo(() => {
+    if (tickets.length === 0) return { rate: 0, resolved: 0, total: 0, noReopen: 0, noEscalation: 0 }
+    const resolvedTickets = tickets.filter((t) => t.resolved_at_source)
+    let noReopenCount = 0
+    let noEscalationCount = 0
+    resolvedTickets.forEach((ticket) => {
+      const tags = (ticket.tags_json || []).map((t) => String(t)).join(' ').toLowerCase()
+      const hasReopen = tags.includes('reopen') || tags.includes('re-open')
+      const hasEscalation = tags.includes('escalat') || ticket.priority === 'urgent'
+      if (!hasReopen) noReopenCount += 1
+      if (!hasEscalation) noEscalationCount += 1
+    })
+    const fcrCount = resolvedTickets.filter((ticket) => {
+      const tags = (ticket.tags_json || []).map((t) => String(t)).join(' ').toLowerCase()
+      return !tags.includes('reopen') && !tags.includes('re-open') && !tags.includes('escalat')
+    }).length
+    return {
+      rate: resolvedTickets.length > 0 ? (fcrCount / resolvedTickets.length) * 100 : 0,
+      resolved: resolvedTickets.length,
+      total: tickets.length,
+      noReopen: noReopenCount,
+      noEscalation: noEscalationCount,
+      fcrCount,
+    }
+  }, [tickets])
+
+  /* 2. Peak Hour Analysis */
+  const peakHourAnalysis = useMemo(() => {
+    const hourBuckets: { hour: number; created: number; resolved: number }[] = Array.from({ length: 24 }, (_, i) => ({
+      hour: i,
+      created: 0,
+      resolved: 0,
+    }))
+    const dayBuckets: { day: string; created: number; resolved: number }[] = [
+      { day: 'Sun', created: 0, resolved: 0 },
+      { day: 'Mon', created: 0, resolved: 0 },
+      { day: 'Tue', created: 0, resolved: 0 },
+      { day: 'Wed', created: 0, resolved: 0 },
+      { day: 'Thu', created: 0, resolved: 0 },
+      { day: 'Fri', created: 0, resolved: 0 },
+      { day: 'Sat', created: 0, resolved: 0 },
+    ]
+    tickets.forEach((ticket) => {
+      const created = ticket.created_at_source ? new Date(ticket.created_at_source) : null
+      if (created && !isNaN(created.getTime())) {
+        const hour = created.getHours()
+        const dayOfWeek = created.getDay()
+        hourBuckets[hour].created += 1
+        dayBuckets[dayOfWeek].created += 1
+      }
+      const resolved = ticket.resolved_at_source ? new Date(ticket.resolved_at_source) : null
+      if (resolved && !isNaN(resolved.getTime())) {
+        const hour = resolved.getHours()
+        const dayOfWeek = resolved.getDay()
+        hourBuckets[hour].resolved += 1
+        dayBuckets[dayOfWeek].resolved += 1
+      }
+    })
+    const peakCreationHour = hourBuckets.reduce((max, h) => h.created > max.created ? h : max, hourBuckets[0])
+    const peakResolutionHour = hourBuckets.reduce((max, h) => h.resolved > max.resolved ? h : max, hourBuckets[0])
+    const peakCreationDay = dayBuckets.reduce((max, d) => d.created > max.created ? d : max, dayBuckets[0])
+    return { hourBuckets, dayBuckets, peakCreationHour, peakResolutionHour, peakCreationDay }
+  }, [tickets])
+
+  /* 3. Week-over-Week Comparison */
+  const [showWoWComparison, setShowWoWComparison] = useState(false)
+  const weekOverWeekComparison = useMemo(() => {
+    const supportRows = (supportOverview?.rows || []) as KPIDaily[]
+    if (supportRows.length < 14) return null
+    const thisWeek = supportRows.slice(-7)
+    const lastWeek = supportRows.slice(-14, -7)
+    const sumMetric = (rows: KPIDaily[], key: keyof KPIDaily) => rows.reduce((sum, r) => sum + (Number(r[key]) || 0), 0)
+    const avgMetric = (rows: KPIDaily[], key: keyof KPIDaily) => {
+      const vals = rows.map(r => Number(r[key]) || 0).filter(v => v > 0)
+      return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+    }
+    return {
+      thisWeek: {
+        ticketsCreated: sumMetric(thisWeek, 'tickets_created'),
+        ticketsResolved: sumMetric(thisWeek, 'tickets_resolved'),
+        avgBacklog: avgMetric(thisWeek, 'open_backlog'),
+        avgCsat: avgMetric(thisWeek, 'csat'),
+        avgResponseTime: avgMetric(thisWeek, 'first_response_time'),
+      },
+      lastWeek: {
+        ticketsCreated: sumMetric(lastWeek, 'tickets_created'),
+        ticketsResolved: sumMetric(lastWeek, 'tickets_resolved'),
+        avgBacklog: avgMetric(lastWeek, 'open_backlog'),
+        avgCsat: avgMetric(lastWeek, 'csat'),
+        avgResponseTime: avgMetric(lastWeek, 'first_response_time'),
+      },
+    }
+  }, [supportOverview])
+
+  /* 4. Theme Trend Heatmap */
+  const themeTrendData = useMemo(() => {
+    if (!frictionData?.trend_heatmap) return []
+    return frictionData.trend_heatmap.slice(0, 6).map((theme) => ({
+      theme: theme.theme,
+      points: theme.points.slice(-7),
+      total: theme.points.reduce((sum, p) => sum + p.count, 0),
+      trend: theme.points.length >= 2
+        ? ((theme.points[theme.points.length - 1].count - theme.points[0].count) / Math.max(theme.points[0].count, 1)) * 100
+        : 0,
+    }))
+  }, [frictionData])
+
+  /* 5. At-Risk Ticket Predictor */
+  const atRiskTickets = useMemo(() => {
+    const now = new Date()
+    const openTickets = tickets.filter((t) => !t.resolved_at_source)
+    return openTickets
+      .map((ticket) => {
+        const created = ticket.created_at_source ? new Date(ticket.created_at_source) : null
+        const ageHours = created && !isNaN(created.getTime()) ? (now.getTime() - created.getTime()) / (1000 * 60 * 60) : 0
+        const responseHours = ticket.first_response_hours || 0
+        const priority = ticket.priority || 'low'
+        const tags = (ticket.tags_json || []).map((t) => String(t)).join(' ').toLowerCase()
+        const hasEscalation = tags.includes('escalat') || priority === 'urgent'
+        const hasComplaint = tags.includes('complaint') || tags.includes('angry') || tags.includes('frustrated')
+        // Risk score calculation
+        let riskScore = 0
+        if (ageHours > 48) riskScore += 40
+        else if (ageHours > 24) riskScore += 25
+        else if (ageHours > 12) riskScore += 10
+        if (responseHours > 8) riskScore += 30
+        else if (responseHours > 4) riskScore += 15
+        if (hasEscalation) riskScore += 20
+        if (hasComplaint) riskScore += 15
+        if (priority === 'urgent') riskScore += 20
+        else if (priority === 'high') riskScore += 10
+        return {
+          id: ticket.ticket_id,
+          subject: ticket.subject || 'Untitled',
+          ageHours,
+          responseHours,
+          riskScore,
+          riskLevel: riskScore >= 60 ? 'high' : riskScore >= 35 ? 'medium' : 'low',
+          factors: [
+            ageHours > 24 ? `Aging ${Math.round(ageHours)}h` : null,
+            responseHours > 4 ? `Slow response ${responseHours.toFixed(1)}h` : null,
+            hasEscalation ? 'Escalated' : null,
+            hasComplaint ? 'Customer complaint' : null,
+          ].filter(Boolean),
+        }
+      })
+      .filter((t) => t.riskScore >= 35)
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 5)
+  }, [tickets])
+
+  /* 6. Repeat Contact Analysis */
+  const repeatContacts = useMemo(() => {
+    const now = new Date()
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const recentTickets = tickets.filter((t) => {
+      const created = t.created_at_source ? new Date(t.created_at_source) : null
+      return created && !isNaN(created.getTime()) && created >= thirtyDaysAgo
+    })
+    const customerMap = new Map<string, { customerId: string; count: number; tickets: typeof recentTickets }>()
+    recentTickets.forEach((ticket) => {
+      // Use requester_id or extract email from raw_payload if available
+      const rawPayload = ticket.raw_payload as Record<string, unknown> | undefined
+      const email = (rawPayload?.requester_email as string) || (rawPayload?.email as string) || null
+      const customerId = email || ticket.requester_id || 'unknown'
+      if (customerId === 'unknown') return
+      if (!customerMap.has(customerId)) customerMap.set(customerId, { customerId, count: 0, tickets: [] })
+      const entry = customerMap.get(customerId)!
+      entry.count += 1
+      entry.tickets.push(ticket)
+    })
+    return Array.from(customerMap.values())
+      .filter((c) => c.count >= 3)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+      .map((c) => ({
+        customerId: c.customerId,
+        count: c.count,
+        latestSubject: c.tickets[0]?.subject || 'Unknown',
+        avgCsat: c.tickets.filter(t => t.csat_score && t.csat_score > 0).length > 0
+          ? c.tickets.filter(t => t.csat_score && t.csat_score > 0).reduce((sum, t) => sum + (t.csat_score || 0), 0) /
+            c.tickets.filter(t => t.csat_score && t.csat_score > 0).length
+          : null,
+      }))
+  }, [tickets])
+
   /* Map header_metrics -> KpiCardDef[] */
   const kpiCards: KpiCardDef[] = headerMetrics.map((m) => ({
     label: m.label,
@@ -667,6 +856,290 @@ export function CustomerExperienceDivision() {
               {!channelBreakdown.length ? <div className="state-message">No channel data available</div> : null}
             </div>
           </section>
+
+          {/* ─── NEW IMPROVEMENT WIDGETS ─── */}
+
+          {/* First Contact Resolution (FCR) Rate */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>First Contact Resolution (FCR)</strong>
+              <span className="venom-panel-hint">Tickets resolved without reopens or escalations</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', padding: '1rem' }}>
+              <div style={{ textAlign: 'center', padding: '1rem', background: 'rgba(57, 208, 143, 0.1)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '2rem', fontWeight: 700, color: fcrMetrics.rate >= 80 ? 'var(--green)' : fcrMetrics.rate >= 60 ? 'var(--orange)' : 'var(--red)' }}>
+                  {fcrMetrics.rate.toFixed(1)}%
+                </div>
+                <small>FCR Rate</small>
+              </div>
+              <div style={{ textAlign: 'center', padding: '1rem', background: 'rgba(110, 168, 255, 0.1)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{fcrMetrics.fcrCount || 0}</div>
+                <small>First-Contact Resolved</small>
+              </div>
+              <div style={{ textAlign: 'center', padding: '1rem', background: 'rgba(159, 176, 212, 0.1)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{fcrMetrics.noReopen}</div>
+                <small>No Reopens</small>
+              </div>
+              <div style={{ textAlign: 'center', padding: '1rem', background: 'rgba(159, 176, 212, 0.1)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{fcrMetrics.noEscalation}</div>
+                <small>No Escalations</small>
+              </div>
+            </div>
+          </section>
+
+          {/* Week-over-Week Comparison */}
+          {weekOverWeekComparison ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Week-over-Week Comparison</strong>
+                <button
+                  onClick={() => setShowWoWComparison(!showWoWComparison)}
+                  className="badge badge-neutral"
+                  style={{ cursor: 'pointer', border: 'none' }}
+                >
+                  {showWoWComparison ? 'Hide' : 'Show'} Details
+                </button>
+              </div>
+              {showWoWComparison ? (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Metric</th>
+                        <th>This Week</th>
+                        <th>Last Week</th>
+                        <th>Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { label: 'Tickets Created', thisWeek: weekOverWeekComparison.thisWeek.ticketsCreated, lastWeek: weekOverWeekComparison.lastWeek.ticketsCreated, format: 'int', lowerBetter: true },
+                        { label: 'Tickets Resolved', thisWeek: weekOverWeekComparison.thisWeek.ticketsResolved, lastWeek: weekOverWeekComparison.lastWeek.ticketsResolved, format: 'int', lowerBetter: false },
+                        { label: 'Avg Backlog', thisWeek: weekOverWeekComparison.thisWeek.avgBacklog, lastWeek: weekOverWeekComparison.lastWeek.avgBacklog, format: 'dec', lowerBetter: true },
+                        { label: 'Avg CSAT', thisWeek: weekOverWeekComparison.thisWeek.avgCsat, lastWeek: weekOverWeekComparison.lastWeek.avgCsat, format: 'dec', lowerBetter: false },
+                        { label: 'Avg Response Time', thisWeek: weekOverWeekComparison.thisWeek.avgResponseTime, lastWeek: weekOverWeekComparison.lastWeek.avgResponseTime, format: 'hrs', lowerBetter: true },
+                      ].map((row) => {
+                        const change = row.lastWeek > 0 ? ((row.thisWeek - row.lastWeek) / row.lastWeek) * 100 : 0
+                        const isImproved = row.lowerBetter ? change < 0 : change > 0
+                        return (
+                          <tr key={row.label}>
+                            <td><strong>{row.label}</strong></td>
+                            <td>{row.format === 'int' ? Math.round(row.thisWeek) : row.format === 'hrs' ? `${row.thisWeek.toFixed(1)}h` : row.thisWeek.toFixed(1)}</td>
+                            <td>{row.format === 'int' ? Math.round(row.lastWeek) : row.format === 'hrs' ? `${row.lastWeek.toFixed(1)}h` : row.lastWeek.toFixed(1)}</td>
+                            <td>
+                              <span className={`badge ${isImproved ? 'badge-good' : Math.abs(change) < 5 ? 'badge-neutral' : 'badge-bad'}`}>
+                                {change > 0 ? '+' : ''}{change.toFixed(1)}%
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', padding: '1rem' }}>
+                  {(() => {
+                    const csatChange = weekOverWeekComparison.lastWeek.avgCsat > 0
+                      ? ((weekOverWeekComparison.thisWeek.avgCsat - weekOverWeekComparison.lastWeek.avgCsat) / weekOverWeekComparison.lastWeek.avgCsat) * 100
+                      : 0
+                    const backlogChange = weekOverWeekComparison.lastWeek.avgBacklog > 0
+                      ? ((weekOverWeekComparison.thisWeek.avgBacklog - weekOverWeekComparison.lastWeek.avgBacklog) / weekOverWeekComparison.lastWeek.avgBacklog) * 100
+                      : 0
+                    const responseChange = weekOverWeekComparison.lastWeek.avgResponseTime > 0
+                      ? ((weekOverWeekComparison.thisWeek.avgResponseTime - weekOverWeekComparison.lastWeek.avgResponseTime) / weekOverWeekComparison.lastWeek.avgResponseTime) * 100
+                      : 0
+                    return (
+                      <>
+                        <div style={{ textAlign: 'center', padding: '0.75rem', background: csatChange >= 0 ? 'rgba(57, 208, 143, 0.1)' : 'rgba(255, 109, 122, 0.1)', borderRadius: '8px' }}>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{csatChange >= 0 ? '+' : ''}{csatChange.toFixed(1)}%</div>
+                          <small>CSAT vs Last Week</small>
+                        </div>
+                        <div style={{ textAlign: 'center', padding: '0.75rem', background: backlogChange <= 0 ? 'rgba(57, 208, 143, 0.1)' : 'rgba(255, 109, 122, 0.1)', borderRadius: '8px' }}>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{backlogChange >= 0 ? '+' : ''}{backlogChange.toFixed(1)}%</div>
+                          <small>Backlog vs Last Week</small>
+                        </div>
+                        <div style={{ textAlign: 'center', padding: '0.75rem', background: responseChange <= 0 ? 'rgba(57, 208, 143, 0.1)' : 'rgba(255, 109, 122, 0.1)', borderRadius: '8px' }}>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{responseChange >= 0 ? '+' : ''}{responseChange.toFixed(1)}%</div>
+                          <small>Response Time vs Last Week</small>
+                        </div>
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {/* Peak Hour Analysis */}
+          <div className="two-col two-col-equal">
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Peak Hour Analysis</strong>
+                <span className="venom-panel-hint">Ticket volume by hour of day</span>
+              </div>
+              <ResponsiveContainer width="100%" height={100}>
+                <BarChart data={peakHourAnalysis.hourBuckets.filter((_, i) => i >= 6 && i <= 22)}>
+                  <XAxis dataKey="hour" tick={{ fill: '#9fb0d4', fontSize: 10 }} tickFormatter={(h) => `${h}:00`} />
+                  <Tooltip formatter={(value: number, name: string) => [value, name === 'created' ? 'Created' : 'Resolved']} labelFormatter={(h) => `${h}:00`} />
+                  <Bar dataKey="created" fill="var(--orange)" name="created" />
+                  <Bar dataKey="resolved" fill="var(--green)" name="resolved" />
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{ display: 'flex', justifyContent: 'space-around', padding: '0.5rem', fontSize: '0.85rem' }}>
+                <span>Peak creation: <strong>{peakHourAnalysis.peakCreationHour.hour}:00</strong> ({peakHourAnalysis.peakCreationHour.created})</span>
+                <span>Peak resolution: <strong>{peakHourAnalysis.peakResolutionHour.hour}:00</strong> ({peakHourAnalysis.peakResolutionHour.resolved})</span>
+              </div>
+            </section>
+
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Day of Week Distribution</strong>
+                <span className="venom-panel-hint">Busiest day: {peakHourAnalysis.peakCreationDay.day}</span>
+              </div>
+              <ResponsiveContainer width="100%" height={100}>
+                <BarChart data={peakHourAnalysis.dayBuckets}>
+                  <XAxis dataKey="day" tick={{ fill: '#9fb0d4', fontSize: 11 }} />
+                  <Tooltip formatter={(value: number, name: string) => [value, name === 'created' ? 'Created' : 'Resolved']} />
+                  <Bar dataKey="created" fill="var(--orange)" name="created" />
+                  <Bar dataKey="resolved" fill="var(--green)" name="resolved" />
+                </BarChart>
+              </ResponsiveContainer>
+            </section>
+          </div>
+
+          {/* Theme Trend Heatmap */}
+          {themeTrendData.length > 0 ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Theme Trend Heatmap</strong>
+                <span className="venom-panel-hint">Ticket themes over the last 7 days</span>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Theme</th>
+                      <th style={{ textAlign: 'center' }}>7-Day Trend</th>
+                      <th>Total</th>
+                      <th>Change</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {themeTrendData.map((theme) => (
+                      <tr key={theme.theme}>
+                        <td><strong style={{ textTransform: 'capitalize' }}>{theme.theme}</strong></td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '2px', justifyContent: 'center' }}>
+                            {theme.points.map((pt, idx) => {
+                              const max = Math.max(...theme.points.map(p => p.count), 1)
+                              const intensity = pt.count / max
+                              return (
+                                <div
+                                  key={idx}
+                                  title={`${pt.business_date}: ${pt.count}`}
+                                  style={{
+                                    width: '20px',
+                                    height: '20px',
+                                    borderRadius: '3px',
+                                    background: `rgba(110, 168, 255, ${0.2 + intensity * 0.8})`,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '0.65rem',
+                                    color: intensity > 0.5 ? '#fff' : '#9fb0d4',
+                                  }}
+                                >
+                                  {pt.count}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </td>
+                        <td>{theme.total}</td>
+                        <td>
+                          <span className={`badge ${theme.trend > 10 ? 'badge-bad' : theme.trend < -10 ? 'badge-good' : 'badge-neutral'}`}>
+                            {theme.trend > 0 ? '+' : ''}{theme.trend.toFixed(0)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+
+          {/* At-Risk Ticket Predictor */}
+          {atRiskTickets.length > 0 ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>At-Risk Tickets</strong>
+                <span className="badge badge-bad">{atRiskTickets.length} tickets need attention</span>
+              </div>
+              <div className="stack-list compact">
+                {atRiskTickets.map((ticket) => (
+                  <div className={`list-item ${ticket.riskLevel === 'high' ? 'status-bad' : 'status-warn'}`} key={ticket.id}>
+                    <div className="item-head">
+                      <strong>#{ticket.id}: {ticket.subject}</strong>
+                      <div className="inline-badges">
+                        <span className={`badge ${ticket.riskLevel === 'high' ? 'badge-bad' : 'badge-warn'}`}>
+                          Risk: {ticket.riskScore}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="inline-badges" style={{ marginTop: '0.25rem' }}>
+                      {ticket.factors.map((factor, idx) => (
+                        <span className="badge badge-neutral" key={idx}>{factor}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {/* Repeat Contact Analysis */}
+          {repeatContacts.length > 0 ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Repeat Contacts (Churn Risk)</strong>
+                <span className="venom-panel-hint">Customers with 3+ tickets in 30 days</span>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Tickets (30d)</th>
+                      <th>Latest Issue</th>
+                      <th>Avg CSAT</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {repeatContacts.map((customer) => (
+                      <tr key={customer.customerId}>
+                        <td><strong>{customer.customerId.length > 25 ? customer.customerId.slice(0, 22) + '...' : customer.customerId}</strong></td>
+                        <td>
+                          <span className={`badge ${customer.count >= 5 ? 'badge-bad' : 'badge-warn'}`}>
+                            {customer.count} tickets
+                          </span>
+                        </td>
+                        <td>{customer.latestSubject.length > 30 ? customer.latestSubject.slice(0, 27) + '...' : customer.latestSubject}</td>
+                        <td>
+                          {customer.avgCsat !== null ? (
+                            <span className={`badge ${customer.avgCsat >= 4 ? 'badge-good' : customer.avgCsat >= 3 ? 'badge-warn' : 'badge-bad'}`}>
+                              {customer.avgCsat.toFixed(1)}
+                            </span>
+                          ) : <span className="badge badge-muted">N/A</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
 
           {/* Social Listening — Brand Pulse */}
           <section className="card">
