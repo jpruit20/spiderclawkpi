@@ -10,6 +10,7 @@
   --green: #39d08f;
   --orange: #ffb257;
   --red: #ff6d7a;
+  --warning-bg: rgba(255, 178, 87, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -357,6 +358,11 @@ a { color: inherit; }
 .trust-banner-degraded {
   border-color: rgba(255, 109, 122, 0.32);
   background: rgba(255, 109, 122, 0.07);
+}
+
+.trust-banner-warn {
+  border-color: rgba(255, 178, 87, 0.32);
+  background: rgba(255, 178, 87, 0.07);
 }
 
 .intraday-banner {
@@ -1092,6 +1098,16 @@ th {
   font-size: 38px;
   font-weight: 800;
   line-height: 1.1;
+}
+
+.venom-kpi-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.venom-sparkline {
+  opacity: 0.9;
 }
 
 .venom-kpi-sub {
