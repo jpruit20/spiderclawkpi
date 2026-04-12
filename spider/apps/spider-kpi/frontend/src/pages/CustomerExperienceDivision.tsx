@@ -192,8 +192,9 @@ export function CustomerExperienceDivision() {
     const openTickets = tickets.filter((t) => !t.resolved_at_source)
     openTickets.forEach((ticket) => {
       const created = ticket.created_at_source ? new Date(ticket.created_at_source) : null
-      if (!created) return
+      if (!created || isNaN(created.getTime())) return
       const ageDays = Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24))
+      if (ageDays < 0) return // Future dates are invalid
       for (let i = 0; i < buckets.length; i++) {
         if (ageDays <= buckets[i].maxDays || i === buckets.length - 1) {
           buckets[i].count += 1
@@ -212,8 +213,9 @@ export function CustomerExperienceDivision() {
     const openTickets = tickets.filter((t) => !t.resolved_at_source)
     openTickets.forEach((ticket) => {
       const created = ticket.created_at_source ? new Date(ticket.created_at_source) : null
-      if (!created) return
+      if (!created || isNaN(created.getTime())) return
       const ageHours = (now.getTime() - created.getTime()) / (1000 * 60 * 60)
+      if (ageHours < 0) return // Future dates are invalid
       const hoursUntilBreach = SLA_HOURS - ageHours
       if (hoursUntilBreach <= 0) countdowns.breached += 1
       else if (hoursUntilBreach <= 2) countdowns.in2h += 1
@@ -250,7 +252,8 @@ export function CustomerExperienceDivision() {
       reopens: number
     }>()
     tickets.forEach((ticket) => {
-      const agent = (ticket.raw_payload as Record<string, unknown>)?.responder_name as string || ticket.agent_id || 'Unassigned'
+      const rawResponder = (ticket.raw_payload as Record<string, unknown>)?.responder_name
+      const agent = (typeof rawResponder === 'string' ? rawResponder : null) || ticket.agent_id || 'Unassigned'
       if (!agentMap.has(agent)) {
         agentMap.set(agent, { name: agent, tickets: 0, resolved: 0, csat: [], responseTime: [], reopens: 0 })
       }
@@ -259,7 +262,7 @@ export function CustomerExperienceDivision() {
       if (ticket.resolved_at_source) row.resolved += 1
       if (ticket.csat_score && ticket.csat_score > 0) row.csat.push(ticket.csat_score)
       if (ticket.first_response_hours && ticket.first_response_hours > 0) row.responseTime.push(ticket.first_response_hours)
-      const tags = (ticket.tags_json || []).join(' ').toLowerCase()
+      const tags = (ticket.tags_json || []).map((t) => String(t)).join(' ').toLowerCase()
       if (tags.includes('reopen') || tags.includes('re-open')) row.reopens += 1
     })
     return Array.from(agentMap.values())
@@ -525,8 +528,9 @@ export function CustomerExperienceDivision() {
             const supportRows = (supportOverview?.rows || []) as KPIDaily[]
             const last7Support = supportRows.slice(-7)
             if (last7Support.length === 0) return null
-            const backlogData = last7Support.map((r) => ({ date: r.business_date?.slice(5) || '', backlog: Number(r.open_backlog) || 0 }))
-            const csatData = last7Support.map((r) => ({ date: r.business_date?.slice(5) || '', csat: Number(r.csat) || 0 }))
+            const formatDate = (d?: string) => (d && d.length >= 10 ? d.slice(5) : d || '')
+            const backlogData = last7Support.map((r) => ({ date: formatDate(r.business_date), backlog: Number(r.open_backlog) || 0 }))
+            const csatData = last7Support.map((r) => ({ date: formatDate(r.business_date), csat: Number(r.csat) || 0 }))
             return (
               <div className="two-col two-col-equal">
                 <section className="card">
