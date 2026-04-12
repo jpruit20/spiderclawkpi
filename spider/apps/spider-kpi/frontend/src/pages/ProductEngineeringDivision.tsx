@@ -6,7 +6,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
-import { TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
+import { GithubIssuesResponse, TelemetryHistoryDailyRow, TelemetrySummary } from '../lib/types'
 import {
   BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart,
 } from 'recharts'
@@ -69,6 +69,7 @@ function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
 
 export function ProductEngineeringDivision() {
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
+  const [githubIssues, setGithubIssues] = useState<GithubIssuesResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<TimeRange>('24h')
@@ -81,9 +82,13 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const payload = await api.telemetrySummary()
+        const [telemetryData, issuesData] = await Promise.all([
+          api.telemetrySummary(),
+          api.engineeringIssues().catch(() => null),
+        ])
         if (!cancelled) {
-          setTelemetry(payload)
+          setTelemetry(telemetryData)
+          setGithubIssues(issuesData)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load telemetry summary')
@@ -477,6 +482,56 @@ export function ProductEngineeringDivision() {
               </div>
             </section>
           </div>
+
+          {/* P0/P1 Engineering Issues */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>P0/P1 Engineering Issues</strong>
+              {githubIssues?.repo ? (
+                <a href={`https://github.com/${githubIssues.repo}/issues`} target="_blank" rel="noopener noreferrer" className="analysis-link">
+                  View all &#x2197;
+                </a>
+              ) : null}
+            </div>
+            {githubIssues?.error ? (
+              <div className="state-message warn">{githubIssues.error}</div>
+            ) : githubIssues?.issues && githubIssues.issues.length > 0 ? (
+              <div className="stack-list compact">
+                {githubIssues.issues.map((issue) => (
+                  <a
+                    key={issue.id}
+                    href={issue.html_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`list-item status-${issue.priority === 'P0' ? 'bad' : issue.priority === 'P1' ? 'warn' : 'muted'}`}
+                    style={{ textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <div className="item-head">
+                      <strong>#{issue.number} {issue.title}</strong>
+                      <div className="inline-badges">
+                        {issue.priority ? <span className={`badge ${issue.priority === 'P0' ? 'badge-bad' : 'badge-warn'}`}>{issue.priority}</span> : null}
+                        {issue.is_bug ? <span className="badge badge-neutral">bug</span> : null}
+                      </div>
+                    </div>
+                    <p>
+                      {issue.assignees.length > 0 ? `Assigned to ${issue.assignees.join(', ')}` : 'Unassigned'}
+                      {' · '}
+                      Updated {formatFreshness(issue.updated_at)}
+                    </p>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="state-message">
+                {githubIssues?.configured === false
+                  ? 'GitHub integration not configured. Set GITHUB_TOKEN to enable.'
+                  : 'No P0/P1 issues found'}
+              </div>
+            )}
+            {githubIssues?.total_count ? (
+              <small className="venom-panel-footer">{githubIssues.total_count} open issues · {githubIssues.repo}</small>
+            ) : null}
+          </section>
 
           {/* Drill-down routes */}
           <section className="card">

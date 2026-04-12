@@ -583,3 +583,27 @@ export interface SocialTrendsResponse {
   competitor_mentions: Record<string, number>
   product_mentions: Record<string, number>
 }
+
+export interface GithubIssue {
+  id: number
+  number: number
+  title: string
+  state: string
+  html_url: string
+  labels: string[]
+  created_at: string
+  updated_at: string
+  user: string | null
+  assignees: string[]
+  priority: string | null
+  is_bug: boolean
+}
+
+export interface GithubIssuesResponse {
+  issues: GithubIssue[]
+  total_count: number
+  configured: boolean
+  repo?: string
+  fetched_at?: string
+  error?: string
+}
