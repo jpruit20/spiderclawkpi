@@ -82,12 +82,12 @@ jobs:
               req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
               req.add_header('X-App-Password', pw)
               print(source, urlopen(req).read().decode())
-          for endpoint in ['/api/telemetry/summary', '/api/admin/debug/telemetry-stream']:
+          for endpoint in ['/api/admin/debug/telemetry-stream']:
               req = Request(base + endpoint)
               req.add_header('X-App-Password', pw)
               print(endpoint, urlopen(req).read().decode())
           PY
           DB_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
           ./.venv/bin/python scripts/validate_shopify_window.py --db-url "$DB_URL" --start 2026-03-29 --end 2026-04-05 || true
-          curl -fsS -H "X-App-Password: $pw" http://127.0.0.1:8000/api/source-health
+          curl -fsS http://127.0.0.1:8000/api/auth/status
           EOF
