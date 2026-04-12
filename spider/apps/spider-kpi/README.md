@@ -136,14 +136,15 @@ Production deploys from `master`.
 
 For Claude-authored KPI updates, the repo now supports an auto-promotion path:
 - push the KPI change to a branch matching `claude/**`
-- if the change touches `apps/spider-kpi/**`, GitHub Actions runs frontend build validation and backend import validation
-- the workflow auto-creates or reuses a PR from that Claude branch into `master`
-- if validation passes, the workflow auto-merges into `master`
-- deploy then runs from either:
-  - a normal `push` to `master`, or
-  - a successful completion of `Auto-promote Claude KPI branches`
+- if the change touches `spider/apps/spider-kpi/**`, GitHub Actions runs frontend build validation and backend import validation
+- if validation passes, the live root workflow `.github/workflows/claude-kpi-auto-promote.yml` merges that Claude branch directly into `master`
+- the same workflow then deploys the KPI backend on the droplet and runs post-deploy sync + validation
 
-This closes the GitHub Actions token handoff gap where an action-driven merge to `master` may not reliably trigger a second workflow via the usual `push` event alone.
+Important repo-layout note:
+- the authoritative live automation files are the repo-root workflows under `.github/workflows/`
+- any duplicate copies under `spider/.github/workflows/` are non-authoritative local leftovers and should not be used as source of truth
+
+This avoids the GitHub Actions PR-permission failure mode (`createPullRequest`) and removes the need to rely on a second downstream workflow firing after an action-authored merge.
 
 ## Notes
 
