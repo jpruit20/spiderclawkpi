@@ -18,6 +18,23 @@ interface CustomRange {
   end: Date
 }
 
+// Convert time range to days for API - moved outside component to avoid recreation
+function rangeToDays(r: TimeRange, custom: CustomRange): number {
+  if (r === 'custom') {
+    const diffMs = custom.end.getTime() - custom.start.getTime()
+    return Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
+  }
+  const mapping: Record<Exclude<TimeRange, 'custom'>, number> = {
+    '1h': 1,
+    '12h': 1,
+    '24h': 1,
+    '1w': 7,
+    '2w': 14,
+    '1m': 30
+  }
+  return mapping[r] ?? 30
+}
+
 const DRILL_ROUTES: { path: string; label: string; icon: string }[] = [
   { path: '/analysis/cook-failures', label: 'Cook failures', icon: '\ud83d\udd25' },
   { path: '/analysis/temp-curves', label: 'Temp curves', icon: '\ud83d\udcc8' },
@@ -75,23 +92,7 @@ export function ProductEngineeringDivision() {
   const [range, setRange] = useState<TimeRange>('24h')
   const [customRange, setCustomRange] = useState<CustomRange>({ start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), end: new Date() })
   const [showCustomPicker, setShowCustomPicker] = useState(false)
-
-  // Convert time range to days for API
-  const rangeToDays = (r: TimeRange, custom: CustomRange): number => {
-    if (r === 'custom') {
-      const diffMs = custom.end.getTime() - custom.start.getTime()
-      return Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
-    }
-    const mapping: Record<Exclude<TimeRange, 'custom'>, number> = {
-      '1h': 1,
-      '12h': 1,
-      '24h': 1,
-      '1w': 7,
-      '2w': 14,
-      '1m': 30
-    }
-    return mapping[r] || 30
-  }
+  const [dataVersion, setDataVersion] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -107,6 +108,7 @@ export function ProductEngineeringDivision() {
         if (!cancelled) {
           setTelemetry(telemetryData)
           setGithubIssues(issuesData)
+          setDataVersion(v => v + 1)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load telemetry summary')
@@ -297,12 +299,15 @@ export function ProductEngineeringDivision() {
             <div className="venom-panel-head">
               <div>
                 <strong>Fleet Activity — Daily Active Devices</strong>
-                <p className="venom-chart-sub">Unique Venom controllers reporting each day across Huntsman, Giant Huntsman, and Weber Kettle grills</p>
+                <p className="venom-chart-sub">
+                  Showing {rangedHistory.length} day{rangedHistory.length !== 1 ? 's' : ''} of data
+                  {range !== 'custom' ? ` (${range === '1h' || range === '12h' || range === '24h' ? '24h' : range === '1w' ? '7d' : range === '2w' ? '14d' : '30d'} range)` : ''}
+                </p>
               </div>
               {historyStats?.peakDay ? <span className="venom-panel-hint">Peak: {historyStats.peakDay.active_devices} devices on {historyStats.peakDay.business_date}</span> : null}
             </div>
             {fleetChartRows.length > 0 ? (
-              <div className="chart-wrap">
+              <div className="chart-wrap" key={`fleet-chart-${range}-${dataVersion}`}>
                 <ResponsiveContainer width="100%" height={320}>
                   <ComposedChart data={fleetChartRows}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" />
@@ -405,10 +410,10 @@ export function ProductEngineeringDivision() {
             <section className="card">
               <div className="venom-panel-head">
                 <strong>Peak cooking hours</strong>
-                <span className="venom-panel-hint">When users cook most (all-time)</span>
+                <span className="venom-panel-hint">Selected range ({rangedHistory.length} days)</span>
               </div>
               {peakHourData.some((r) => r.events > 0) ? (
-                <div className="chart-wrap-short">
+                <div className="chart-wrap-short" key={`peak-${range}-${dataVersion}`}>
                   <ResponsiveContainer width="100%" height={240}>
                     <BarChart data={peakHourData}>
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" />
@@ -425,10 +430,10 @@ export function ProductEngineeringDivision() {
             <section className="card">
               <div className="venom-panel-head">
                 <strong>Grill model mix</strong>
-                <span className="venom-panel-hint">Last 30 days</span>
+                <span className="venom-panel-hint">Selected range ({rangedHistory.length} days)</span>
               </div>
               {modelData.length > 0 ? (
-                <div className="chart-wrap-short">
+                <div className="chart-wrap-short" key={`model-${range}-${dataVersion}`}>
                   <ResponsiveContainer width="100%" height={240}>
                     <BarChart data={modelData} layout="vertical">
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" />
@@ -451,7 +456,7 @@ export function ProductEngineeringDivision() {
                 <Link to="/analysis/firmware-model" className="analysis-link">Details &#x2197;</Link>
               </div>
               {firmwareData.length > 0 ? (
-                <div className="chart-wrap-short">
+                <div className="chart-wrap-short" key={`firmware-${range}-${dataVersion}`}>
                   <ResponsiveContainer width="100%" height={240}>
                     <BarChart data={firmwareData} layout="vertical">
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" />
