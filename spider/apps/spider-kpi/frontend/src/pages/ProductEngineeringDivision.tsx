@@ -76,14 +76,32 @@ export function ProductEngineeringDivision() {
   const [customRange, setCustomRange] = useState<CustomRange>({ start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), end: new Date() })
   const [showCustomPicker, setShowCustomPicker] = useState(false)
 
+  // Convert time range to days for API
+  const rangeToDays = (r: TimeRange, custom: CustomRange): number => {
+    if (r === 'custom') {
+      const diffMs = custom.end.getTime() - custom.start.getTime()
+      return Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
+    }
+    const mapping: Record<Exclude<TimeRange, 'custom'>, number> = {
+      '1h': 1,
+      '12h': 1,
+      '24h': 1,
+      '1w': 7,
+      '2w': 14,
+      '1m': 30
+    }
+    return mapping[r] || 30
+  }
+
   useEffect(() => {
     let cancelled = false
     async function load() {
       setLoading(true)
       setError(null)
       try {
+        const days = rangeToDays(range, customRange)
         const [telemetryData, issuesData] = await Promise.all([
-          api.telemetrySummary(),
+          api.telemetrySummary(days),
           api.engineeringIssues().catch(() => null),
         ])
         if (!cancelled) {
@@ -98,7 +116,7 @@ export function ProductEngineeringDivision() {
     }
     void load()
     return () => { cancelled = true }
-  }, [])
+  }, [range, customRange])
 
   const collection = telemetry?.collection_metadata || null
   const slice = telemetry?.slice_snapshot || null

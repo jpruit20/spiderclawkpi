@@ -148,7 +148,7 @@ export const api = {
   alerts: (signal?: AbortSignal) => request('/api/alerts', { signal }),
   recommendations: (signal?: AbortSignal) => request<RecommendationItem[]>('/api/recommendations', { signal }),
   sourceHealth: (signal?: AbortSignal) => request<SourceHealthItem[]>('/api/source-health', { signal }),
-  telemetrySummary: (signal?: AbortSignal) => request<TelemetrySummary>('/api/telemetry/summary', { signal }),
+  telemetrySummary: (days?: number, signal?: AbortSignal) => request<TelemetrySummary>(`/api/telemetry/summary${days ? `?days=${days}` : ''}`, { signal }),
   supportOverview: (signal?: AbortSignal) => request<SupportOverviewResponse>('/api/support/overview', { signal }),
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),
   supportTickets: (signal?: AbortSignal) => request<FreshdeskTicketItem[]>('/api/support/tickets', { signal }),

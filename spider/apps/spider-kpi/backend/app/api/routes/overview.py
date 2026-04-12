@@ -104,9 +104,11 @@ def get_sources(db: Session = Depends(db_session)):
 
 
 @router.get("/telemetry/summary", response_model=TelemetrySummaryOut)
-def telemetry_summary(db: Session = Depends(db_session)):
-    payload = summarize_telemetry(db)
-    payload['history_daily'] = get_telemetry_history_daily(db)
+def telemetry_summary(days: int = 30, db: Session = Depends(db_session)):
+    # Clamp days to reasonable range (1 to 365)
+    days = max(1, min(days, 365))
+    payload = summarize_telemetry(db, lookback_days=days)
+    payload['history_daily'] = get_telemetry_history_daily(db, limit=days)
     return payload
 
 
