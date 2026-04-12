@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
@@ -32,7 +33,7 @@ FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 async def lifespan(app: FastAPI):
     if not settings.debug and not settings.auth_disabled:
         if not settings.app_password or settings.app_password == "change-me":
-            raise RuntimeError("APP_PASSWORD must be set to a non-default value when auth is enabled")
+            raise RuntimeError("APP_PASSWORD must be set to a non-default value when auth is enabled for admin and machine routes")
         if not settings.jwt_secret or settings.jwt_secret == "change-me":
             raise RuntimeError("JWT_SECRET must be set to a non-default value in production")
     ga4_errors = settings.ga4_validation_errors()
@@ -60,6 +61,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response: Response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
 
 app.include_router(health_router)
 app.include_router(auth_router)

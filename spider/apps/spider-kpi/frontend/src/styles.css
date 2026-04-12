@@ -62,6 +62,41 @@ body {
   line-height: 1.5;
 }
 
+.auth-note,
+.auth-hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.auth-note {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.auth-toggle-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.auth-toggle {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-toggle.active {
+  background: rgba(110, 168, 255, 0.18);
+  border-color: rgba(110, 168, 255, 0.45);
+}
+
 .auth-label {
   font-size: 13px;
   color: var(--muted);
@@ -170,6 +205,37 @@ a { color: inherit; }
   margin-top: auto;
   color: var(--muted);
   font-size: 13px;
+}
+
+.sidebar-auth-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255,255,255,0.03);
+  display: grid;
+  gap: 8px;
+}
+
+.sidebar-auth-card small {
+  color: var(--muted);
+}
+
+.sidebar-auth-card strong {
+  word-break: break-word;
+}
+
+.sidebar-logout-button {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sidebar-foot-domain {
+  margin-top: 10px;
 }
 
 .sidebar-summary {

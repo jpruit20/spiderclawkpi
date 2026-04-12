@@ -1,5 +1,6 @@
 from app.models.entities import (
     Alert,
+    AuthUser,
     ClarityPageMetric,
     CommunityMessage,
     CXAction,
@@ -35,6 +36,7 @@ from app.models.entities import (
 
 __all__ = [
     "Alert",
+    "AuthUser",
     "ClarityPageMetric",
     "CommunityMessage",
     "CXAction",

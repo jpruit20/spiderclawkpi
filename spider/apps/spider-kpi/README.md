@@ -53,6 +53,10 @@ Scaffolded for future:
 ## Main API surface
 
 - `GET /health`
+- `GET /api/auth/status`
+- `POST /api/auth/signup`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
 - `GET /api/overview`
 - `GET /api/kpis/daily`
 - `GET /api/kpis/intraday`
@@ -66,6 +70,10 @@ Scaffolded for future:
 - `POST /api/admin/run-sync/{source}`
 - `POST /api/admin/backfill/{source}`
 - `POST /api/admin/seed`
+
+Dashboard routes now require an authenticated browser session.
+Account signup is restricted to the email domains configured in `ALLOWED_SIGNUP_DOMAINS`.
+`APP_PASSWORD` is still used for admin/machine routes such as `/api/admin/*` and internal deploy validation.
 
 ## Source-health behavior
 

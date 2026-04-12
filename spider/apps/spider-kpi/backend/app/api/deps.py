@@ -27,6 +27,9 @@ def require_auth(x_app_password: str | None = Header(default=None, alias="X-App-
 def require_dashboard_session(request: Request) -> None:
     if settings.auth_disabled:
         return
+    x_app_password = request.headers.get("X-App-Password")
+    if settings.app_password and settings.app_password != "change-me" and x_app_password == settings.app_password:
+        return
     token = request.cookies.get(COOKIE_NAME)
     if not verify_session_token(token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Dashboard session required")

@@ -1,8 +1,11 @@
 import { Link, NavLink } from 'react-router-dom'
 import { ReactNode } from 'react'
 import spiderGrillsLogo from '../../spider_grills_black_nocircle.avif'
+import { useAuth } from './AuthGate'
 
 export function Layout({ children }: { children: ReactNode }) {
+  const { user, logout } = useAuth()
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -33,7 +36,16 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/division/production-manufacturing">Production / Manufacturing</NavLink>
           <NavLink to="/departments">Division Index</NavLink>
         </nav>
-        <div className="sidebar-foot">kpi.spidergrills.com</div>
+        <div className="sidebar-foot">
+          <div className="sidebar-auth-card">
+            <small>Signed in as</small>
+            <strong>{user?.email ?? 'Dashboard user'}</strong>
+            <button type="button" className="sidebar-logout-button" onClick={() => { void logout() }}>
+              Sign out
+            </button>
+          </div>
+          <div className="sidebar-foot-domain">kpi.spidergrills.com</div>
+        </div>
       </aside>
       <main className="main-shell">{children}</main>
     </div>

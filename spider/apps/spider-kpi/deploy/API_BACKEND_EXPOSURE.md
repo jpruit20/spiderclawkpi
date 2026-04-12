@@ -74,7 +74,7 @@ curl -I https://api-kpi.spidergrills.com/api/overview
 
 `/health` should return `200`.
 
-`/api/overview` may return `401/403` if app-password auth is enabled and no header is supplied; that is still a valid sign the route is reachable.
+`/api/overview` may return `401/403` if dashboard auth is enabled and no browser session or admin header is supplied; that is still a valid sign the route is reachable.
 
 ## 7. Vercel frontend env var
 
@@ -84,11 +84,7 @@ Set in Vercel for the `kpi_dashboard` frontend project:
 VITE_API_BASE=https://api-kpi.spidergrills.com
 ```
 
-If frontend requests need the app password in-browser, also set:
-
-```env
-VITE_APP_PASSWORD=<your password>
-```
+Do not ship `APP_PASSWORD` to the browser. Keep it server-side for `/api/admin/*` and machine-to-machine validation only.
 
 ## 8. Frontend project settings in Vercel
 

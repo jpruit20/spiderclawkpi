@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     app_password: str = "change-me"
     auth_disabled: bool = False
     jwt_secret: str = "change-me"
+    allowed_signup_domains: List[str] = Field(default_factory=lambda: ["spidergrills.com", "alignmachineworks.com"])
 
     shopify_store_url: Optional[str] = None
     shopify_admin_access_token: Optional[str] = None
@@ -164,6 +165,18 @@ class Settings(BaseSettings):
     clarity_sync_interval_minutes: int = 30
     historical_start_date: str = "2024-01-01"
     backfill_days: int = 824
+
+    @field_validator("allowed_signup_domains", mode="before")
+    @classmethod
+    def parse_allowed_signup_domains(cls, value: Any):
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            return [item.strip().lower() for item in stripped.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
 
     def ga4_validation_errors(self) -> list[str]:
         fields = [self.ga4_client_email, self.ga4_private_key, self.ga4_project_id, self.ga4_property_id]

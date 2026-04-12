@@ -1,6 +1,14 @@
+export interface AuthUserSummary {
+  id: string
+  email: string
+  is_admin: boolean
+}
+
 export interface AuthStatusResponse {
   authenticated: boolean
   auth_disabled?: boolean
+  allowed_domains?: string[]
+  user?: AuthUserSummary | null
 }
 
 export type KPIStatus = 'green' | 'yellow' | 'red'

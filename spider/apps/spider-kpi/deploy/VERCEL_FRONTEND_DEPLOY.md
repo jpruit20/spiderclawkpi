@@ -46,7 +46,6 @@ Create or update the Vercel project with:
 Set these in Vercel for Production (and Preview if desired):
 
 - `VITE_API_BASE=https://<your-backend-api-origin>`
-- `VITE_APP_PASSWORD=<app-password-if-auth-enabled>`
 
 Examples:
 
@@ -57,7 +56,7 @@ For the current Spider KPI deployment, prefer:
 
 - `VITE_API_BASE=https://api-kpi.spidergrills.com`
 
-If backend auth is disabled, `VITE_APP_PASSWORD` can be omitted.
+The frontend now uses browser session cookies for account auth, so no shared password needs to be shipped to Vercel.
 
 ## Backend requirements for the Vercel frontend
 

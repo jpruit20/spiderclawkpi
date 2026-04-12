@@ -40,6 +40,18 @@ class SourceSyncRun(TimestampMixin, Base):
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
+class AuthUser(TimestampMixin, Base):
+    __tablename__ = "auth_users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    email_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class ShopifyOrderEvent(TimestampMixin, Base):
     __tablename__ = "shopify_order_events"
 

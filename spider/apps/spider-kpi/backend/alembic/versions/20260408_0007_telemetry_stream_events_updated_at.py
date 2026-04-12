@@ -15,11 +15,27 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'telemetry_stream_events',
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-    )
+    conn = op.get_bind()
+    column_exists = conn.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'telemetry_stream_events' AND column_name = 'updated_at')"
+        )
+    ).scalar()
+    if not column_exists:
+        op.add_column(
+            'telemetry_stream_events',
+            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column('telemetry_stream_events', 'updated_at')
+    conn = op.get_bind()
+    column_exists = conn.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'telemetry_stream_events' AND column_name = 'updated_at')"
+        )
+    ).scalar()
+    if column_exists:
+        op.drop_column('telemetry_stream_events', 'updated_at')
