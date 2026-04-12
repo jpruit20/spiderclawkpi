@@ -49,7 +49,7 @@ def send_email_verification_code(recipient_email: str, code: str) -> None:
 
     client = boto3.client(
         'sesv2',
-        region_name=settings.auth_email_region or settings.aws_region,
+        region_name=settings.auth_email_region or settings.aws_region or 'us-east-2',
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
     )
