@@ -1,4 +1,0 @@
-Claude autonomous deploy proof artifact B
-branch: claude/autonomous-proof-20260411b
-created_at_utc: 2026-04-12T00:22:04Z
-purpose: verify no-human validate -> merge -> public-surface health gate -> backend deploy
