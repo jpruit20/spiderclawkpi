@@ -51,7 +51,7 @@ jobs:
           if [ -x ./.venv/bin/alembic ]; then
             (cd backend && ../.venv/bin/alembic upgrade head)
           fi
-          if [ -f frontend/package.json ]; then
+          if [ -f frontend/package.json ] && command -v npm &>/dev/null; then
             (cd frontend && npm ci --prefer-offline && npm run build)
           fi
           systemctl restart spider-kpi.service
