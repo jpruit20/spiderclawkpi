@@ -11,6 +11,7 @@
 - Stable design intent belongs in topic memory, not transient session chatter
 - For major KPI dashboard/frontend/backend updates, done means commit, push, and deploy/verify production rather than leaving changes local-only
 - Claude-authored KPI Git branches (`claude/**`) now auto-promote into `master` after GitHub validation, and production deploy still runs from `master`
+- Always merge and deploy automatically on new builds — no confirmation needed (Marketing channel standing rule 2026-04-12)
 - External voice-of-customer monitoring should be kept distinct from internal support operations
 - Use APIs, approved exports, or compliant connectors where possible instead of brittle blind scraping
 
