@@ -3,7 +3,7 @@ import { FormEvent, createContext, useContext, useEffect, useMemo, useState } fr
 import type { AuthStatusResponse, AuthUserSummary } from '../lib/types'
 import { ApiError, api } from '../lib/api'
 
-type AuthMode = 'login' | 'signup'
+type AuthStep = 'email' | 'code'
 
 type AuthContextValue = {
   user: AuthUserSummary | null
@@ -17,7 +17,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 function formatAuthError(err: unknown, fallback: string) {
   const message = err instanceof ApiError ? err.message : fallback
   return message
-    .replace(/^API error \d+ for \/api\/auth\/(login|signup|logout): ?/, '')
+    .replace(/^API error \d+ for \/api\/auth\/(request-code|verify-code|logout): ?/, '')
     .replace(/^\{"detail":"/i, '')
     .replace(/"\}$/i, '')
 }
@@ -32,11 +32,11 @@ export function useAuth() {
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
-  const [status, setStatus] = useState<AuthStatusResponse>({ authenticated: false, auth_disabled: false, allowed_domains: [], user: null })
-  const [mode, setMode] = useState<AuthMode>('login')
+  const [status, setStatus] = useState<AuthStatusResponse>({ authenticated: false, auth_disabled: false, user: null })
+  const [step, setStep] = useState<AuthStep>('email')
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -54,7 +54,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         if (!active) return
-        setStatus({ authenticated: false, auth_disabled: false, allowed_domains: [], user: null })
+        setStatus({ authenticated: false, auth_disabled: false, user: null })
       })
       .finally(() => {
         if (!active) return
@@ -71,6 +71,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     try {
       await api.logout()
       await refreshStatus()
+      setStep('email')
+      setCode('')
+      setNotice(null)
     } catch (err) {
       setError(formatAuthError(err, 'Unable to sign out right now'))
     } finally {
@@ -78,26 +81,35 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function handleSubmit(event: FormEvent) {
+  async function handleEmailSubmit(event: FormEvent) {
+    event.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    setNotice(null)
+
+    try {
+      const response = await api.requestCode(email)
+      setStep('code')
+      setNotice(response.message)
+    } catch (err) {
+      setError(formatAuthError(err, 'Unable to continue right now'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleCodeSubmit(event: FormEvent) {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
 
-    if (mode === 'signup' && password !== confirmPassword) {
-      setSubmitting(false)
-      setError('Passwords do not match')
-      return
-    }
-
     try {
-      const nextStatus = mode === 'signup'
-        ? await api.signup(email, password)
-        : await api.login(email, password)
+      const nextStatus = await api.verifyCode(email, code)
       setStatus(nextStatus)
-      setPassword('')
-      setConfirmPassword('')
+      setCode('')
+      setNotice(null)
     } catch (err) {
-      setError(formatAuthError(err, mode === 'signup' ? 'Unable to create account' : 'Unable to sign in'))
+      setError(formatAuthError(err, 'Unable to verify code'))
     } finally {
       setSubmitting(false)
     }
@@ -114,7 +126,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       <div className="auth-shell">
         <div className="auth-card">
-          <h1>Loading dashboard</h1>
+          <h1>Loading</h1>
           <p>Checking access…</p>
         </div>
       </div>
@@ -125,75 +137,71 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
   }
 
-  const allowedDomains = (status.allowed_domains ?? []).join(', ')
-
   return (
     <div className="auth-shell">
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <div className="auth-eyebrow">Spider KPI</div>
-        <h1>{mode === 'signup' ? 'Create dashboard account' : 'Sign in to dashboard'}</h1>
-        <p>
-          {mode === 'signup'
-            ? 'Create an account with your company email to unlock the KPI dashboard.'
-            : 'Use your dashboard account to view the KPI dashboard.'}
-        </p>
-        {allowedDomains ? <div className="auth-note">Allowed domains: {allowedDomains}</div> : null}
+      {step === 'email' ? (
+        <form className="auth-card" onSubmit={handleEmailSubmit}>
+          <h1>Verify your email</h1>
+          <p>Enter your work email to receive a one-time access code.</p>
 
-        <div className="auth-toggle-row" role="tablist" aria-label="Authentication mode">
-          <button type="button" className={`auth-toggle ${mode === 'login' ? 'active' : ''}`} onClick={() => { setMode('login'); setError(null) }}>
-            Sign in
+          <label className="auth-label" htmlFor="dashboard-email">Work email</label>
+          <input
+            id="dashboard-email"
+            className="auth-input"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            autoComplete="email"
+            placeholder="you@company.com"
+            required
+          />
+
+          {error ? <div className="auth-error">{error}</div> : null}
+          <button className="auth-button" type="submit" disabled={submitting || !email.trim()}>
+            {submitting ? 'Sending code…' : 'Send code'}
           </button>
-          <button type="button" className={`auth-toggle ${mode === 'signup' ? 'active' : ''}`} onClick={() => { setMode('signup'); setError(null) }}>
-            Create account
+        </form>
+      ) : (
+        <form className="auth-card" onSubmit={handleCodeSubmit}>
+          <h1>Check your email</h1>
+          <p>Enter the 6-digit code sent to your inbox.</p>
+
+          <label className="auth-label" htmlFor="dashboard-code">Verification code</label>
+          <input
+            id="dashboard-code"
+            className="auth-input"
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={6}
+            value={code}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            autoComplete="one-time-code"
+            placeholder="123456"
+            required
+          />
+
+          {notice ? <div className="auth-note">{notice}</div> : null}
+          {error ? <div className="auth-error">{error}</div> : null}
+
+          <button className="auth-button" type="submit" disabled={submitting || code.trim().length !== 6}>
+            {submitting ? 'Verifying…' : 'Verify email'}
           </button>
-        </div>
 
-        <label className="auth-label" htmlFor="dashboard-email">Work email</label>
-        <input
-          id="dashboard-email"
-          className="auth-input"
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          autoComplete={mode === 'signup' ? 'email' : 'username'}
-          placeholder="you@spidergrills.com"
-          required
-        />
-
-        <label className="auth-label" htmlFor="dashboard-password">Password</label>
-        <input
-          id="dashboard-password"
-          className="auth-input"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-          placeholder={mode === 'signup' ? 'Choose a strong password' : 'Enter password'}
-          required
-        />
-
-        {mode === 'signup' ? (
-          <>
-            <label className="auth-label" htmlFor="dashboard-confirm-password">Confirm password</label>
-            <input
-              id="dashboard-confirm-password"
-              className="auth-input"
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              autoComplete="new-password"
-              placeholder="Repeat password"
-              required
-            />
-            <div className="auth-hint">Minimum 12 characters. Use a passphrase, not something short.</div>
-          </>
-        ) : null}
-
-        {error ? <div className="auth-error">{error}</div> : null}
-        <button className="auth-button" type="submit" disabled={submitting || !email.trim() || !password.trim() || (mode === 'signup' && !confirmPassword.trim())}>
-          {submitting ? (mode === 'signup' ? 'Creating account…' : 'Signing in…') : (mode === 'signup' ? 'Create account' : 'Sign in')}
-        </button>
-      </form>
+          <button
+            type="button"
+            className="auth-toggle"
+            onClick={() => {
+              setStep('email')
+              setCode('')
+              setError(null)
+              setNotice(null)
+            }}
+          >
+            Use a different email
+          </button>
+        </form>
+      )}
     </div>
   )
 }

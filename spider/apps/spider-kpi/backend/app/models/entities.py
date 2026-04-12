@@ -52,6 +52,17 @@ class AuthUser(TimestampMixin, Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class AuthVerificationChallenge(TimestampMixin, Base):
+    __tablename__ = "auth_verification_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    email_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class ShopifyOrderEvent(TimestampMixin, Base):
     __tablename__ = "shopify_order_events"
 

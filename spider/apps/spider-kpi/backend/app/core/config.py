@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     auth_disabled: bool = False
     jwt_secret: str = "change-me"
     allowed_signup_domains: List[str] = Field(default_factory=lambda: ["spidergrills.com", "alignmachineworks.com"])
+    auth_email_from: str = Field(default='no-reply@spidergrills.app')
+    auth_email_region: Optional[str] = None
 
     shopify_store_url: Optional[str] = None
     shopify_admin_access_token: Optional[str] = None

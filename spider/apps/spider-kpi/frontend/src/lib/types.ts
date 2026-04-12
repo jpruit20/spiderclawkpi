@@ -7,8 +7,14 @@ export interface AuthUserSummary {
 export interface AuthStatusResponse {
   authenticated: boolean
   auth_disabled?: boolean
-  allowed_domains?: string[]
   user?: AuthUserSummary | null
+}
+
+export interface AuthCodeRequestResponse {
+  ok: boolean
+  message: string
+  code_length: number
+  expires_in_minutes: number
 }
 
 export type KPIStatus = 'green' | 'yellow' | 'red'

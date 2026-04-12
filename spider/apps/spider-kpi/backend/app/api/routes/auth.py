@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 from collections import defaultdict, deque
 from collections.abc import Generator
@@ -9,13 +10,21 @@ from typing import Any
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AuthUser
-from app.services.auth import email_domain_allowed, extract_email_domain, hash_password, normalize_email, validate_password_strength, verify_password
+from app.models import AuthUser, AuthVerificationChallenge
+from app.services.auth import email_domain_allowed, extract_email_domain, hash_password, normalize_email
+from app.services.email_auth import (
+    VERIFICATION_CODE_LENGTH,
+    VERIFICATION_CODE_TTL_MINUTES,
+    generate_verification_code,
+    send_email_verification_code,
+    verification_code_hash,
+    verification_expiry,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -31,14 +40,13 @@ def db_session() -> Generator[Session, None, None]:
     yield from get_db()
 
 
-class LoginRequest(BaseModel):
+class RequestCodeRequest(BaseModel):
     email: str
-    password: str = Field(min_length=1)
 
 
-class SignupRequest(BaseModel):
+class VerifyCodeRequest(BaseModel):
     email: str
-    password: str = Field(min_length=1)
+    code: str = Field(min_length=VERIFICATION_CODE_LENGTH, max_length=VERIFICATION_CODE_LENGTH)
 
 
 def _client_ip(request: Request) -> str:
@@ -162,92 +170,105 @@ def get_user_from_request(request: Request, db: Session) -> AuthUser | None:
     return user
 
 
+def _generic_request_code_response() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "message": f"If your email is eligible, a {VERIFICATION_CODE_LENGTH}-digit code has been sent.",
+        "code_length": VERIFICATION_CODE_LENGTH,
+        "expires_in_minutes": VERIFICATION_CODE_TTL_MINUTES,
+    }
+
+
 @router.get("/status")
 def auth_status(request: Request, db: Session = Depends(db_session)) -> dict[str, Any]:
     if settings.auth_disabled:
         return {
             "authenticated": True,
             "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
             "user": None,
         }
     user = get_user_from_request(request, db)
     return {
         "authenticated": user is not None,
         "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
         "user": serialize_user(user),
     }
 
 
-@router.post("/signup")
-def auth_signup(payload: SignupRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
+@router.post("/request-code")
+def auth_request_code(payload: RequestCodeRequest, request: Request, db: Session = Depends(db_session)) -> dict[str, Any]:
     if settings.auth_disabled:
-        return {
-            "authenticated": True,
-            "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
-            "user": None,
-        }
+        return {"ok": True, "message": "Authentication is disabled"}
 
     email = _validated_email(payload.email)
     _guard_rate_limit(request, email)
 
     if not email_domain_allowed(email, settings.allowed_signup_domains):
-        _record_failed_attempt(request, email)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Only {', '.join(settings.allowed_signup_domains)} email addresses can create dashboard accounts",
+        return _generic_request_code_response()
+
+    db.execute(
+        update(AuthVerificationChallenge)
+        .where(
+            AuthVerificationChallenge.email == email,
+            AuthVerificationChallenge.consumed_at.is_(None),
         )
+        .values(consumed_at=datetime.now(timezone.utc))
+    )
 
-    password_error = validate_password_strength(payload.password)
-    if password_error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_error)
-
-    existing_user = db.execute(select(AuthUser).where(AuthUser.email == email)).scalar_one_or_none()
-    if existing_user is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account already exists for that email")
-
-    user_count = int(db.execute(select(func.count()).select_from(AuthUser)).scalar() or 0)
-    user = AuthUser(
+    code = generate_verification_code()
+    challenge = AuthVerificationChallenge(
         email=email,
         email_domain=extract_email_domain(email),
-        password_hash=hash_password(payload.password),
-        is_active=True,
-        is_admin=(user_count == 0),
-        last_login_at=datetime.now(timezone.utc),
+        code_hash=verification_code_hash(email, code),
+        expires_at=verification_expiry(),
     )
-    db.add(user)
+    db.add(challenge)
     db.commit()
-    db.refresh(user)
 
-    _clear_failed_attempts(request, email)
-    set_session_cookie(response, user)
-    return {
-        "authenticated": True,
-        "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
-        "user": serialize_user(user),
-    }
+    send_email_verification_code(email, code)
+    return _generic_request_code_response()
 
 
-@router.post("/login")
-def auth_login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
+@router.post("/verify-code")
+def auth_verify_code(payload: VerifyCodeRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
     if settings.auth_disabled:
         return {
             "authenticated": True,
             "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
             "user": None,
         }
 
     email = _validated_email(payload.email)
+    code = payload.code.strip()
     _guard_rate_limit(request, email)
 
-    user = db.execute(select(AuthUser).where(AuthUser.email == email, AuthUser.is_active.is_(True))).scalar_one_or_none()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    challenge = db.execute(
+        select(AuthVerificationChallenge)
+        .where(
+            AuthVerificationChallenge.email == email,
+            AuthVerificationChallenge.consumed_at.is_(None),
+            AuthVerificationChallenge.expires_at >= datetime.now(timezone.utc),
+        )
+        .order_by(AuthVerificationChallenge.created_at.desc())
+    ).scalars().first()
+
+    if challenge is None or challenge.code_hash != verification_code_hash(email, code):
         _record_failed_attempt(request, email)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired code")
+
+    challenge.consumed_at = datetime.now(timezone.utc)
+
+    user = db.execute(select(AuthUser).where(AuthUser.email == email, AuthUser.is_active.is_(True))).scalar_one_or_none()
+    if user is None:
+        user_count = int(db.execute(select(func.count()).select_from(AuthUser)).scalar() or 0)
+        user = AuthUser(
+            email=email,
+            email_domain=extract_email_domain(email),
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+            is_active=True,
+            is_admin=(user_count == 0),
+        )
+        db.add(user)
 
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
@@ -258,7 +279,6 @@ def auth_login(payload: LoginRequest, request: Request, response: Response, db: 
     return {
         "authenticated": True,
         "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
         "user": serialize_user(user),
     }
 
