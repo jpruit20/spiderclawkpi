@@ -7,6 +7,7 @@ import type {
   DiagnosticItem,
   FreshdeskAgentDailyItem,
   FreshdeskTicketItem,
+  GithubIssuesResponse,
   IssueRadarResponse,
   KPIIntraday,
   KPIDaily,
@@ -171,4 +172,5 @@ export const api = {
     request<SocialTrendsResponse>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
+  engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),
 }

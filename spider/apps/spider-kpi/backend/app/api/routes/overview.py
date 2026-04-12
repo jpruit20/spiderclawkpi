@@ -177,3 +177,9 @@ def get_clarity_page_health(db: Session = Depends(db_session)):
 @router.get("/data-quality", response_model=DataQualityOut)
 def data_quality(db: Session = Depends(db_session)):
     return get_data_quality(db)
+
+
+@router.get("/engineering/issues")
+def get_engineering_issues():
+    from app.services.github_issues import get_p0_p1_issues
+    return get_p0_p1_issues()

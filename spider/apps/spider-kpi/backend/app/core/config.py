@@ -156,6 +156,10 @@ class Settings(BaseSettings):
     google_places_api_key: Optional[str] = None
     google_places_id: Optional[str] = None  # Spider Grills place ID
 
+    github_token: Optional[str] = Field(default=None, validation_alias=AliasChoices('GITHUB_TOKEN', 'GH_TOKEN'))
+    github_owner: str = Field(default='spider-grills', validation_alias=AliasChoices('GITHUB_OWNER', 'GH_OWNER'))
+    github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))
+
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 30
     historical_start_date: str = "2024-01-01"
