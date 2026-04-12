@@ -9,6 +9,7 @@ on:
     branches: [master]
     paths:
       - 'spider/apps/spider-kpi/backend/**'
+      - 'spider/apps/spider-kpi/frontend/**'
       - 'spider/apps/spider-kpi/scripts/**'
       - 'spider/apps/spider-kpi/deploy/**'
       - 'spider/apps/spider-kpi/README.md'
@@ -49,6 +50,9 @@ jobs:
           ./.venv/bin/pip install -r backend/requirements.txt
           if [ -x ./.venv/bin/alembic ]; then
             (cd backend && ../.venv/bin/alembic upgrade head)
+          fi
+          if [ -f frontend/package.json ]; then
+            (cd frontend && npm ci --prefer-offline && npm run build)
           fi
           systemctl restart spider-kpi.service
           systemctl is-active spider-kpi.service

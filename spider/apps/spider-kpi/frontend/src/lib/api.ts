@@ -115,8 +115,34 @@ export function getApiBase() {
 
 export const api = {
   authStatus: (signal?: AbortSignal) => request<AuthStatusResponse>('/api/auth/status', { signal, retries: 0 }),
-  requestVerificationCode: async (email: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/request-code`, {
+  signup: async (email: string, password: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/signup`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new ApiError(`API error ${response.status} for /api/auth/signup${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/signup')
+    }
+    return response.json() as Promise<AuthCodeRequestResponse>
+  },
+  login: async (email: string, password: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new ApiError(`API error ${response.status} for /api/auth/login${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/login')
+    }
+    return response.json() as Promise<AuthStatusResponse>
+  },
+  resendVerification: async (email: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -124,22 +150,9 @@ export const api = {
     })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
-      throw new ApiError(`API error ${response.status} for /api/auth/request-code${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/request-code')
+      throw new ApiError(`API error ${response.status} for /api/auth/resend-verification${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/resend-verification')
     }
     return response.json() as Promise<AuthCodeRequestResponse>
-  },
-  verifyVerificationCode: async (email: string, code: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/verify-code`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, code }),
-    })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw new ApiError(`API error ${response.status} for /api/auth/verify-code${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/verify-code')
-    }
-    return response.json() as Promise<AuthStatusResponse>
   },
   logout: async () => {
     const response = await fetch(`${API_BASE}/api/auth/logout`, {

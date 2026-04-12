@@ -47,6 +47,7 @@ class AuthUser(TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     email_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
@@ -58,7 +59,8 @@ class AuthVerificationChallenge(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     email_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, default='verify_email')
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
 

@@ -3,7 +3,7 @@ import { FormEvent, createContext, useContext, useEffect, useMemo, useState } fr
 import type { AuthStatusResponse, AuthUserSummary } from '../lib/types'
 import { ApiError, api } from '../lib/api'
 
-type AuthStep = 'email' | 'code'
+type AuthMode = 'login' | 'signup'
 
 type AuthContextValue = {
   user: AuthUserSummary | null
@@ -17,7 +17,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 function formatAuthError(err: unknown, fallback: string) {
   const message = err instanceof ApiError ? err.message : fallback
   return message
-    .replace(/^API error \d+ for \/api\/auth\/(request-code|verify-code|login|signup|logout): ?/, '')
+    .replace(/^API error \d+ for \/api\/auth\/(signup|login|resend-verification|logout): ?/, '')
     .replace(/^\{"detail":"/i, '')
     .replace(/"\}$/i, '')
 }
@@ -30,15 +30,25 @@ export function useAuth() {
   return value
 }
 
+function getVerifyParam(): string | null {
+  if (typeof window === 'undefined') return null
+  const params = new URLSearchParams(window.location.search)
+  return params.get('verify')
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState<AuthStatusResponse>({ authenticated: false, auth_disabled: false, allowed_domains: [], user: null })
-  const [step, setStep] = useState<AuthStep>('email')
+  const [mode, setMode] = useState<AuthMode>('login')
   const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Check for ?verify= parameter from email verification link redirect
+  const verifyParam = getVerifyParam()
 
   async function refreshStatus() {
     const nextStatus = await api.authStatus()
@@ -65,6 +75,25 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Show verify result message
+  useEffect(() => {
+    if (!verifyParam) return
+    if (verifyParam === 'success') {
+      setMessage('Email verified successfully! You can now sign in.')
+      setMode('login')
+    } else if (verifyParam === 'expired') {
+      setError('Verification link has expired. Please request a new one.')
+      setMode('login')
+    } else if (verifyParam === 'invalid') {
+      setError('Invalid verification link.')
+      setMode('login')
+    }
+    // Clean the URL
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [verifyParam])
+
   async function logout() {
     setSubmitting(true)
     setError(null)
@@ -72,8 +101,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     try {
       await api.logout()
       await refreshStatus()
-      setStep('email')
-      setCode('')
+      setMode('login')
+      setPassword('')
     } catch (err) {
       setError(formatAuthError(err, 'Unable to sign out right now'))
     } finally {
@@ -81,35 +110,48 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function handleRequestCode(event: FormEvent) {
+  async function handleSignup(event: FormEvent) {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
     setMessage(null)
 
+    if (password !== confirmPassword) {
+      setError('Passwords do not match')
+      setSubmitting(false)
+      return
+    }
+
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters long')
+      setSubmitting(false)
+      return
+    }
+
     try {
-      const response = await api.requestVerificationCode(email)
-      setMessage(response.detail)
-      setStep('code')
+      const response = await api.signup(email, password)
+      setMessage(response.detail || 'Check your email for a verification link.')
+      setPassword('')
+      setConfirmPassword('')
     } catch (err) {
-      setError(formatAuthError(err, 'Unable to send verification code'))
+      setError(formatAuthError(err, 'Unable to create account'))
     } finally {
       setSubmitting(false)
     }
   }
 
-  async function handleVerifyCode(event: FormEvent) {
+  async function handleLogin(event: FormEvent) {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
     setMessage(null)
 
     try {
-      const nextStatus = await api.verifyVerificationCode(email, code)
+      const nextStatus = await api.login(email, password)
       setStatus(nextStatus)
-      setCode('')
+      setPassword('')
     } catch (err) {
-      setError(formatAuthError(err, 'Unable to verify code'))
+      setError(formatAuthError(err, 'Unable to sign in'))
     } finally {
       setSubmitting(false)
     }
@@ -137,16 +179,26 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
   }
 
+  const allowedDomains = status.allowed_domains?.length
+    ? status.allowed_domains.join(', ')
+    : null
+
   return (
     <div className="auth-shell">
-      <form className="auth-card" onSubmit={step === 'email' ? handleRequestCode : handleVerifyCode}>
-        <div className="auth-eyebrow">Dashboard access</div>
-        <h1>{step === 'email' ? 'Request access code' : 'Enter verification code'}</h1>
+      <form className="auth-card" onSubmit={mode === 'signup' ? handleSignup : handleLogin}>
+        <div className="auth-eyebrow">Spider Grills KPI Dashboard</div>
+        <h1>{mode === 'signup' ? 'Create account' : 'Sign in'}</h1>
         <p>
-          {step === 'email'
-            ? 'Enter your work email and, if it is eligible, we will send a 6-digit access code.'
-            : 'Check your email for the 6-digit code, then enter it below to continue.'}
+          {mode === 'signup'
+            ? 'Enter your work email and choose a password to get started.'
+            : 'Enter your email and password to access the dashboard.'}
         </p>
+
+        {allowedDomains && mode === 'signup' ? (
+          <div className="auth-note">
+            Access is restricted to <strong>{allowedDomains}</strong> email addresses.
+          </div>
+        ) : null}
 
         <label className="auth-label" htmlFor="dashboard-email">Work email</label>
         <input
@@ -158,74 +210,104 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           autoComplete="email"
           placeholder="you@company.com"
           required
-          disabled={submitting || step === 'code'}
         />
 
-        {step === 'code' ? (
+        <label className="auth-label" htmlFor="dashboard-password">Password</label>
+        <input
+          id="dashboard-password"
+          className="auth-input"
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+          placeholder={mode === 'signup' ? 'Min 12 characters' : 'Enter password'}
+          required
+          minLength={mode === 'signup' ? 12 : 1}
+        />
+
+        {mode === 'signup' ? (
           <>
-            <label className="auth-label" htmlFor="dashboard-code">Verification code</label>
+            <label className="auth-label" htmlFor="dashboard-confirm-password">Confirm password</label>
             <input
-              id="dashboard-code"
+              id="dashboard-confirm-password"
               className="auth-input"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={code}
-              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-              autoComplete="one-time-code"
-              placeholder="123456"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              autoComplete="new-password"
+              placeholder="Re-enter password"
               required
+              minLength={12}
             />
-            <div className="auth-hint">Codes expire after 15 minutes.</div>
           </>
         ) : null}
 
-        {message ? <div className="auth-hint">{message}</div> : null}
+        {message ? <div className="auth-success">{message}</div> : null}
         {error ? <div className="auth-error">{error}</div> : null}
 
-        <button className="auth-button" type="submit" disabled={submitting || !email.trim() || (step === 'code' && code.trim().length !== 6)}>
+        <button className="auth-button" type="submit" disabled={submitting || !email.trim() || !password.trim() || (mode === 'signup' && !confirmPassword.trim())}>
           {submitting
-            ? (step === 'email' ? 'Sending code…' : 'Verifying…')
-            : (step === 'email' ? 'Send code' : 'Verify and continue')}
+            ? (mode === 'signup' ? 'Creating account…' : 'Signing in…')
+            : (mode === 'signup' ? 'Create account' : 'Sign in')}
         </button>
 
-        {step === 'code' ? (
-          <div className="auth-toggle-row">
+        <div className="auth-toggle-row">
+          {mode === 'login' ? (
             <button
               type="button"
               className="auth-toggle"
               onClick={() => {
-                setStep('email')
-                setCode('')
+                setMode('signup')
+                setPassword('')
+                setConfirmPassword('')
                 setError(null)
                 setMessage(null)
               }}
             >
-              Use a different email
+              Create an account
             </button>
+          ) : (
+            <button
+              type="button"
+              className="auth-toggle"
+              onClick={() => {
+                setMode('login')
+                setPassword('')
+                setConfirmPassword('')
+                setError(null)
+                setMessage(null)
+              }}
+            >
+              Back to sign in
+            </button>
+          )}
+          {mode === 'login' ? (
             <button
               type="button"
               className="auth-toggle"
               onClick={async () => {
+                if (!email.trim()) {
+                  setError('Enter your email address first')
+                  return
+                }
                 setSubmitting(true)
                 setError(null)
                 setMessage(null)
                 try {
-                  const response = await api.requestVerificationCode(email)
-                  setMessage(response.detail)
+                  const response = await api.resendVerification(email)
+                  setMessage(response.detail || 'If that account exists, a new verification link has been sent.')
                 } catch (err) {
-                  setError(formatAuthError(err, 'Unable to resend verification code'))
+                  setError(formatAuthError(err, 'Unable to resend verification email'))
                 } finally {
                   setSubmitting(false)
                 }
               }}
               disabled={submitting}
             >
-              Resend code
+              Resend verification
             </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </form>
     </div>
   )

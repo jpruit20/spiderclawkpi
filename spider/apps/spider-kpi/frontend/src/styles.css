@@ -136,6 +136,15 @@ body {
   font-size: 14px;
 }
 
+.auth-success {
+  color: #bbf7d0;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
 a { color: inherit; }
 
 .layout {
