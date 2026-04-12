@@ -150,6 +150,19 @@ export function MarketingDivision() {
     { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0 },
   ], [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
 
+  /* ---- funnel leak detection ---- */
+  const biggestLeak = useMemo(() => {
+    const leaks = funnel.filter((step) => step.dropoff > 0)
+    if (leaks.length === 0) return null
+    return leaks.reduce((max, step) => (step.dropoff > max.dropoff ? step : max), leaks[0])
+  }, [funnel])
+
+  const getLeakSeverity = (dropoff: number): { label: string; class: string } => {
+    if (dropoff >= 50) return { label: 'Critical', class: 'badge-bad' }
+    if (dropoff >= 25) return { label: 'High', class: 'badge-warn' }
+    return { label: 'Medium', class: 'badge-neutral' }
+  }
+
   /* ---- issues / friction ---- */
   const topFriction = issues?.highest_business_risk?.[0] || issues?.clusters?.[0]
   const topFrictionTruthState = clarityDegraded ? 'degraded' : 'proxy'
@@ -272,6 +285,25 @@ export function MarketingDivision() {
     }),
   ])
 
+  /* ---- 7-day sparkline data ---- */
+  const last7Days = useMemo(() => currentRows.slice(-7), [currentRows])
+  const revenueSparkline = useMemo(() => last7Days.map((r) => Number(r.revenue) || 0), [last7Days])
+  const conversionSparkline = useMemo(() => {
+    return last7Days.map((r) => {
+      const s = Number(r.sessions) || 0
+      const o = Number(r.orders) || 0
+      return s > 0 ? (o / s) * 100 : 0
+    })
+  }, [last7Days])
+  const merSparkline = useMemo(() => {
+    return last7Days.map((r) => {
+      const rev = Number(r.revenue) || 0
+      const spend = Number(r.ad_spend) || 0
+      return spend > 0 ? rev / spend : 0
+    })
+  }, [last7Days])
+  const adSpendSparkline = useMemo(() => last7Days.map((r) => Number(r.ad_spend) || 0), [last7Days])
+
   /* ---- KPI strip cards ---- */
   const kpiCards: KpiCardDef[] = useMemo(() => [
     {
@@ -280,6 +312,7 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorRevenue)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(revenue, priorRevenue), direction: deltaDirection(revenue, priorRevenue) },
+      sparkline: revenueSparkline,
     },
     {
       label: 'Conversion',
@@ -287,6 +320,7 @@ export function MarketingDivision() {
       sub: `Prior ${priorConversion.toFixed(2)}%`,
       truthState: 'canonical',
       delta: { text: deltaPct(conversion, priorConversion), direction: deltaDirection(conversion, priorConversion) },
+      sparkline: conversionSparkline,
     },
     {
       label: 'MER',
@@ -294,6 +328,7 @@ export function MarketingDivision() {
       sub: `Prior ${priorMer.toFixed(2)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(mer, priorMer), direction: deltaDirection(mer, priorMer) },
+      sparkline: merSparkline,
     },
     {
       label: 'Ad Spend',
@@ -301,8 +336,9 @@ export function MarketingDivision() {
       sub: `Prior ${currency(priorAdSpend)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(adSpend, priorAdSpend), direction: deltaDirection(adSpend, priorAdSpend) },
+      sparkline: adSpendSparkline,
     },
-  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend])
+  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend, revenueSparkline, conversionSparkline, merSparkline, adSpendSparkline])
 
   /* ---- dynamic action items ---- */
   const weekActions = useMemo(() => {
@@ -380,25 +416,41 @@ export function MarketingDivision() {
               <strong>Visual Funnel</strong>
               <span className="venom-panel-hint">Sessions to purchase</span>
             </div>
+            {biggestLeak ? (
+              <div className="trust-banner trust-banner-warn" style={{ marginBottom: 12 }}>
+                <strong>Biggest Leak: {biggestLeak.label}</strong>
+                <p>
+                  {biggestLeak.dropoff.toFixed(1)}% drop-off — focus optimization efforts here for maximum conversion impact.
+                </p>
+              </div>
+            ) : null}
             <div className="venom-bar-list">
-              {funnel.map((step) => (
-                <div key={step.label}>
-                  <div className="venom-bar-row">
-                    <span className="venom-bar-label">{step.label}</span>
-                    <BarIndicator value={step.volume} max={sessions || 1} color={FUNNEL_COLORS[step.label] || 'var(--blue)'} />
-                    <span className="venom-bar-value">{fmtInt(Math.round(step.volume))}</span>
+              {funnel.map((step) => {
+                const isBiggestLeak = biggestLeak && step.label === biggestLeak.label
+                const severity = step.dropoff > 0 ? getLeakSeverity(step.dropoff) : null
+                return (
+                  <div key={step.label} style={isBiggestLeak ? { background: 'var(--warning-bg)', borderRadius: 4, padding: '4px 8px', marginLeft: -8, marginRight: -8 } : undefined}>
+                    <div className="venom-bar-row">
+                      <span className="venom-bar-label">{step.label}</span>
+                      <BarIndicator value={step.volume} max={sessions || 1} color={FUNNEL_COLORS[step.label] || 'var(--blue)'} />
+                      <span className="venom-bar-value">{fmtInt(Math.round(step.volume))}</span>
+                    </div>
+                    {step.dropoff > 0 ? (
+                      <div style={{ paddingLeft: 140, marginTop: -4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <small className="venom-panel-footer" style={{ margin: 0 }}>
+                          {step.dropoff.toFixed(1)}% drop-off from prior stage
+                        </small>
+                        {severity ? <span className={`badge ${severity.class}`}>{severity.label}</span> : null}
+                        {isBiggestLeak ? <span className="badge badge-bad">Biggest Leak</span> : null}
+                      </div>
+                    ) : null}
+                    {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
+                    {step.label === 'Add to Cart' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: uses GA4 add_to_cart_rate x PDP estimate</small> : null}
+                    {step.label === 'Checkout' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: ATC x 0.58</small> : null}
+                    {step.label === 'Purchase' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Canonical: Shopify order count</small> : null}
                   </div>
-                  {step.dropoff > 0 ? (
-                    <small className="venom-panel-footer" style={{ paddingLeft: 140, marginTop: -4 }}>
-                      {step.dropoff.toFixed(1)}% drop-off from prior stage
-                    </small>
-                  ) : null}
-                  {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
-                  {step.label === 'Add to Cart' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: uses GA4 add_to_cart_rate x PDP estimate</small> : null}
-                  {step.label === 'Checkout' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: ATC x 0.58</small> : null}
-                  {step.label === 'Purchase' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Canonical: Shopify order count</small> : null}
-                </div>
-              ))}
+                )
+              })}
             </div>
             <small className="venom-panel-footer">
               Estimated funnel — stages 2-4 are modeled from behavioral proxies
