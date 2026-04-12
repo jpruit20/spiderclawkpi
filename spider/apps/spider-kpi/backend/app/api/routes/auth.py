@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 from collections import defaultdict, deque
 from collections.abc import Generator
@@ -14,8 +15,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AuthUser
-from app.services.auth import email_domain_allowed, extract_email_domain, hash_password, normalize_email, validate_password_strength, verify_password
+from app.models import AuthUser, AuthVerificationChallenge
+from app.services.auth import email_domain_allowed, extract_email_domain, hash_password, normalize_email
+from app.services.email_auth import (
+    VERIFICATION_CODE_LENGTH,
+    generate_verification_code,
+    send_email_verification_code,
+    verification_code_hash,
+    verification_expiry,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -39,6 +47,15 @@ class LoginRequest(BaseModel):
 class SignupRequest(BaseModel):
     email: str
     password: str = Field(min_length=1)
+
+
+class RequestVerificationCodeRequest(BaseModel):
+    email: str
+
+
+class VerifyVerificationCodeRequest(BaseModel):
+    email: str
+    code: str = Field(min_length=VERIFICATION_CODE_LENGTH, max_length=VERIFICATION_CODE_LENGTH)
 
 
 def _client_ip(request: Request) -> str:
@@ -168,56 +185,105 @@ def auth_status(request: Request, db: Session = Depends(db_session)) -> dict[str
         return {
             "authenticated": True,
             "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
+            "allowed_domains": [],
             "user": None,
         }
     user = get_user_from_request(request, db)
     return {
         "authenticated": user is not None,
         "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
+        "allowed_domains": [],
         "user": serialize_user(user),
     }
 
 
 @router.post("/signup")
 def auth_signup(payload: SignupRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Password account signup has been disabled. Use the email verification flow instead.",
+    )
+
+
+@router.post("/request-code")
+def request_verification_code(payload: RequestVerificationCodeRequest, request: Request, db: Session = Depends(db_session)) -> dict[str, Any]:
     if settings.auth_disabled:
         return {
-            "authenticated": True,
-            "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
-            "user": None,
+            "ok": True,
+            "detail": "Authentication is currently disabled.",
         }
 
     email = _validated_email(payload.email)
     _guard_rate_limit(request, email)
 
-    if not email_domain_allowed(email, settings.allowed_signup_domains):
-        _record_failed_attempt(request, email)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Only {', '.join(settings.allowed_signup_domains)} email addresses can create dashboard accounts",
+    if email_domain_allowed(email, settings.allowed_signup_domains):
+        code = generate_verification_code()
+        challenge = AuthVerificationChallenge(
+            email=email,
+            email_domain=extract_email_domain(email),
+            code_hash=verification_code_hash(email, code),
+            expires_at=verification_expiry(),
+            consumed_at=None,
         )
+        db.add(challenge)
+        db.commit()
+        send_email_verification_code(email, code)
+        _clear_failed_attempts(request, email)
+    else:
+        _record_failed_attempt(request, email)
 
-    password_error = validate_password_strength(payload.password)
-    if password_error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_error)
+    return {
+        "ok": True,
+        "detail": "If that email can access the dashboard, a verification code has been sent.",
+    }
 
-    existing_user = db.execute(select(AuthUser).where(AuthUser.email == email)).scalar_one_or_none()
-    if existing_user is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account already exists for that email")
 
+@router.post("/verify-code")
+def verify_verification_code(payload: VerifyVerificationCodeRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
+    if settings.auth_disabled:
+        return {
+            "authenticated": True,
+            "auth_disabled": True,
+            "allowed_domains": [],
+            "user": None,
+        }
+
+    email = _validated_email(payload.email)
+    code = payload.code.strip()
+    _guard_rate_limit(request, email)
+
+    now = datetime.now(timezone.utc)
+    code_hash = verification_code_hash(email, code)
+    challenge = db.execute(
+        select(AuthVerificationChallenge)
+        .where(
+            AuthVerificationChallenge.email == email,
+            AuthVerificationChallenge.code_hash == code_hash,
+            AuthVerificationChallenge.consumed_at.is_(None),
+            AuthVerificationChallenge.expires_at >= now,
+        )
+        .order_by(AuthVerificationChallenge.created_at.desc())
+    ).scalars().first()
+
+    if challenge is None:
+        _record_failed_attempt(request, email)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired verification code")
+
+    user = db.execute(select(AuthUser).where(AuthUser.email == email)).scalar_one_or_none()
     user_count = int(db.execute(select(func.count()).select_from(AuthUser)).scalar() or 0)
-    user = AuthUser(
-        email=email,
-        email_domain=extract_email_domain(email),
-        password_hash=hash_password(payload.password),
-        is_active=True,
-        is_admin=(user_count == 0),
-        last_login_at=datetime.now(timezone.utc),
-    )
-    db.add(user)
+    if user is None:
+        user = AuthUser(
+            email=email,
+            email_domain=extract_email_domain(email),
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+            is_active=True,
+            is_admin=(user_count == 0),
+        )
+        db.add(user)
+
+    challenge.consumed_at = now
+    user.is_active = True
+    user.last_login_at = now
     db.commit()
     db.refresh(user)
 
@@ -226,41 +292,17 @@ def auth_signup(payload: SignupRequest, request: Request, response: Response, db
     return {
         "authenticated": True,
         "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
+        "allowed_domains": [],
         "user": serialize_user(user),
     }
 
 
 @router.post("/login")
 def auth_login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(db_session)) -> dict[str, Any]:
-    if settings.auth_disabled:
-        return {
-            "authenticated": True,
-            "auth_disabled": True,
-            "allowed_domains": settings.allowed_signup_domains,
-            "user": None,
-        }
-
-    email = _validated_email(payload.email)
-    _guard_rate_limit(request, email)
-
-    user = db.execute(select(AuthUser).where(AuthUser.email == email, AuthUser.is_active.is_(True))).scalar_one_or_none()
-    if user is None or not verify_password(payload.password, user.password_hash):
-        _record_failed_attempt(request, email)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
-
-    user.last_login_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(user)
-
-    _clear_failed_attempts(request, email)
-    set_session_cookie(response, user)
-    return {
-        "authenticated": True,
-        "auth_disabled": False,
-        "allowed_domains": settings.allowed_signup_domains,
-        "user": serialize_user(user),
-    }
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Password sign-in has been disabled. Use the email verification flow instead.",
+    )
 
 
 @router.post("/logout")

@@ -11,6 +11,11 @@ export interface AuthStatusResponse {
   user?: AuthUserSummary | null
 }
 
+export interface AuthCodeRequestResponse {
+  ok: boolean
+  detail: string
+}
+
 export type KPIStatus = 'green' | 'yellow' | 'red'
 export type KPITrend = 'up' | 'flat' | 'down'
 export type KPITruthState = 'canonical' | 'proxy' | 'estimated' | 'degraded' | 'blocked' | 'unavailable'
