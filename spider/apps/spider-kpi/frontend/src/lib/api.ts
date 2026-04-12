@@ -1,5 +1,4 @@
 import type {
-  AuthCodeRequestResponse,
   AuthStatusResponse,
   ClarityPageMetric,
   CXActionItem,
@@ -115,29 +114,29 @@ export function getApiBase() {
 
 export const api = {
   authStatus: (signal?: AbortSignal) => request<AuthStatusResponse>('/api/auth/status', { signal, retries: 0 }),
-  requestCode: async (email: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/request-code`, {
+  signup: async (email: string, password: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/signup`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, password }),
     })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
-      throw new ApiError(`API error ${response.status} for /api/auth/request-code${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/request-code')
+      throw new ApiError(`API error ${response.status} for /api/auth/signup${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/signup')
     }
-    return response.json() as Promise<AuthCodeRequestResponse>
+    return response.json() as Promise<AuthStatusResponse>
   },
-  verifyCode: async (email: string, code: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/verify-code`, {
+  login: async (email: string, password: string) => {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({ email, password }),
     })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
-      throw new ApiError(`API error ${response.status} for /api/auth/verify-code${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/verify-code')
+      throw new ApiError(`API error ${response.status} for /api/auth/login${detail ? `: ${detail}` : ''}`, response.status, '/api/auth/login')
     }
     return response.json() as Promise<AuthStatusResponse>
   },
