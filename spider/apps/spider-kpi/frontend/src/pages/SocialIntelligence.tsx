@@ -6,7 +6,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
-import { SocialMention, SocialPulse, SocialTrendsResponse } from '../lib/types'
+import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth } from '../lib/types'
 import { BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts'
 
 type MentionFilter = 'all' | 'positive' | 'negative' | 'questions' | 'complaints'
@@ -17,10 +17,24 @@ function sentimentStatus(s: string) {
   return 'warn'
 }
 
+function sentimentBadgeClass(s: string) {
+  if (s === 'positive') return 'badge-good'
+  if (s === 'negative') return 'badge-bad'
+  return 'badge-warn'
+}
+
+function formatViews(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
 export function SocialIntelligence() {
   const [pulse, setPulse] = useState<SocialPulse | null>(null)
   const [trends, setTrends] = useState<SocialTrendsResponse | null>(null)
   const [mentions, setMentions] = useState<SocialMention[]>([])
+  const [youtube, setYoutube] = useState<YouTubePerformance | null>(null)
+  const [amazon, setAmazon] = useState<AmazonProductHealth | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<MentionFilter>('all')
@@ -31,15 +45,19 @@ export function SocialIntelligence() {
       setLoading(true)
       setError(null)
       try {
-        const [p, t, m] = await Promise.all([
+        const [p, t, m, yt, amz] = await Promise.all([
           api.socialPulse(7).catch(() => null),
           api.socialTrends(30).catch(() => null),
           api.socialMentions({ days: 7 }).catch(() => []),
+          api.youtubePerformance(30).catch(() => null),
+          api.amazonProducts().catch(() => null),
         ])
         if (cancelled) return
         setPulse(p)
         setTrends(t)
         setMentions(m)
+        setYoutube(yt)
+        setAmazon(amz)
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load social data')
       } finally {
@@ -113,18 +131,27 @@ export function SocialIntelligence() {
 
   const hasData = totalMentions > 0 || trendingCount > 0 || mentions.length > 0
 
+  // Platform breakdown for subtitle
+  const platformParts: string[] = []
+  const byPlatform = pulse?.by_platform || {}
+  if (byPlatform['reddit']) platformParts.push(`${byPlatform['reddit']} Reddit`)
+  if (byPlatform['youtube']) platformParts.push(`${byPlatform['youtube']} YouTube`)
+  if (byPlatform['amazon']) platformParts.push(`${byPlatform['amazon']} Amazon`)
+  if (byPlatform['google_reviews']) platformParts.push(`${byPlatform['google_reviews']} Google`)
+  const platformSummary = platformParts.length > 0 ? ` (${platformParts.join(', ')})` : ''
+
   return (
     <div className="page-grid venom-page">
       <div className="venom-header">
         <div>
           <h2 className="venom-title">Social Intelligence</h2>
           <p className="venom-subtitle">
-            {hasData ? `${fmtInt(totalMentions)} mentions tracked across Reddit, YouTube, and Google Reviews` : 'Monitoring Reddit, YouTube, and Google Reviews for brand, competitor, and industry signals'}
+            {hasData ? `${fmtInt(totalMentions)} mentions tracked across Reddit, YouTube, and Amazon${platformSummary}` : 'Monitoring Reddit, YouTube, and Amazon for brand, competitor, and industry signals'}
           </p>
         </div>
       </div>
 
-      {loading ? <Card title="Loading"><div className="state-message">Loading social intelligence…</div></Card> : null}
+      {loading ? <Card title="Loading"><div className="state-message">Loading social intelligence...</div></Card> : null}
       {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}
 
       {!loading && !error ? (
@@ -155,6 +182,156 @@ export function SocialIntelligence() {
               </>
             ) : (
               <div className="state-message">Brand health score will populate after first social sync.</div>
+            )}
+          </section>
+
+          {/* YouTube Content Intelligence */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>YouTube Content Intelligence</strong>
+              <span className="venom-panel-hint">30 days</span>
+            </div>
+            {youtube && youtube.total_videos > 0 ? (
+              <>
+                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtInt(youtube.total_videos)}</span>
+                    <span className="mini-stat-label">Videos</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{formatViews(youtube.total_views)}</span>
+                    <span className="mini-stat-label">Total Views</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{formatViews(youtube.total_likes)}</span>
+                    <span className="mini-stat-label">Total Likes</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{youtube.avg_engagement_rate}%</span>
+                    <span className="mini-stat-label">Avg Engagement</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtInt(youtube.total_comments)}</span>
+                    <span className="mini-stat-label">Comments</span>
+                  </div>
+                </div>
+                <div className="stack-list compact">
+                  {youtube.top_videos.slice(0, 8).map((v) => (
+                    <div key={v.video_id} className={`list-item status-${sentimentStatus(v.sentiment)}`}>
+                      <div className="item-head">
+                        <strong>{v.title || 'Untitled video'}</strong>
+                        <div className="inline-badges">
+                          <span className="badge badge-neutral">{formatViews(v.views)} views</span>
+                          <span className="badge badge-neutral">{fmtInt(v.likes)} likes</span>
+                          {v.engagement_rate > 0 ? <span className="badge badge-muted">{v.engagement_rate}% eng</span> : null}
+                          <span className={`badge ${sentimentBadgeClass(v.sentiment)}`}>{v.sentiment}</span>
+                        </div>
+                      </div>
+                      <div className="venom-mention-meta">
+                        <span className="badge badge-muted">{v.author}</span>
+                        {v.comments > 0 ? <span className="badge badge-neutral">{fmtInt(v.comments)} comments</span> : null}
+                        {v.product_mentioned ? <span className="badge badge-good">{v.product_mentioned}</span> : null}
+                        {v.competitor_mentioned ? <span className="badge badge-warn">{v.competitor_mentioned}</span> : null}
+                        <a href={v.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">Watch</a>
+                      </div>
+                      {v.top_comments && v.top_comments.length > 0 ? (
+                        <div style={{ marginTop: 8, paddingLeft: 12, borderLeft: '2px solid rgba(255,255,255,0.1)' }}>
+                          {v.top_comments.slice(0, 2).map((c, i) => (
+                            <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
+                              <strong>{c.author}</strong>: {c.text.slice(0, 150)}{c.text.length > 150 ? '...' : ''}
+                              {c.likes > 0 ? <span style={{ marginLeft: 6, opacity: 0.7 }}>({c.likes} likes)</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Comment highlights */}
+                {youtube.comment_highlights.length > 0 ? (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>Top Comments Across All Videos</div>
+                    {youtube.comment_highlights.slice(0, 4).map((c, i) => (
+                      <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary, #b0b8c9)', marginBottom: 6, paddingLeft: 8, borderLeft: '2px solid var(--orange)' }}>
+                        <strong>{c.author}</strong>: {c.text.slice(0, 200)}{c.text.length > 200 ? '...' : ''}
+                        {c.likes > 0 ? <span style={{ marginLeft: 6, opacity: 0.7 }}>({c.likes} likes)</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="state-message">YouTube data will populate after first YouTube sync. Requires YOUTUBE_API_KEY.</div>
+            )}
+          </section>
+
+          {/* Amazon Marketplace Health */}
+          <section className="card">
+            <div className="venom-panel-head">
+              <strong>Amazon Marketplace Health</strong>
+              <TruthBadge state="proxy" />
+            </div>
+            {amazon && amazon.total_products > 0 ? (
+              <>
+                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtInt(amazon.total_products)}</span>
+                    <span className="mini-stat-label">Products Tracked</span>
+                  </div>
+                  {amazon.best_bsr != null ? (
+                    <div className="mini-stat">
+                      <span className="mini-stat-value">#{fmtInt(amazon.best_bsr)}</span>
+                      <span className="mini-stat-label">Best BSR</span>
+                    </div>
+                  ) : null}
+                  {amazon.avg_bsr != null ? (
+                    <div className="mini-stat">
+                      <span className="mini-stat-value">#{fmtInt(amazon.avg_bsr)}</span>
+                      <span className="mini-stat-label">Avg BSR</span>
+                    </div>
+                  ) : null}
+                  {amazon.avg_price != null ? (
+                    <div className="mini-stat">
+                      <span className="mini-stat-value">${amazon.avg_price.toFixed(2)}</span>
+                      <span className="mini-stat-label">Avg Price</span>
+                    </div>
+                  ) : null}
+                  {amazon.price_range ? (
+                    <div className="mini-stat">
+                      <span className="mini-stat-value">${amazon.price_range.min.toFixed(0)}-${amazon.price_range.max.toFixed(0)}</span>
+                      <span className="mini-stat-label">Price Range</span>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="stack-list compact">
+                  {amazon.products.map((p) => (
+                    <div key={p.asin} className="list-item status-muted">
+                      <div className="item-head">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {p.image_url ? <img src={p.image_url} alt="" style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 4, background: 'rgba(255,255,255,0.05)' }} /> : null}
+                          <strong>{p.title || p.asin}</strong>
+                        </div>
+                        <div className="inline-badges">
+                          {p.bsr != null ? <span className="badge badge-neutral">BSR #{fmtInt(p.bsr)}</span> : null}
+                          {p.competitive_price != null ? <span className="badge badge-good">${p.competitive_price.toFixed(2)}</span> : null}
+                          <span className="badge badge-muted">{p.asin}</span>
+                        </div>
+                      </div>
+                      <div className="venom-mention-meta">
+                        {p.bsr_category ? <span className="badge badge-muted">{p.bsr_category}</span> : null}
+                        {p.brand ? <span className="badge badge-neutral">{p.brand}</span> : null}
+                        {p.listed_price != null && p.competitive_price != null && p.listed_price !== p.competitive_price ? (
+                          <span className="badge badge-warn">List: ${p.listed_price.toFixed(2)}</span>
+                        ) : null}
+                        <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View on Amazon</a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="state-message">Amazon product data will populate after first Amazon sync. Requires SP-API credentials.</div>
             )}
           </section>
 
@@ -221,12 +398,13 @@ export function SocialIntelligence() {
                       <div className="inline-badges">
                         <span className="badge badge-neutral">{m.platform}</span>
                         {m.subreddit ? <span className="badge badge-muted">r/{m.subreddit}</span> : null}
-                        <span className={`badge ${m.sentiment === 'positive' ? 'badge-good' : m.sentiment === 'negative' ? 'badge-bad' : 'badge-warn'}`}>{m.sentiment}</span>
+                        <span className={`badge ${sentimentBadgeClass(m.sentiment)}`}>{m.sentiment}</span>
                       </div>
                     </div>
                     {m.body ? <p className="venom-mention-body">{m.body.slice(0, 200)}{m.body.length > 200 ? '...' : ''}</p> : null}
                     <div className="venom-mention-meta">
-                      {m.engagement_score > 0 ? <span className="badge badge-neutral">{m.engagement_score} upvotes</span> : null}
+                      {m.platform === 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{formatViews(m.engagement_score)} views</span> : null}
+                      {m.platform !== 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{m.engagement_score} upvotes</span> : null}
                       {m.comment_count > 0 ? <span className="badge badge-neutral">{m.comment_count} comments</span> : null}
                       {m.product_mentioned ? <span className="badge badge-good">{m.product_mentioned}</span> : null}
                       {m.competitor_mentioned ? <span className="badge badge-warn">{m.competitor_mentioned}</span> : null}
@@ -236,7 +414,7 @@ export function SocialIntelligence() {
                 ))}
               </div>
             ) : (
-              <div className="state-message">{hasData ? 'No mentions match this filter.' : 'Social listening will populate after first Reddit sync. Set up Reddit OAuth credentials to start.'}</div>
+              <div className="state-message">{hasData ? 'No mentions match this filter.' : 'Social listening will populate after first sync. Configure Reddit, YouTube, or Amazon credentials to start.'}</div>
             )}
           </section>
 

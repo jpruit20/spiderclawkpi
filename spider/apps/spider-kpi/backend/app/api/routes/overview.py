@@ -16,7 +16,7 @@ from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_telemetry_history_daily
 from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
 from app.services.overview import build_kpi_payload, build_overview
-from app.services.social_listening import get_brand_pulse, get_social_mentions, get_social_trends
+from app.services.social_listening import get_amazon_product_health, get_brand_pulse, get_social_mentions, get_social_trends, get_youtube_performance
 from app.services.source_health import get_source_health
 
 router = APIRouter(prefix="/api", tags=["overview"], dependencies=[Depends(require_dashboard_session)])
@@ -164,6 +164,16 @@ def get_social_pulse(days: int = 7, db: Session = Depends(db_session)):
 @router.get("/social/trends")
 def get_social_trends_endpoint(days: int = 30, db: Session = Depends(db_session)):
     return get_social_trends(db, days)
+
+
+@router.get("/social/youtube-performance")
+def get_youtube_performance_endpoint(days: int = 30, db: Session = Depends(db_session)):
+    return get_youtube_performance(db, days)
+
+
+@router.get("/social/amazon-products")
+def get_amazon_products_endpoint(db: Session = Depends(db_session)):
+    return get_amazon_product_health(db)
 
 
 @router.get("/clarity/friction")

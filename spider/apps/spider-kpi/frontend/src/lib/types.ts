@@ -597,6 +597,63 @@ export interface SocialTrendsResponse {
   product_mentions: Record<string, number>
 }
 
+export interface YouTubeVideoComment {
+  author: string
+  text: string
+  likes: number
+  published_at?: string
+}
+
+export interface YouTubeVideo {
+  video_id: string
+  title: string
+  author: string
+  source_url: string
+  views: number
+  likes: number
+  comments: number
+  engagement_rate: number
+  sentiment: 'positive' | 'negative' | 'neutral' | 'mixed'
+  product_mentioned?: string
+  competitor_mentioned?: string
+  published_at?: string
+  top_comments?: YouTubeVideoComment[]
+}
+
+export interface YouTubePerformance {
+  period_days: number
+  total_videos: number
+  total_views: number
+  total_likes: number
+  total_comments: number
+  avg_engagement_rate: number
+  sentiment_breakdown: Record<string, number>
+  top_videos: YouTubeVideo[]
+  comment_highlights: YouTubeVideoComment[]
+}
+
+export interface AmazonProduct {
+  asin: string
+  title: string
+  source_url: string
+  brand: string
+  bsr: number | null
+  bsr_category: string | null
+  competitive_price: number | null
+  listed_price: number | null
+  image_url: string | null
+  last_updated: string | null
+}
+
+export interface AmazonProductHealth {
+  total_products: number
+  products: AmazonProduct[]
+  avg_bsr: number | null
+  best_bsr: number | null
+  avg_price: number | null
+  price_range: { min: number; max: number } | null
+}
+
 export interface GithubIssue {
   id: number
   number: number

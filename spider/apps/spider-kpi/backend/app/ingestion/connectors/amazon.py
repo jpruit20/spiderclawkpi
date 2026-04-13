@@ -271,11 +271,38 @@ def sync_amazon(db: Session) -> dict[str, Any]:
                 continue
 
             asin = parsed["asin"]
+
+            # Fetch competitive pricing for this ASIN
+            pricing_data = _get_competitive_pricing(asin)
+            competitive_price = None
+            listed_price = None
+            if pricing_data:
+                try:
+                    products = pricing_data.get("payload", pricing_data.get("products", []))
+                    if isinstance(products, list):
+                        for prod in products:
+                            comp_prices = prod.get("competitivePricing", {}).get("competitivePrices", [])
+                            for cp in comp_prices:
+                                price_obj = cp.get("price", {})
+                                amt = price_obj.get("amount") or price_obj.get("landedPrice", {}).get("amount")
+                                if amt:
+                                    competitive_price = float(amt)
+                                    break
+                            offers = prod.get("offers", [])
+                            if offers:
+                                listing_price = offers[0].get("listingPrice", {})
+                                if listing_price.get("amount"):
+                                    listed_price = float(listing_price["amount"])
+                except Exception as exc:
+                    logger.debug("amazon: pricing parse for %s: %s", asin, exc)
+
             stats["products"].append({
                 "asin": asin,
                 "title": parsed["title"],
                 "bsr": parsed["bsr"],
                 "bsr_category": parsed["bsr_category"],
+                "competitive_price": competitive_price,
+                "listed_price": listed_price,
             })
 
             # Upsert into social_mentions as an amazon product record
@@ -283,6 +310,8 @@ def sync_amazon(db: Session) -> dict[str, Any]:
             body_parts = []
             if parsed["bsr"]:
                 body_parts.append(f"BSR #{parsed['bsr']} in {parsed['bsr_category'] or 'N/A'}")
+            if competitive_price:
+                body_parts.append(f"Price: ${competitive_price:.2f}")
             if parsed["brand"]:
                 body_parts.append(f"Brand: {parsed['brand']}")
             body = " | ".join(body_parts) if body_parts else ""
@@ -302,6 +331,8 @@ def sync_amazon(db: Session) -> dict[str, Any]:
                 "image_url": parsed["image_url"],
                 "marketplace": parsed["marketplace"],
                 "data_type": "product_catalog",
+                "competitive_price": competitive_price,
+                "listed_price": listed_price,
             }
 
             if existing is None:

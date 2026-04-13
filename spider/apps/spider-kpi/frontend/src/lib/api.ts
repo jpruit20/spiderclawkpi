@@ -16,6 +16,8 @@ import type {
   SocialMention,
   SocialPulse,
   SocialTrendsResponse,
+  YouTubePerformance,
+  AmazonProductHealth,
   TelemetrySummary,
   RecommendationItem,
   SourceHealthItem,
@@ -198,6 +200,10 @@ export const api = {
     request<SocialPulse>(`/api/social/pulse${days ? `?days=${days}` : ''}`, { signal }),
   socialTrends: (days?: number, signal?: AbortSignal) =>
     request<SocialTrendsResponse>(`/api/social/trends${days ? `?days=${days}` : ''}`, { signal }),
+  youtubePerformance: (days?: number, signal?: AbortSignal) =>
+    request<YouTubePerformance>(`/api/social/youtube-performance${days ? `?days=${days}` : ''}`, { signal }),
+  amazonProducts: (signal?: AbortSignal) =>
+    request<AmazonProductHealth>('/api/social/amazon-products', { signal }),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),

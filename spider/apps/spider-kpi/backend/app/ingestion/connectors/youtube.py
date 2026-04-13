@@ -70,7 +70,7 @@ def _get_video_stats(video_ids: list[str]) -> dict[str, dict[str, int]]:
         return {}
     url = "https://www.googleapis.com/youtube/v3/videos"
     params = {
-        "part": "statistics",
+        "part": "statistics,contentDetails",
         "id": ",".join(video_ids),
         "key": settings.youtube_api_key,
     }
@@ -90,6 +90,39 @@ def _get_video_stats(video_ids: list[str]) -> dict[str, dict[str, int]]:
     except requests.RequestException as exc:
         logger.warning("youtube stats request failed: %s", exc)
         return {}
+
+
+def _get_video_comments(video_id: str, max_results: int = 5) -> list[dict[str, Any]]:
+    """Fetch top comment threads for a video, sorted by relevance."""
+    url = "https://www.googleapis.com/youtube/v3/commentThreads"
+    params = {
+        "part": "snippet",
+        "videoId": video_id,
+        "maxResults": max_results,
+        "order": "relevance",
+        "textFormat": "plainText",
+        "key": settings.youtube_api_key,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=TIMEOUT_SECONDS)
+        if resp.status_code == 403:
+            # Comments may be disabled on this video
+            return []
+        if resp.status_code != 200:
+            return []
+        comments = []
+        for item in resp.json().get("items", []):
+            snippet = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+            comments.append({
+                "author": snippet.get("authorDisplayName", ""),
+                "text": (snippet.get("textDisplay", "") or "")[:300],
+                "likes": int(snippet.get("likeCount", 0)),
+                "published_at": snippet.get("publishedAt"),
+            })
+        return comments
+    except requests.RequestException as exc:
+        logger.warning("youtube comments request for %s failed: %s", video_id, exc)
+        return []
 
 
 def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
@@ -155,6 +188,15 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
         video_ids = list(all_videos.keys())
         video_stats = _get_video_stats(video_ids)
 
+        # Fetch top comments for the 10 most-engaged videos
+        top_video_ids = sorted(video_stats.keys(), key=lambda vid: video_stats[vid].get("view_count", 0), reverse=True)[:10]
+        video_comments: dict[str, list[dict[str, Any]]] = {}
+        for vid in top_video_ids:
+            comments = _get_video_comments(vid, max_results=5)
+            if comments:
+                video_comments[vid] = comments
+        stats["videos_with_comments"] = len(video_comments)
+
         for video_id, video in all_videos.items():
             vs = video_stats.get(video_id, {})
             video["engagement_score"] = vs.get("view_count", 0)
@@ -162,6 +204,18 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
             video["like_count"] = vs.get("like_count", 0)
 
             classification = classify_mention(video["title"], video["body"])
+
+            # Calculate engagement rate
+            views = video["engagement_score"]
+            likes = video["like_count"]
+            engagement_rate = round(likes / views * 100, 2) if views > 0 else 0.0
+
+            metadata = {
+                "like_count": video["like_count"],
+                "engagement_rate": engagement_rate,
+            }
+            if video_id in video_comments:
+                metadata["top_comments"] = video_comments[video_id]
 
             existing = db.execute(
                 select(SocialMention).where(
@@ -189,7 +243,7 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
                     trend_topic=classification["trend_topic"],
                     relevance_score=classification["relevance_score"],
                     published_at=video["published_at"],
-                    metadata_json={"like_count": video["like_count"]},
+                    metadata_json=metadata,
                 )
                 db.add(mention)
                 stats["inserted"] += 1
@@ -200,7 +254,7 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
                 existing.sentiment_score = classification["sentiment_score"]
                 existing.classification = classification["classification"]
                 existing.relevance_score = classification["relevance_score"]
-                existing.metadata_json = {**(existing.metadata_json or {}), "like_count": video["like_count"]}
+                existing.metadata_json = {**(existing.metadata_json or {}), **metadata}
                 stats["updated"] += 1
 
         duration_ms = int((time.monotonic() - started) * 1000)

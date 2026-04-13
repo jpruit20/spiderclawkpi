@@ -1465,6 +1465,29 @@ th {
   flex-wrap: wrap;
 }
 
+/* Mini stat chips (YouTube / Amazon sections) */
+.mini-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  min-width: 80px;
+}
+.mini-stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text, #e8ecf4);
+  line-height: 1.2;
+}
+.mini-stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* Venom responsive */
 @media (max-width: 1200px) {
   .venom-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
