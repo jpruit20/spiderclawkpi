@@ -523,9 +523,37 @@ export function CustomerExperienceDivision() {
         <div>
           <h2 className="venom-title">Customer Experience</h2>
           <p className="venom-subtitle">
-            Jeremiah's team &mdash; snapshot {snapshotTimestamp}
+            Jeremiah's Team &mdash; Last updated {snapshotTimestamp}
           </p>
         </div>
+        {!loading && !error && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Queue Health Status */}
+            {(() => {
+              const backlogMetric = headerMetrics.find(m => m.key.includes('backlog'))
+              const backlog = backlogMetric?.current ?? 0
+              if (backlog > 150) return <span className="badge badge-bad">Queue Critical ({whole(backlog)})</span>
+              if (backlog > 80) return <span className="badge badge-warn">Queue Elevated ({whole(backlog)})</span>
+              return <span className="badge badge-good">Queue Healthy ({whole(backlog)})</span>
+            })()}
+            {/* SLA Breach Warning */}
+            {slaBreachCountdown.breached > 0 && (
+              <span className="badge badge-bad">{slaBreachCountdown.breached} SLA Breached</span>
+            )}
+            {slaBreachCountdown.in2h > 0 && (
+              <span className="badge badge-warn">{slaBreachCountdown.in2h} SLA &lt;2h</span>
+            )}
+            {/* First Response Time Status */}
+            {(() => {
+              const frtMetric = headerMetrics.find(m => m.key.includes('first_response'))
+              if (!frtMetric) return null
+              const frt = frtMetric.current
+              if (frt <= 4) return <span className="badge badge-good">FRT {hrs(frt)}</span>
+              if (frt <= 8) return <span className="badge badge-warn">FRT {hrs(frt)}</span>
+              return <span className="badge badge-bad">FRT {hrs(frt)}</span>
+            })()}
+          </div>
+        )}
       </div>
 
       {loading ? <Card title="Customer Experience"><div className="state-message">Loading customer experience division...</div></Card> : null}
@@ -533,6 +561,31 @@ export function CustomerExperienceDivision() {
 
       {!loading && !error ? (
         <>
+          {/* Quick Stats & Navigation Bar */}
+          <div className="scope-note" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>Quick Stats:</span>
+              <span className={`badge ${fcrMetrics.rate >= 80 ? 'badge-good' : fcrMetrics.rate >= 60 ? 'badge-warn' : 'badge-bad'}`}>
+                FCR {pct(fcrMetrics.rate)}
+              </span>
+              <span className="badge badge-neutral">{tickets.length} Total Tickets</span>
+              <span className="badge badge-neutral">{tickets.filter(t => !t.resolved_at_source).length} Open</span>
+              {socialPulse && (
+                <span className={`badge ${(socialPulse.avg_sentiment_score ?? 0) >= 0.3 ? 'badge-good' : (socialPulse.avg_sentiment_score ?? 0) >= 0 ? 'badge-warn' : 'badge-bad'}`}>
+                  Social {Math.round((socialPulse.avg_sentiment_score ?? 0) * 100)}%
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>Drill-down:</span>
+              {DRILL_ROUTES.map(route => (
+                <Link key={route.path} to={route.path} className="range-button" style={{ textDecoration: 'none', fontSize: 12 }}>
+                  {route.icon} {route.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
           {/* Truth Legend */}
           <TruthLegend />
 
