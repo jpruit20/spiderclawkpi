@@ -256,6 +256,17 @@ export function ProductEngineeringDivision() {
     return Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)))
   }, [dateStart, dateEnd])
 
+  // Pre-materialized cook analysis (separate fetch — instant from daily table)
+  const [cookData, setCookData] = useState<Record<string, any> | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.cookAnalysis(dateStart, dateEnd)
+      .then(data => { if (!cancelled) setCookData(data) })
+      .catch(() => { if (!cancelled) setCookData(null) })
+    return () => { cancelled = true }
+  }, [dateStart, dateEnd])
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -304,7 +315,7 @@ export function ProductEngineeringDivision() {
   const latest = telemetry?.latest || null
   const analytics = telemetry?.analytics || null
   const historyDaily = telemetry?.history_daily || []
-  const cookAnalysis = telemetry?.cook_analysis || null
+  const cookAnalysis = cookData as { total_sessions: number; cook_styles: Record<string, number>; style_details: Record<string, any>; temp_ranges: Record<string, number>; duration_ranges: Record<string, number>; monthly_breakdown?: { month: string; sessions: number; active_devices: number }[]; fleet_total_unique_devices?: number } | null
   const confidence = telemetry?.confidence || null
 
   const streamBacked = collection?.sample_source === 'dynamodb_stream'

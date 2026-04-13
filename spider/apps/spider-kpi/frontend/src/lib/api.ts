@@ -185,6 +185,7 @@ export const api = {
   recommendations: (signal?: AbortSignal) => request<RecommendationItem[]>('/api/recommendations', { signal }),
   sourceHealth: (signal?: AbortSignal) => request<SourceHealthItem[]>('/api/source-health', { signal }),
   telemetrySummary: (days?: number, signal?: AbortSignal) => request<TelemetrySummary>(`/api/telemetry/summary${days ? `?days=${days}` : ''}`, { signal }),
+  cookAnalysis: (start: string, end: string, signal?: AbortSignal) => request<Record<string, any>>(`/api/telemetry/cook-analysis?start=${start}&end=${end}`, { signal }),
   supportOverview: (signal?: AbortSignal) => request<SupportOverviewResponse>('/api/support/overview', { signal }),
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),
   supportTickets: (signal?: AbortSignal) => request<FreshdeskTicketItem[]>('/api/support/tickets', { signal }),

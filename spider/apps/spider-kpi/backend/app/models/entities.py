@@ -336,6 +336,14 @@ class TelemetryHistoryDaily(TimestampMixin, Base):
     model_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     avg_cook_temp: Mapped[Optional[float]] = mapped_column(Float)
     peak_hour_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Cook analysis columns (materialized from derived sessions)
+    session_count: Mapped[Optional[int]] = mapped_column(Integer)
+    successful_sessions: Mapped[Optional[int]] = mapped_column(Integer)
+    cook_styles_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    cook_style_details_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    temp_range_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    duration_range_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    unique_devices_seen: Mapped[Optional[int]] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(64), default="ddb_export_backfill", nullable=False)
 
 

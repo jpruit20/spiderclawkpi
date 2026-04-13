@@ -13,7 +13,7 @@ from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExper
 from app.services.cx_snapshot import build_customer_experience_snapshot
 from app.services.issue_radar import build_issue_radar, get_cluster_ticket_detail
 from app.services.telemetry import summarize_telemetry
-from app.services.telemetry_history_daily import get_telemetry_history_daily
+from app.services.telemetry_history_daily import get_cook_analysis_for_range, get_telemetry_history_daily
 from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
 from app.services.overview import build_kpi_payload, build_overview
 from app.services.social_listening import get_amazon_product_health, get_brand_pulse, get_market_intelligence, get_social_mentions, get_social_trends, get_youtube_performance
@@ -112,9 +112,21 @@ def get_sources(db: Session = Depends(db_session)):
 def telemetry_summary(days: int = 30, db: Session = Depends(db_session)):
     # Clamp days to reasonable range (1 to 365)
     days = max(1, min(days, 365))
-    payload = summarize_telemetry(db, lookback_days=days, include_cook_analysis=True)
+    payload = summarize_telemetry(db, lookback_days=days)
     payload['history_daily'] = get_telemetry_history_daily(db, limit=days)
     return payload
+
+
+@router.get("/telemetry/cook-analysis")
+def telemetry_cook_analysis(
+    start: str = "2024-01-01",
+    end: str | None = None,
+    db: Session = Depends(db_session),
+):
+    if end is None:
+        from datetime import datetime, timezone
+        end = datetime.now(timezone.utc).date().isoformat()
+    return get_cook_analysis_for_range(db, start, end)
 
 
 @router.get("/telemetry/history-daily")

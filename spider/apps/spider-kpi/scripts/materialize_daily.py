@@ -23,6 +23,10 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
+# Allow imports from backend/app
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from app.services.cook_classification import EventRow, derive_sessions_from_rows, build_daily_cook_columns
+
 # ---------------------------------------------------------------------------
 # .env loading
 # ---------------------------------------------------------------------------
@@ -125,6 +129,24 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 """
 
+SESSION_EVENTS_SQL = """\
+SELECT
+    device_id,
+    sample_timestamp,
+    created_at,
+    current_temp,
+    target_temp,
+    rssi,
+    firmware_version,
+    grill_type,
+    engaged,
+    error_codes_json
+FROM telemetry_stream_events
+WHERE sample_timestamp IS NOT NULL
+  AND (sample_timestamp AT TIME ZONE 'UTC')::date = %(day)s
+ORDER BY device_id, sample_timestamp;
+"""
+
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
@@ -141,6 +163,13 @@ INSERT INTO telemetry_history_daily (
     model_distribution,
     avg_cook_temp,
     peak_hour_distribution,
+    session_count,
+    successful_sessions,
+    cook_styles_json,
+    cook_style_details_json,
+    temp_range_json,
+    duration_range_json,
+    unique_devices_seen,
     source,
     created_at,
     updated_at
@@ -155,22 +184,36 @@ INSERT INTO telemetry_history_daily (
     %(model_distribution)s,
     %(avg_cook_temp)s,
     %(peak_hour_distribution)s,
+    %(session_count)s,
+    %(successful_sessions)s,
+    %(cook_styles_json)s,
+    %(cook_style_details_json)s,
+    %(temp_range_json)s,
+    %(duration_range_json)s,
+    %(unique_devices_seen)s,
     'stream_materialized',
     NOW(),
     NOW()
 )
 ON CONFLICT (business_date) DO UPDATE SET
-    active_devices         = EXCLUDED.active_devices,
-    engaged_devices        = EXCLUDED.engaged_devices,
-    total_events           = EXCLUDED.total_events,
-    avg_rssi               = EXCLUDED.avg_rssi,
-    error_events           = EXCLUDED.error_events,
-    firmware_distribution  = EXCLUDED.firmware_distribution,
-    model_distribution     = EXCLUDED.model_distribution,
-    avg_cook_temp          = EXCLUDED.avg_cook_temp,
-    peak_hour_distribution = EXCLUDED.peak_hour_distribution,
-    source                 = 'stream_materialized',
-    updated_at             = NOW()
+    active_devices          = EXCLUDED.active_devices,
+    engaged_devices         = EXCLUDED.engaged_devices,
+    total_events            = EXCLUDED.total_events,
+    avg_rssi                = EXCLUDED.avg_rssi,
+    error_events            = EXCLUDED.error_events,
+    firmware_distribution   = EXCLUDED.firmware_distribution,
+    model_distribution      = EXCLUDED.model_distribution,
+    avg_cook_temp           = EXCLUDED.avg_cook_temp,
+    peak_hour_distribution  = EXCLUDED.peak_hour_distribution,
+    session_count           = EXCLUDED.session_count,
+    successful_sessions     = EXCLUDED.successful_sessions,
+    cook_styles_json        = EXCLUDED.cook_styles_json,
+    cook_style_details_json = EXCLUDED.cook_style_details_json,
+    temp_range_json         = EXCLUDED.temp_range_json,
+    duration_range_json     = EXCLUDED.duration_range_json,
+    unique_devices_seen     = EXCLUDED.unique_devices_seen,
+    source                  = 'stream_materialized',
+    updated_at              = NOW()
 WHERE
     %(force)s
     OR telemetry_history_daily.total_events < EXCLUDED.total_events;
@@ -258,6 +301,32 @@ def main() -> int:
         with conn.cursor() as cur:
             for row in agg_rows:
                 bd = row["business_date"]
+
+                # Derive cook sessions for this day
+                cur.execute(SESSION_EVENTS_SQL, {"day": bd})
+                raw_events = cur.fetchall()
+                device_events: dict[str, list[EventRow]] = {}
+                device_ids: set[str] = set()
+                for ev in raw_events:
+                    did = ev["device_id"]
+                    device_ids.add(did)
+                    device_events.setdefault(did, []).append(EventRow(
+                        device_id=did,
+                        sample_timestamp=ev["sample_timestamp"],
+                        created_at=ev["created_at"],
+                        current_temp=float(ev["current_temp"]) if ev["current_temp"] is not None else None,
+                        target_temp=float(ev["target_temp"]) if ev["target_temp"] is not None else None,
+                        rssi=float(ev["rssi"]) if ev["rssi"] is not None else None,
+                        firmware_version=ev["firmware_version"],
+                        grill_type=ev["grill_type"],
+                        engaged=bool(ev["engaged"]),
+                        error_codes_json=ev["error_codes_json"] or [],
+                    ))
+                all_sessions = []
+                for did, events in device_events.items():
+                    all_sessions.extend(derive_sessions_from_rows(did, events))
+                cook_cols = build_daily_cook_columns(all_sessions, device_ids)
+
                 upsert_params = {
                     "business_date": bd,
                     "active_devices": row["active_devices"],
@@ -269,11 +338,19 @@ def main() -> int:
                     "model_distribution": json.dumps(model_dist.get(bd, {})),
                     "avg_cook_temp": round(float(row["avg_cook_temp"]), 2) if row["avg_cook_temp"] is not None else None,
                     "peak_hour_distribution": json.dumps(peak_hours.get(bd, {})),
+                    "session_count": cook_cols["session_count"],
+                    "successful_sessions": cook_cols["successful_sessions"],
+                    "cook_styles_json": json.dumps(cook_cols["cook_styles_json"]),
+                    "cook_style_details_json": json.dumps(cook_cols["cook_style_details_json"]),
+                    "temp_range_json": json.dumps(cook_cols["temp_range_json"]),
+                    "duration_range_json": json.dumps(cook_cols["duration_range_json"]),
+                    "unique_devices_seen": cook_cols["unique_devices_seen"],
                     "force": args.force,
                 }
                 cur.execute(UPSERT_SQL, upsert_params)
                 if cur.rowcount > 0:
                     upserted += 1
+                    print(f"  {bd}: {cook_cols['session_count']} sessions, {len(device_ids)} devices")
                 else:
                     skipped += 1
 
