@@ -157,16 +157,36 @@ async def run_cli_turn(
     logger.info("AI agent start: user=%s division=%s", scope.email, scope.division)
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})
 
+    # systemd services have a minimal PATH that may not include node/npm.
+    # Build a rich PATH so the claude CLI (a Node.js script) can find its
+    # interpreter and any required binaries.
+    import os as _os
+    env = _os.environ.copy()
+    extra_paths = [
+        "/usr/local/bin", "/usr/bin", "/usr/local/sbin", "/usr/sbin",
+        _os.path.expanduser("~/.nvm/versions/node/current/bin"),
+        "/usr/lib/node_modules/.bin",
+    ]
+    nvm_dir = _os.environ.get("NVM_DIR", _os.path.expanduser("~/.nvm"))
+    if _os.path.isdir(nvm_dir):
+        versions_dir = _os.path.join(nvm_dir, "versions", "node")
+        if _os.path.isdir(versions_dir):
+            for ver in sorted(_os.listdir(versions_dir), reverse=True):
+                extra_paths.append(_os.path.join(versions_dir, ver, "bin"))
+    existing = env.get("PATH", "")
+    env["PATH"] = ":".join(extra_paths) + ":" + existing
+
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_root,
+            env=env,
         )
     except Exception as exc:
-        logger.exception("Failed to start Claude CLI")
-        yield SSEEvent(event="error", data={"message": f"Failed to start AI: {exc}"})
+        logger.exception("Failed to start Claude CLI: binary=%s cwd=%s", claude_bin, workspace_root)
+        yield SSEEvent(event="error", data={"message": f"Failed to start AI: {exc} (binary={claude_bin}, cwd={workspace_root})"})
         return
 
     # Track tool calls to detect file modifications
