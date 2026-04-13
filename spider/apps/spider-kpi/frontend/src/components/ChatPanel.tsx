@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from './AuthGate'
 import type { AiMessage, AiToolEvent, AiSSEEvent } from '../lib/aiChat'
 import { streamAiMessage } from '../lib/aiChat'
@@ -16,20 +17,36 @@ const DIVISION_LABELS: Record<string, string> = {
   'production-manufacturing': 'Production / Manufacturing',
 }
 
-export function ChatPanel({ division }: { division: string }) {
+const ALL_DIVISIONS = Object.keys(DIVISION_LABELS)
+
+/** Extract division slug from the current hash route, e.g. "#/division/marketing" → "marketing" */
+function divisionFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/division\/([a-z-]+)/)
+  return match ? match[1] : null
+}
+
+export function ChatPanel() {
   const { user } = useAuth()
+  const location = useLocation()
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<AiMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [selectedDivision, setSelectedDivision] = useState<string>('')
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Only show if user has AI access for this division
-  const hasAccess = user?.ai_divisions?.includes(division)
-  if (!hasAccess) return null
+  const aiDivisions = user?.ai_divisions ?? []
+  if (aiDivisions.length === 0) return null
 
-  const label = DIVISION_LABELS[division] || division
+  // Auto-detect division from current route
+  const routeDivision = divisionFromPath(location.pathname)
+  const activeDivision = routeDivision && aiDivisions.includes(routeDivision)
+    ? routeDivision
+    : selectedDivision || (aiDivisions.length === 1 ? aiDivisions[0] : '')
+
+  const label = activeDivision ? (DIVISION_LABELS[activeDivision] || activeDivision) : 'Select a page'
+  const canSend = activeDivision && input.trim() && !streaming
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -39,9 +56,18 @@ export function ChatPanel({ division }: { division: string }) {
 
   useEffect(scrollToBottom, [messages, scrollToBottom])
 
+  // Clear messages when switching divisions
+  const prevDivRef = useRef(activeDivision)
+  useEffect(() => {
+    if (prevDivRef.current !== activeDivision) {
+      setMessages([])
+      prevDivRef.current = activeDivision
+    }
+  }, [activeDivision])
+
   const handleSend = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text || streaming || !activeDivision) return
 
     const userMsg: AiMessage = {
       id: uid(),
@@ -73,7 +99,7 @@ export function ChatPanel({ division }: { division: string }) {
     abortRef.current = controller
 
     try {
-      for await (const evt of streamAiMessage(division, text, history, controller.signal)) {
+      for await (const evt of streamAiMessage(activeDivision, text, history, controller.signal)) {
         setMessages(prev => {
           const updated = [...prev]
           const last = { ...updated[updated.length - 1] }
@@ -83,7 +109,6 @@ export function ChatPanel({ division }: { division: string }) {
               last.content += (evt as Extract<AiSSEEvent, { type: 'text' }>).content
               break
             case 'status':
-              // Status events update content as a note
               break
             case 'tool_start': {
               const e = evt as Extract<AiSSEEvent, { type: 'tool_start' }>
@@ -134,7 +159,6 @@ export function ChatPanel({ division }: { division: string }) {
     } finally {
       setStreaming(false)
       abortRef.current = null
-      // Mark streaming done on last message
       setMessages(prev => {
         const updated = [...prev]
         const last = { ...updated[updated.length - 1] }
@@ -143,7 +167,7 @@ export function ChatPanel({ division }: { division: string }) {
         return updated
       })
     }
-  }, [input, streaming, messages, division])
+  }, [input, streaming, messages, activeDivision])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -158,6 +182,9 @@ export function ChatPanel({ division }: { division: string }) {
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
   }, [])
+
+  // Show division picker when user has multiple divisions and route doesn't match one
+  const showPicker = !routeDivision && aiDivisions.length > 1
 
   // ── collapsed toggle ──
   if (!open) {
@@ -179,7 +206,20 @@ export function ChatPanel({ division }: { division: string }) {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
-          <span>AI Assistant — {label}</span>
+          {showPicker ? (
+            <select
+              className="chat-division-select"
+              value={selectedDivision}
+              onChange={e => setSelectedDivision(e.target.value)}
+            >
+              <option value="">Select page to edit...</option>
+              {aiDivisions.map(d => (
+                <option key={d} value={d}>{DIVISION_LABELS[d] || d}</option>
+              ))}
+            </select>
+          ) : (
+            <span>AI Assistant — {label}</span>
+          )}
         </div>
         <button className="chat-close" onClick={() => setOpen(false)} title="Close">
           &times;
@@ -189,12 +229,18 @@ export function ChatPanel({ division }: { division: string }) {
       <div className="chat-messages" ref={scrollRef}>
         {messages.length === 0 && (
           <div className="chat-empty">
-            Ask me to make changes to your {label} dashboard page. For example:
-            <ul>
-              <li>"Add a new KPI card for return rate"</li>
-              <li>"Change the chart to show a 30-day trend"</li>
-              <li>"Move the action items section above the charts"</li>
-            </ul>
+            {activeDivision ? (
+              <>
+                Ask me to make changes to your {label} dashboard page. For example:
+                <ul>
+                  <li>"Add a new KPI card for return rate"</li>
+                  <li>"Change the chart to show a 30-day trend"</li>
+                  <li>"Move the action items section above the charts"</li>
+                </ul>
+              </>
+            ) : (
+              <>Select a division page above to start editing.</>
+            )}
           </div>
         )}
         {messages.map(msg => (
@@ -235,9 +281,9 @@ export function ChatPanel({ division }: { division: string }) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={`Describe a change to the ${label} page...`}
+          placeholder={activeDivision ? `Describe a change to the ${label} page...` : 'Select a page first...'}
           rows={2}
-          disabled={streaming}
+          disabled={streaming || !activeDivision}
         />
         <div className="chat-input-actions">
           {streaming ? (
@@ -248,7 +294,7 @@ export function ChatPanel({ division }: { division: string }) {
             <button
               className="chat-btn chat-btn-send"
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!canSend}
             >
               Send
             </button>

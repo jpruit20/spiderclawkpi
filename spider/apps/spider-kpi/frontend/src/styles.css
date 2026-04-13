@@ -1582,6 +1582,25 @@ th {
   font-weight: 600;
   color: var(--text);
 }
+.chat-division-select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 220px;
+}
+.chat-division-select:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+.chat-division-select option {
+  background: var(--panel);
+  color: var(--text);
+}
 .chat-close {
   background: none;
   border: none;

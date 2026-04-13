@@ -1,9 +1,7 @@
-import { ChatPanel } from '../components/ChatPanel'
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 
 export function ProductionManufacturingDivision() {
   return (
-    <>
     <BlockedDivisionPage
       title="Production / Manufacturing"
       owner="David"
@@ -34,7 +32,5 @@ export function ProductionManufacturingDivision() {
       ]}
       drilldowns={[{ label: 'Open System Health', href: '/system-health' }]}
     />
-    <ChatPanel division="production-manufacturing" />
-    </>
   )
 }

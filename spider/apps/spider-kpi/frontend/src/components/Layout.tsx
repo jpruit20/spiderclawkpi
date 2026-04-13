@@ -2,6 +2,7 @@ import { Link, NavLink } from 'react-router-dom'
 import { ReactNode } from 'react'
 import spiderGrillsLogo from '../../spider_grills_black_nocircle.avif'
 import { useAuth } from './AuthGate'
+import { ChatPanel } from './ChatPanel'
 
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth()
@@ -48,6 +49,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="main-shell">{children}</main>
+      <ChatPanel />
     </div>
   )
 }

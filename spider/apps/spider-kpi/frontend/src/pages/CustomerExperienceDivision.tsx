@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChatPanel } from '../components/ChatPanel'
 import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
@@ -1415,7 +1414,6 @@ export function CustomerExperienceDivision() {
           </section>
         </>
       ) : null}
-      <ChatPanel division="customer-experience" />
     </div>
   )
 }
