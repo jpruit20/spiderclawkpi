@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { ChatPanel } from '../components/ChatPanel'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
@@ -1196,6 +1197,7 @@ export function ProductEngineeringDivision() {
           )}
         </>
       ) : null}
+      <ChatPanel division="product-engineering" />
     </div>
   )
 }

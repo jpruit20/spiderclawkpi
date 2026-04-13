@@ -172,6 +172,14 @@ class Settings(BaseSettings):
     github_owner: str = Field(default='spider-grills', validation_alias=AliasChoices('GITHUB_OWNER', 'GH_OWNER'))
     github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))
 
+    # AI assistant
+    ai_assistant_enabled: bool = False
+    ai_assistant_model: str = "sonnet"
+    workspace_root: str = Field(
+        default="/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi",
+        validation_alias=AliasChoices('WORKSPACE_ROOT', 'KPI_WORKSPACE_ROOT'),
+    )
+
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 120  # Data is daily-granularity; polling less often avoids 429s
     historical_start_date: str = "2024-01-01"

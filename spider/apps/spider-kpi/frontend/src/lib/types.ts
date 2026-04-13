@@ -2,6 +2,7 @@ export interface AuthUserSummary {
   id: string
   email: string
   is_admin: boolean
+  ai_divisions?: string[]
 }
 
 export interface AuthStatusResponse {

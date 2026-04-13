@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ChatPanel } from '../components/ChatPanel'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
@@ -649,6 +650,7 @@ export function MarketingDivision() {
           </section>
         </>
       ) : null}
+      <ChatPanel division="marketing" />
     </div>
   )
 }
