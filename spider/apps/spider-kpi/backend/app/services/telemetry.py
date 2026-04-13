@@ -232,7 +232,7 @@ def _empty_telemetry_payload() -> dict[str, Any]:
     }
 
 
-def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+def summarize_telemetry(db: Session, lookback_days: int = 30, include_cook_analysis: bool = False) -> dict[str, Any]:
     historical_monthly = get_telemetry_history_monthly(db)
     if telemetry_stream_table_available(db):
         fresh_stream_events = db.execute(
@@ -246,22 +246,25 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
             payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
             payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
-            # Build cook_analysis from a wider event window so we get complete
-            # sessions.  The main stream query (5 000 rows) covers ~30 min which
-            # isn't enough — we need at least 24 h of data to see full cooks.
-            cook_events = db.execute(
-                select(TelemetryStreamEvent)
-                .where(TelemetryStreamEvent.sample_timestamp >= datetime.now(timezone.utc) - timedelta(hours=24))
-                .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-                .limit(50_000)
-            ).scalars().all()
-            device_buckets: dict[str, list[TelemetryStreamEvent]] = defaultdict(list)
-            for evt in cook_events:
-                device_buckets[evt.device_id].append(evt)
-            derived = []
-            for device_id, events in device_buckets.items():
-                derived.extend(_derive_sessions(device_id, events))
-            payload['cook_analysis'] = _build_cook_analysis_from_derived(derived)
+            # Cook analysis requires a much wider event window (24 h / 50 K rows)
+            # to see complete sessions.  Only run when explicitly requested (the
+            # Product Engineering page) so the overview endpoint stays fast.
+            if include_cook_analysis:
+                cook_events = db.execute(
+                    select(TelemetryStreamEvent)
+                    .where(TelemetryStreamEvent.sample_timestamp >= datetime.now(timezone.utc) - timedelta(hours=24))
+                    .order_by(desc(TelemetryStreamEvent.sample_timestamp))
+                    .limit(50_000)
+                ).scalars().all()
+                device_buckets: dict[str, list[TelemetryStreamEvent]] = defaultdict(list)
+                for evt in cook_events:
+                    device_buckets[evt.device_id].append(evt)
+                derived = []
+                for device_id, events in device_buckets.items():
+                    derived.extend(_derive_sessions(device_id, events))
+                payload['cook_analysis'] = _build_cook_analysis_from_derived(derived)
+            else:
+                payload['cook_analysis'] = None
             return payload
 
     if not telemetry_tables_available(db):
