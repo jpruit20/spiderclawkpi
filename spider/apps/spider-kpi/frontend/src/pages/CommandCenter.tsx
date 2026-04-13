@@ -130,7 +130,7 @@ export function CommandCenter() {
 
   // --- DECI ---
   const deciVelocity = deci?.velocity || null
-  const bottleneckCount = deci ? (deci.bottlenecks.no_driver.length + deci.bottlenecks.stale.length) : 0
+  const bottleneckCount = deci ? ((deci.bottlenecks?.no_driver?.length ?? 0) + (deci.bottlenecks?.stale?.length ?? 0)) : 0
   const escalationCount = deci?.escalation_warnings?.length || 0
   const criticalDecisions = deci?.critical_feed?.slice(0, 5) || []
 
@@ -199,7 +199,7 @@ export function CommandCenter() {
       { name: 'Spider', sov: Math.round((market.competitive_landscape.brand_share_of_voice || 0) * 100), color: '#60a5fa' },
     ]
     for (const c of competitors.slice(0, 5)) {
-      data.push({ name: c.brand, sov: Math.round((c.share_of_voice || 0) * 100), color: '#4b5563' })
+      data.push({ name: c.competitor || 'Unknown', sov: Math.round((c.share_of_voice || 0) * 100), color: '#4b5563' })
     }
     return data.sort((a, b) => b.sov - a.sov)
   }, [market, competitors])
@@ -315,7 +315,7 @@ export function CommandCenter() {
                       {sov != null ? <span className="badge badge-muted">SOV {(sov * 100).toFixed(0)}%</span> : null}
                     </div>
                   </div>
-                  {topCompetitor ? <p>Top competitor: {topCompetitor.brand} at {(topCompetitor.share_of_voice * 100).toFixed(0)}% SOV with {fmtInt(topCompetitor.total_mentions)} mentions.</p> : null}
+                  {topCompetitor ? <p>Top competitor: {topCompetitor.competitor} at {((topCompetitor.share_of_voice ?? 0) * 100).toFixed(0)}% SOV with {fmtInt(topCompetitor.mentions)} mentions.</p> : null}
                 </div>
               ) : null}
 
@@ -325,8 +325,8 @@ export function CommandCenter() {
                   <div className="item-head">
                     <strong>Decisions: {bottleneckCount} bottleneck{bottleneckCount !== 1 ? 's' : ''}</strong>
                     <div className="inline-badges">
-                      {deci.bottlenecks.no_driver.length > 0 ? <span className="badge badge-bad">{deci.bottlenecks.no_driver.length} no driver</span> : null}
-                      {deci.bottlenecks.stale.length > 0 ? <span className="badge badge-warn">{deci.bottlenecks.stale.length} stale</span> : null}
+                      {(deci.bottlenecks?.no_driver?.length ?? 0) > 0 ? <span className="badge badge-bad">{deci.bottlenecks.no_driver.length} no driver</span> : null}
+                      {(deci.bottlenecks?.stale?.length ?? 0) > 0 ? <span className="badge badge-warn">{deci.bottlenecks.stale.length} stale</span> : null}
                       {escalationCount > 0 ? <span className="badge badge-bad">{escalationCount} escalation{escalationCount !== 1 ? 's' : ''}</span> : null}
                     </div>
                   </div>
@@ -544,7 +544,7 @@ export function CommandCenter() {
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600, marginBottom: 6 }}>Requires Attention</div>
                   <div className="stack-list compact">
-                    {deci.bottlenecks.no_driver.slice(0, 3).map(b => (
+                    {(deci.bottlenecks?.no_driver || []).slice(0, 3).map(b => (
                       <Link key={b.id} to="/deci" className="list-item status-bad" style={{ textDecoration: 'none', color: 'inherit' }}>
                         <div className="item-head">
                           <strong>{b.title}</strong>
@@ -555,7 +555,7 @@ export function CommandCenter() {
                         </div>
                       </Link>
                     ))}
-                    {deci.bottlenecks.stale.slice(0, 3).map(b => (
+                    {(deci.bottlenecks?.stale || []).slice(0, 3).map(b => (
                       <Link key={b.id} to="/deci" className="list-item status-warn" style={{ textDecoration: 'none', color: 'inherit' }}>
                         <div className="item-head">
                           <strong>{b.title}</strong>
@@ -592,11 +592,11 @@ export function CommandCenter() {
               ) : null}
 
               {/* Ownership load */}
-              {deci.ownership_map.length > 0 ? (
+              {(deci.ownership_map?.length ?? 0) > 0 ? (
                 <>
                   <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600, marginTop: 12, marginBottom: 6 }}>Leadership Load</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
-                    {deci.ownership_map.map(o => (
+                    {(deci.ownership_map || []).map(o => (
                       <div key={o.member.id} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{
                           width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
