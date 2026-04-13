@@ -65,6 +65,9 @@ def run_sync(source: str, db: Session = Depends(db_session)):
     elif source == "google_reviews":
         from app.ingestion.connectors.google_reviews import sync_google_reviews
         result = sync_google_reviews(db)
+    elif source == "amazon":
+        from app.ingestion.connectors.amazon import sync_amazon
+        result = sync_amazon(db)
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 
@@ -122,6 +125,9 @@ def backfill_source(
     elif source == "google_reviews":
         from app.ingestion.connectors.google_reviews import sync_google_reviews
         result = sync_google_reviews(db)
+    elif source == "amazon":
+        from app.ingestion.connectors.amazon import sync_amazon
+        result = sync_amazon(db)
     else:
         raise HTTPException(status_code=404, detail="Unknown source")
 

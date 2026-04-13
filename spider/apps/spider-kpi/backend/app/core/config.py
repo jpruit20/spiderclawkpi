@@ -159,6 +159,15 @@ class Settings(BaseSettings):
     google_places_api_key: Optional[str] = None
     google_places_id: Optional[str] = None  # Spider Grills place ID
 
+    # Amazon SP-API
+    amazon_sp_client_id: Optional[str] = None
+    amazon_sp_client_secret: Optional[str] = None
+    amazon_sp_refresh_token: Optional[str] = None
+    amazon_sp_app_id: Optional[str] = None
+    amazon_marketplace_id: str = "ATVPDKIKX0DER"  # US marketplace
+    amazon_sp_region: str = "us-east-1"
+    amazon_sync_interval_minutes: int = 360  # every 6 hours
+
     github_token: Optional[str] = Field(default=None, validation_alias=AliasChoices('GITHUB_TOKEN', 'GH_TOKEN'))
     github_owner: str = Field(default='spider-grills', validation_alias=AliasChoices('GITHUB_OWNER', 'GH_OWNER'))
     github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))

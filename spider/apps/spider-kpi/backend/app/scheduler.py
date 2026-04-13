@@ -98,6 +98,20 @@ def run_syncs() -> None:
         if reddit_due and not _already_running(db, "reddit"):
             from app.ingestion.connectors.reddit import sync_reddit
             any_success = _successful_result(sync_reddit(db)) or any_success
+        latest_amazon_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "amazon")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        amazon_due = (
+            latest_amazon_run is None
+            or latest_amazon_run.started_at is None
+            or latest_amazon_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.amazon_sync_interval_minutes)
+        )
+        if amazon_due and not _already_running(db, "amazon"):
+            from app.ingestion.connectors.amazon import sync_amazon
+            any_success = _successful_result(sync_amazon(db)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)
