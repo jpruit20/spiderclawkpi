@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
@@ -6,8 +6,8 @@ import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
-import { fmtInt } from '../lib/format'
-import { CXActionItem, CXMetricItem, CXSnapshotResponse, FreshdeskTicketItem, IssueRadarResponse, KPIDaily, SocialPulse, SupportOverviewResponse } from '../lib/types'
+import { fmtInt, formatFreshness } from '../lib/format'
+import { ClusterTicketDetail, CXActionItem, CXMetricItem, CXSnapshotResponse, FreshdeskTicketItem, IssueRadarResponse, KPIDaily, SocialPulse, SupportOverviewResponse } from '../lib/types'
 import { LineChart, Line, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts'
 
 /* ── helpers ── */
@@ -82,6 +82,18 @@ export function CustomerExperienceDivision() {
   const [frictionData, setFrictionData] = useState<IssueRadarResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [clusterDetail, setClusterDetail] = useState<ClusterTicketDetail | null>(null)
+  const [clusterDetailLoading, setClusterDetailLoading] = useState(false)
+
+  const loadClusterDetail = useCallback(async (theme: string) => {
+    if (clusterDetail?.theme === theme) { setClusterDetail(null); return }
+    setClusterDetailLoading(true)
+    try {
+      const detail = await api.clusterDetail(theme)
+      setClusterDetail(detail)
+    } catch { setClusterDetail(null) }
+    finally { setClusterDetailLoading(false) }
+  }, [clusterDetail])
 
   useEffect(() => {
     let cancelled = false
@@ -398,17 +410,19 @@ export function CustomerExperienceDivision() {
     }
   }, [supportOverview])
 
-  /* 4. Theme Trend Heatmap */
+  /* 4. Theme Trend Heatmap — filter out "unknown" */
   const themeTrendData = useMemo(() => {
     if (!frictionData?.trend_heatmap) return []
-    return frictionData.trend_heatmap.slice(0, 6).map((theme) => ({
-      theme: theme.theme,
-      points: theme.points.slice(-7),
-      total: theme.points.reduce((sum, p) => sum + p.count, 0),
-      trend: theme.points.length >= 2
-        ? ((theme.points[theme.points.length - 1].count - theme.points[0].count) / Math.max(theme.points[0].count, 1)) * 100
-        : 0,
-    }))
+    return frictionData.trend_heatmap
+      .filter((theme) => theme.theme !== 'unknown')
+      .slice(0, 8).map((theme) => ({
+        theme: theme.theme,
+        points: theme.points.slice(-7),
+        total: theme.points.reduce((sum, p) => sum + p.count, 0),
+        trend: theme.points.length >= 2
+          ? ((theme.points[theme.points.length - 1].count - theme.points[0].count) / Math.max(theme.points[0].count, 1)) * 100
+          : 0,
+      }))
   }, [frictionData])
 
   /* 5. At-Risk Ticket Predictor */
@@ -1008,12 +1022,12 @@ export function CustomerExperienceDivision() {
             </section>
           </div>
 
-          {/* Theme Trend Heatmap */}
+          {/* Theme Trend Heatmap — clickable for drill-down */}
           {themeTrendData.length > 0 ? (
             <section className="card">
               <div className="venom-panel-head">
                 <strong>Theme Trend Heatmap</strong>
-                <span className="venom-panel-hint">Ticket themes over the last 7 days</span>
+                <span className="venom-panel-hint">Click any theme to drill into individual tickets</span>
               </div>
               <div className="table-wrap">
                 <table>
@@ -1027,8 +1041,10 @@ export function CustomerExperienceDivision() {
                   </thead>
                   <tbody>
                     {themeTrendData.map((theme) => (
-                      <tr key={theme.theme}>
-                        <td><strong style={{ textTransform: 'capitalize' }}>{theme.theme}</strong></td>
+                      <tr key={theme.theme}
+                        style={{ cursor: 'pointer', background: clusterDetail?.theme === theme.theme ? 'rgba(110,168,255,0.12)' : undefined }}
+                        onClick={() => loadClusterDetail(theme.theme)}>
+                        <td><strong style={{ textTransform: 'capitalize' }}>{theme.theme.replace(/_/g, ' ')}</strong></td>
                         <td>
                           <div style={{ display: 'flex', gap: '2px', justifyContent: 'center' }}>
                             {theme.points.map((pt, idx) => {
@@ -1067,6 +1083,97 @@ export function CustomerExperienceDivision() {
                   </tbody>
                 </table>
               </div>
+              {clusterDetailLoading && <div className="state-message" style={{ marginTop: 12 }}>Loading ticket detail...</div>}
+              {clusterDetail && !clusterDetailLoading && (
+                <div style={{ marginTop: 12, border: '1px solid var(--accent)', borderRadius: 8, padding: 16 }}>
+                  <div className="venom-panel-head">
+                    <strong>{clusterDetail.theme_title} — Ticket Deep-Dive</strong>
+                    <button className="range-button" onClick={() => setClusterDetail(null)}>Close</button>
+                  </div>
+
+                  {/* Key metrics */}
+                  <div className="venom-kpi-strip" style={{ marginBottom: 12 }}>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Total Tickets</div>
+                      <div className="venom-kpi-value">{clusterDetail.total_tickets}</div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Unique Customers</div>
+                      <div className="venom-kpi-value">{clusterDetail.unique_customers}</div>
+                      <div className="venom-kpi-sub">{(clusterDetail.customer_ratio * 100).toFixed(0)}% unique ratio</div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Severity Assessment</div>
+                      <div className="venom-kpi-value" style={{ fontSize: 16, color: clusterDetail.severity_adjustment === 'downgraded' ? 'var(--green)' : clusterDetail.severity_adjustment === 'upgraded' ? 'var(--red)' : 'var(--text)' }}>
+                        {clusterDetail.severity_adjustment === 'downgraded' ? 'Lower Risk' : clusterDetail.severity_adjustment === 'upgraded' ? 'Higher Risk' : 'Normal'}
+                      </div>
+                      <div className="venom-kpi-sub">{clusterDetail.severity_reason}</div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Owner</div>
+                      <div className="venom-kpi-value" style={{ fontSize: 16 }}>{clusterDetail.owner_team}</div>
+                    </div>
+                  </div>
+
+                  {/* Sub-topics */}
+                  {clusterDetail.sub_topics.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div className="venom-breakdown-label">Common Sub-Topics</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                        {clusterDetail.sub_topics.map((t, i) => (
+                          <span key={i} className="badge badge-neutral" style={{ fontSize: 11 }}>{t.keyword} ({t.count})</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Breakdowns */}
+                  <div className="two-col two-col-equal" style={{ marginBottom: 12 }}>
+                    <div>
+                      <div className="venom-breakdown-label">Status Breakdown</div>
+                      <div className="venom-breakdown-list">
+                        {Object.entries(clusterDetail.status_breakdown).map(([k, v]) => (
+                          <div key={k} className="venom-breakdown-row"><span>{k}</span><span className="venom-breakdown-val">{v}</span></div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="venom-breakdown-label">Top Reporters</div>
+                      <div className="venom-breakdown-list">
+                        {clusterDetail.top_requesters.slice(0, 5).map((r, i) => (
+                          <div key={i} className="venom-breakdown-row">
+                            <span>Customer #{r.requester_id.slice(-6)}</span>
+                            <span className="venom-breakdown-val">{r.ticket_count} ticket{r.ticket_count !== 1 ? 's' : ''}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Ticket list */}
+                  <div className="venom-breakdown-label">Individual Tickets ({clusterDetail.total_tickets})</div>
+                  <div className="stack-list compact" style={{ maxHeight: 400, overflowY: 'auto' }}>
+                    {clusterDetail.tickets.slice(0, 20).map((t, i) => (
+                      <div key={i} className={`list-item status-${t.status === 'Resolved' || t.status === 'Closed' ? 'good' : 'muted'}`}>
+                        <div className="item-head">
+                          <strong>#{t.ticket_id} {t.subject}</strong>
+                          <div className="inline-badges">
+                            <span className="badge badge-neutral">{t.status || 'open'}</span>
+                            {t.channel && <span className="badge badge-neutral" style={{ fontSize: 10 }}>{t.channel}</span>}
+                          </div>
+                        </div>
+                        <p style={{ fontSize: 11, color: 'var(--muted)' }}>
+                          Customer #{t.requester_id.slice(-6)}
+                          {t.created_at && ` · Created ${formatFreshness(t.created_at)}`}
+                          {t.resolution_hours != null && ` · Resolved in ${t.resolution_hours.toFixed(1)}h`}
+                          {t.tags.length > 0 && ` · Tags: ${t.tags.join(', ')}`}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  {clusterDetail.tickets.length > 20 && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Showing 20 of {clusterDetail.tickets.length} tickets</p>}
+                </div>
+              )}
             </section>
           ) : null}
 

@@ -253,6 +253,108 @@ def _priority_reason_summary(payload: dict[str, Any]) -> str:
     )
 
 
+def get_cluster_ticket_detail(db: Session, theme: str, lookback_days: int = 30) -> dict[str, Any]:
+    """Return ticket-level detail for a given issue theme.
+
+    Re-classifies tickets to find those matching the theme, then returns:
+    - Individual ticket summaries (subject, status, priority, dates)
+    - Unique customer (requester_id) count
+    - Sub-topic groupings by keyword analysis of subjects
+    - Adjusted severity based on unique customer ratio
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    tickets = db.execute(
+        select(FreshdeskTicket).where(FreshdeskTicket.created_at_source >= cutoff)
+    ).scalars().all()
+
+    matched_tickets: list[dict[str, Any]] = []
+    requester_ids: set[str] = set()
+    subject_tokens: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    priority_counts: Counter[str] = Counter()
+    channel_counts: Counter[str] = Counter()
+
+    for ticket in tickets:
+        parts = _normalize_text(ticket)
+        classified_theme, confidence, secondaries, _ = _classify_theme(parts)
+        if classified_theme != theme:
+            continue
+
+        req_id = ticket.requester_id or "unknown"
+        requester_ids.add(req_id)
+        status_counts[ticket.status or "unknown"] += 1
+        priority_counts[str(ticket.priority or "unknown")] += 1
+        channel_counts[ticket.channel or "unknown"] += 1
+
+        # Extract meaningful subject tokens for sub-topic clustering
+        tokens = [t for t in _tokenize(ticket.subject or "") if len(t) > 3]
+        subject_tokens.update(tokens)
+
+        matched_tickets.append({
+            "ticket_id": ticket.ticket_id,
+            "subject": ticket.subject,
+            "status": ticket.status,
+            "priority": ticket.priority,
+            "channel": ticket.channel,
+            "requester_id": req_id,
+            "created_at": ticket.created_at_source.isoformat() if ticket.created_at_source else None,
+            "updated_at": ticket.updated_at_source.isoformat() if ticket.updated_at_source else None,
+            "resolved_at": ticket.resolved_at_source.isoformat() if ticket.resolved_at_source else None,
+            "first_response_hours": ticket.first_response_hours,
+            "resolution_hours": ticket.resolution_hours,
+            "confidence": confidence,
+            "tags": ticket.tags_json or [],
+        })
+
+    total_tickets = len(matched_tickets)
+    unique_customers = len(requester_ids)
+
+    # Build sub-topic clusters from common subject keywords
+    # Remove theme keywords and common stop words to find distinguishing topics
+    theme_terms_set = set()
+    for term in THEMES.get(theme, []):
+        theme_terms_set.update(term.lower().split())
+    stop_words = {"the", "and", "for", "that", "this", "with", "not", "from", "have", "been", "about", "your", "will", "just", "when", "what", "they", "need", "help", "please", "issue", "problem", "spider", "grills", "grill"}
+    filtered_tokens = {t: c for t, c in subject_tokens.items() if t not in theme_terms_set and t not in stop_words and c >= 2}
+    sub_topics = [{"keyword": token, "count": count} for token, count in sorted(filtered_tokens.items(), key=lambda x: x[1], reverse=True)[:15]]
+
+    # Adjusted severity: if most tickets come from very few customers, lower severity
+    customer_ratio = unique_customers / max(total_tickets, 1)
+    if total_tickets >= 5 and customer_ratio < 0.2:
+        severity_adjustment = "downgraded"
+        severity_reason = f"Only {unique_customers} unique customer(s) filed {total_tickets} tickets — likely repeat reporter(s), not widespread issue."
+    elif total_tickets >= 10 and customer_ratio > 0.8:
+        severity_adjustment = "upgraded"
+        severity_reason = f"{unique_customers} unique customers out of {total_tickets} tickets — broad impact across customer base."
+    else:
+        severity_adjustment = "unchanged"
+        severity_reason = f"{unique_customers} unique customers across {total_tickets} tickets."
+
+    # Requester frequency breakdown
+    req_counts: Counter[str] = Counter()
+    for t in matched_tickets:
+        req_counts[t["requester_id"]] += 1
+    top_requesters = [{"requester_id": rid, "ticket_count": cnt} for rid, cnt in req_counts.most_common(10)]
+
+    return {
+        "theme": theme,
+        "theme_title": theme.replace("_", " ").title(),
+        "total_tickets": total_tickets,
+        "unique_customers": unique_customers,
+        "customer_ratio": round(customer_ratio, 3),
+        "severity_adjustment": severity_adjustment,
+        "severity_reason": severity_reason,
+        "status_breakdown": dict(status_counts),
+        "priority_breakdown": dict(priority_counts),
+        "channel_breakdown": dict(channel_counts),
+        "sub_topics": sub_topics,
+        "top_requesters": top_requesters,
+        "tickets": sorted(matched_tickets, key=lambda t: t["created_at"] or "", reverse=True),
+        "owner_team": THEME_OWNER.get(theme, "Customer Experience"),
+        "impact": THEME_IMPACT.get(theme, THEME_IMPACT["unknown"]),
+    }
+
+
 def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     upsert_source_config(db, "freshdesk", configured=True, sync_mode="poll", config_json={"source_type": "connector", "issue_radar_live": True})
     telemetry_ready = telemetry_tables_available(db)

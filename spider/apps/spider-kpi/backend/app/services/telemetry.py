@@ -17,6 +17,102 @@ def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
 
+def _build_cook_analysis(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+    """Classify sessions by cook style, temperature range, and duration bucket.
+
+    Cook styles:
+      - startup_only: session < 15 minutes (user lit, got to temp, killed Venom)
+      - hot_and_fast: target >= 400F (burgers, hot dogs, searing)
+      - low_and_slow: target <= 275F AND session > 30 min (brisket, pulled pork, ribs)
+      - medium_heat: target 276-399F (chicken, steaks, general grilling)
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(lookback_days, 1))
+    sessions = db.execute(
+        select(TelemetrySession).where(TelemetrySession.session_start >= cutoff)
+    ).scalars().all()
+
+    if not sessions:
+        return {"total_sessions": 0, "cook_styles": {}, "temp_ranges": {}, "duration_ranges": {}, "style_details": {}}
+
+    cook_styles: dict[str, int] = {"startup_only": 0, "hot_and_fast": 0, "low_and_slow": 0, "medium_heat": 0, "unclassified": 0}
+    temp_ranges: dict[str, int] = {"under_250": 0, "250_to_300": 0, "300_to_400": 0, "over_400": 0}
+    duration_ranges: dict[str, int] = {"under_30m": 0, "30m_to_2h": 0, "2h_to_4h": 0, "over_4h": 0}
+
+    # Per-style aggregations for deeper analytics
+    style_durations: dict[str, list[int]] = defaultdict(list)
+    style_stability: dict[str, list[float]] = defaultdict(list)
+    style_success: dict[str, list[bool]] = defaultdict(list)
+
+    for s in sessions:
+        dur = s.session_duration_seconds or 0
+        temp = s.target_temp or 0
+
+        # Duration buckets
+        if dur < 1800:
+            duration_ranges["under_30m"] += 1
+        elif dur < 7200:
+            duration_ranges["30m_to_2h"] += 1
+        elif dur < 14400:
+            duration_ranges["2h_to_4h"] += 1
+        else:
+            duration_ranges["over_4h"] += 1
+
+        # Temperature buckets
+        if temp <= 0:
+            pass  # no target set
+        elif temp < 250:
+            temp_ranges["under_250"] += 1
+        elif temp <= 300:
+            temp_ranges["250_to_300"] += 1
+        elif temp <= 400:
+            temp_ranges["300_to_400"] += 1
+        else:
+            temp_ranges["over_400"] += 1
+
+        # Cook style classification
+        if dur < 900:  # <15 min
+            style = "startup_only"
+        elif temp >= 400:
+            style = "hot_and_fast"
+        elif temp <= 275 and dur >= 1800:
+            style = "low_and_slow"
+        elif temp > 0:
+            style = "medium_heat"
+        else:
+            style = "unclassified"
+
+        cook_styles[style] += 1
+        style_durations[style].append(dur)
+        if s.temp_stability_score is not None:
+            style_stability[style].append(s.temp_stability_score)
+        style_success[style].append(bool(s.cook_success))
+
+    # Build per-style detail summaries
+    style_details: dict[str, dict[str, Any]] = {}
+    for style_name, count in cook_styles.items():
+        if count == 0:
+            continue
+        durations = style_durations.get(style_name, [])
+        stabilities = style_stability.get(style_name, [])
+        successes = style_success.get(style_name, [])
+        style_details[style_name] = {
+            "count": count,
+            "pct": round(count / len(sessions), 4),
+            "avg_duration_seconds": round(sum(durations) / max(len(durations), 1)),
+            "median_duration_seconds": round(median(durations)) if durations else 0,
+            "avg_stability_score": round(sum(stabilities) / max(len(stabilities), 1), 3) if stabilities else None,
+            "success_rate": round(sum(1 for s in successes if s) / max(len(successes), 1), 4) if successes else None,
+        }
+
+    return {
+        "total_sessions": len(sessions),
+        "cook_styles": cook_styles,
+        "temp_ranges": temp_ranges,
+        "duration_ranges": duration_ranges,
+        "style_details": style_details,
+    }
+
+
 def _severity_from_rate(rate: float, high: float, medium: float) -> str:
     if rate >= high:
         return "high"
@@ -61,6 +157,7 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
             payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
             payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
+            payload['cook_analysis'] = _build_cook_analysis(db, lookback_days)
             return payload
 
     if not telemetry_tables_available(db):
@@ -244,4 +341,5 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         "analytics": {
             "historical_monthly": historical_monthly,
         },
+        "cook_analysis": _build_cook_analysis(db, lookback_days),
     }

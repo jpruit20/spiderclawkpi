@@ -405,6 +405,55 @@ export interface TelemetryHistoryDailyRow {
   source: string
 }
 
+export interface CookStyleDetail {
+  count: number
+  pct: number
+  avg_duration_seconds: number
+  median_duration_seconds: number
+  avg_stability_score: number | null
+  success_rate: number | null
+}
+
+export interface CookAnalysis {
+  total_sessions: number
+  cook_styles: Record<string, number>
+  temp_ranges: Record<string, number>
+  duration_ranges: Record<string, number>
+  style_details: Record<string, CookStyleDetail>
+}
+
+export interface ClusterTicketDetail {
+  theme: string
+  theme_title: string
+  total_tickets: number
+  unique_customers: number
+  customer_ratio: number
+  severity_adjustment: 'upgraded' | 'downgraded' | 'unchanged'
+  severity_reason: string
+  status_breakdown: Record<string, number>
+  priority_breakdown: Record<string, number>
+  channel_breakdown: Record<string, number>
+  sub_topics: { keyword: string; count: number }[]
+  top_requesters: { requester_id: string; ticket_count: number }[]
+  tickets: {
+    ticket_id: string
+    subject: string
+    status: string
+    priority: string
+    channel: string
+    requester_id: string
+    created_at: string | null
+    updated_at: string | null
+    resolved_at: string | null
+    first_response_hours: number | null
+    resolution_hours: number | null
+    confidence: number
+    tags: string[]
+  }[]
+  owner_team: string
+  impact: Record<string, any>
+}
+
 export interface TelemetrySummary {
   latest?: TelemetryLatestSummary | null
   daily: Array<Record<string, any>>
@@ -417,6 +466,7 @@ export interface TelemetrySummary {
   confidence?: TelemetryConfidence
   analytics?: TelemetryAnalytics
   history_daily?: TelemetryHistoryDailyRow[]
+  cook_analysis?: CookAnalysis
 }
 
 export interface OverviewResponse {

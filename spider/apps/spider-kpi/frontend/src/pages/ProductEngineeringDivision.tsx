@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
@@ -6,7 +6,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
-import type { GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
+import type { ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
 import {
   BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart, PieChart, Pie, Cell,
 } from 'recharts'
@@ -17,14 +17,53 @@ import {
 type SubView = 'fleet' | 'voice' | 'roadmap'
 
 /* ------------------------------------------------------------------ */
+/*  Model name mapping                                                */
+/* ------------------------------------------------------------------ */
+const MODEL_NAME_MAP: Record<string, string> = {
+  'W:K:22:1:V': '22" Weber Kettle (Venom)',
+  'Kettle 22': '22" Weber Kettle (Venom)',
+  'kettle_22': '22" Weber Kettle (Venom)',
+  'Kettle22': '22" Weber Kettle (Venom)',
+  'W:K:22': '22" Weber Kettle',
+  'Huntsman': 'Huntsman',
+  'Giant Huntsman': 'Giant Huntsman',
+}
+
+function displayModelName(raw: string): string {
+  return MODEL_NAME_MAP[raw] || raw
+}
+
+/** Merge model keys that map to the same display name */
+function mergeModelData(data: { model: string; events: number }[]): { model: string; events: number }[] {
+  const merged: Record<string, number> = {}
+  for (const d of data) {
+    const name = displayModelName(d.model)
+    merged[name] = (merged[name] || 0) + d.events
+  }
+  return Object.entries(merged).sort(([, a], [, b]) => b - a).map(([model, events]) => ({ model, events }))
+}
+
+/* ------------------------------------------------------------------ */
+/*  Cook style labels + colors                                        */
+/* ------------------------------------------------------------------ */
+const COOK_STYLE_LABELS: Record<string, string> = {
+  startup_only: 'Startup Only',
+  hot_and_fast: 'Hot & Fast (400F+)',
+  low_and_slow: 'Low & Slow (< 275F)',
+  medium_heat: 'Medium Heat (275-400F)',
+  unclassified: 'Unclassified',
+}
+const COOK_STYLE_COLORS: Record<string, string> = {
+  startup_only: '#9b7bff',
+  hot_and_fast: '#ef4444',
+  low_and_slow: '#6ea8ff',
+  medium_heat: '#f59e0b',
+  unclassified: '#555',
+}
+
+/* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
-type TimeRange = '24h' | '1w' | '2w' | '1m'
-
-function rangeToDays(r: TimeRange): number {
-  const mapping: Record<TimeRange, number> = { '24h': 1, '1w': 7, '2w': 14, '1m': 30 }
-  return mapping[r] ?? 30
-}
 
 function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
   const hourTotals: Record<string, number> = {}
@@ -43,7 +82,8 @@ function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
       totals[model] = (totals[model] || 0) + (count as number)
     }
   }
-  return Object.entries(totals).sort(([, a], [, b]) => b - a).slice(0, 8).map(([model, events]) => ({ model, events }))
+  const raw = Object.entries(totals).sort(([, a], [, b]) => b - a).slice(0, 8).map(([model, events]) => ({ model, events }))
+  return mergeModelData(raw)
 }
 
 function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
@@ -85,6 +125,107 @@ const DRILL_ROUTES: { path: string; label: string; icon: string }[] = [
 const CHART_COLORS = ['#6ea8ff', '#4ade80', '#f59e0b', '#ef4444', '#a78bfa', '#f472b6', '#38bdf8', '#fb923c']
 
 /* ------------------------------------------------------------------ */
+/*  Cluster Detail Modal                                              */
+/* ------------------------------------------------------------------ */
+function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; onClose: () => void }) {
+  const [showAll, setShowAll] = useState(false)
+  const visibleTickets = showAll ? detail.tickets : detail.tickets.slice(0, 15)
+
+  return (
+    <div className="card" style={{ border: '1px solid var(--accent)', marginTop: 12 }}>
+      <div className="venom-panel-head">
+        <strong>{detail.theme_title} — Ticket Deep-Dive</strong>
+        <button className="range-button" onClick={onClose}>Close</button>
+      </div>
+
+      {/* Key metrics */}
+      <div className="venom-kpi-strip" style={{ marginBottom: 12 }}>
+        <div className="venom-kpi-card">
+          <div className="venom-kpi-label">Total Tickets</div>
+          <div className="venom-kpi-value">{detail.total_tickets}</div>
+        </div>
+        <div className="venom-kpi-card">
+          <div className="venom-kpi-label">Unique Customers</div>
+          <div className="venom-kpi-value">{detail.unique_customers}</div>
+          <div className="venom-kpi-sub">{(detail.customer_ratio * 100).toFixed(0)}% unique ratio</div>
+        </div>
+        <div className="venom-kpi-card">
+          <div className="venom-kpi-label">Severity Assessment</div>
+          <div className="venom-kpi-value" style={{ fontSize: 16, color: detail.severity_adjustment === 'downgraded' ? 'var(--green)' : detail.severity_adjustment === 'upgraded' ? 'var(--red)' : 'var(--text)' }}>
+            {detail.severity_adjustment === 'downgraded' ? 'Lower Risk' : detail.severity_adjustment === 'upgraded' ? 'Higher Risk' : 'Normal'}
+          </div>
+          <div className="venom-kpi-sub">{detail.severity_reason}</div>
+        </div>
+        <div className="venom-kpi-card">
+          <div className="venom-kpi-label">Owner</div>
+          <div className="venom-kpi-value" style={{ fontSize: 16 }}>{detail.owner_team}</div>
+        </div>
+      </div>
+
+      {/* Sub-topics */}
+      {detail.sub_topics.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div className="venom-breakdown-label">Common Sub-Topics Within This Cluster</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+            {detail.sub_topics.map((t, i) => (
+              <span key={i} className="badge badge-neutral" style={{ fontSize: 11 }}>{t.keyword} ({t.count})</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Breakdowns */}
+      <div className="two-col two-col-equal" style={{ marginBottom: 12 }}>
+        <div>
+          <div className="venom-breakdown-label">Status Breakdown</div>
+          <div className="venom-breakdown-list">
+            {Object.entries(detail.status_breakdown).map(([k, v]) => (
+              <div key={k} className="venom-breakdown-row"><span>{k}</span><span className="venom-breakdown-val">{v}</span></div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="venom-breakdown-label">Top Reporters</div>
+          <div className="venom-breakdown-list">
+            {detail.top_requesters.slice(0, 5).map((r, i) => (
+              <div key={i} className="venom-breakdown-row">
+                <span>Customer #{r.requester_id.slice(-6)}</span>
+                <span className="venom-breakdown-val">{r.ticket_count} ticket{r.ticket_count !== 1 ? 's' : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Ticket list */}
+      <div className="venom-breakdown-label">Individual Tickets ({detail.total_tickets})</div>
+      <div className="stack-list compact" style={{ maxHeight: 400, overflowY: 'auto' }}>
+        {visibleTickets.map((t, i) => (
+          <div key={i} className={`list-item status-${t.status === 'Resolved' || t.status === 'Closed' ? 'good' : 'muted'}`}>
+            <div className="item-head">
+              <strong>#{t.ticket_id} {t.subject}</strong>
+              <div className="inline-badges">
+                <span className="badge badge-neutral">{t.status || 'open'}</span>
+                {t.channel && <span className="badge badge-neutral" style={{ fontSize: 10 }}>{t.channel}</span>}
+              </div>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--muted)' }}>
+              Customer #{t.requester_id.slice(-6)}
+              {t.created_at && ` · Created ${formatFreshness(t.created_at)}`}
+              {t.resolution_hours != null && ` · Resolved in ${t.resolution_hours.toFixed(1)}h`}
+              {t.tags.length > 0 && ` · Tags: ${t.tags.join(', ')}`}
+            </p>
+          </div>
+        ))}
+      </div>
+      {!showAll && detail.tickets.length > 15 && (
+        <button className="range-button" style={{ marginTop: 8 }} onClick={() => setShowAll(true)}>Show all {detail.tickets.length} tickets</button>
+      )}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 export function ProductEngineeringDivision() {
@@ -96,7 +237,23 @@ export function ProductEngineeringDivision() {
   const [cxSnapshot, setCxSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [range, setRange] = useState<TimeRange>('1m')
+
+  // Date range — defaults to last 30 days
+  const [dateStart, setDateStart] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().split('T')[0]
+  })
+  const [dateEnd, setDateEnd] = useState(() => new Date().toISOString().split('T')[0])
+  const [showDatePicker, setShowDatePicker] = useState(false)
+
+  // Cluster drill-down state
+  const [clusterDetail, setClusterDetail] = useState<ClusterTicketDetail | null>(null)
+  const [clusterDetailLoading, setClusterDetailLoading] = useState(false)
+
+  const daysDiff = useMemo(() => {
+    const start = new Date(dateStart).getTime()
+    const end = new Date(dateEnd).getTime()
+    return Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)))
+  }, [dateStart, dateEnd])
 
   useEffect(() => {
     let cancelled = false
@@ -104,9 +261,8 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const days = rangeToDays(range)
         const [telData, issuesData, radarData, miData, cxData] = await Promise.all([
-          api.telemetrySummary(days),
+          api.telemetrySummary(daysDiff),
           api.engineeringIssues().catch(() => null),
           api.issues().catch(() => null),
           api.marketIntelligence(30).catch(() => null),
@@ -127,7 +283,19 @@ export function ProductEngineeringDivision() {
     }
     void load()
     return () => { cancelled = true }
-  }, [range])
+  }, [daysDiff])
+
+  const loadClusterDetail = useCallback(async (theme: string) => {
+    setClusterDetailLoading(true)
+    try {
+      const detail = await api.clusterDetail(theme)
+      setClusterDetail(detail)
+    } catch {
+      setClusterDetail(null)
+    } finally {
+      setClusterDetailLoading(false)
+    }
+  }, [])
 
   /* Telemetry derived values */
   const collection = telemetry?.collection_metadata || null
@@ -135,6 +303,7 @@ export function ProductEngineeringDivision() {
   const latest = telemetry?.latest || null
   const analytics = telemetry?.analytics || null
   const historyDaily = telemetry?.history_daily || []
+  const cookAnalysis = telemetry?.cook_analysis || null
 
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
   const sampleSize = Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
@@ -156,9 +325,13 @@ export function ProductEngineeringDivision() {
 
   const rangedHistory = useMemo(() => {
     if (!historyDaily.length) return []
-    const days = rangeToDays(range)
-    return historyDaily.slice(-days)
-  }, [historyDaily, range])
+    const start = new Date(dateStart).getTime()
+    const end = new Date(dateEnd).getTime()
+    return historyDaily.filter(row => {
+      const t = new Date(row.business_date).getTime()
+      return t >= start && t <= end
+    })
+  }, [historyDaily, dateStart, dateEnd])
 
   const fleetChartRows = useMemo(() => rangedHistory.map((row) => ({
     date: row.business_date.slice(5),
@@ -180,16 +353,25 @@ export function ProductEngineeringDivision() {
     return { avgDevices, totalErrors, totalEvents, errorRate: totalEvents > 0 ? totalErrors / totalEvents : 0, peakDay }
   }, [rangedHistory])
 
-  /* Issue Radar: product-related clusters */
+  /* Issue Radar: product-related clusters — filter out "unknown" */
   const productClusters = useMemo(() => {
     if (!issueRadar?.clusters) return []
     return issueRadar.clusters
       .filter(c => {
         const d = c.details_json || {}
+        if (d.theme === 'unknown') return false
         const themes: string[] = [d.theme, ...(d.secondary_themes || [])]
         const productThemes = ['temperature_control_venom', 'ignition_startup', 'app_connectivity', 'assembly', 'parts_replacement', 'probe_issues', 'wifi_connectivity']
         return themes.some(t => productThemes.includes(t)) || (d.affected_products && d.affected_products.length > 0)
       })
+      .sort((a, b) => (b.details_json?.priority_score || 0) - (a.details_json?.priority_score || 0))
+  }, [issueRadar])
+
+  /* All clusters except "unknown" for VOC view */
+  const allClusters = useMemo(() => {
+    if (!issueRadar?.clusters) return []
+    return issueRadar.clusters
+      .filter(c => (c.details_json?.theme || '') !== 'unknown')
       .sort((a, b) => (b.details_json?.priority_score || 0) - (a.details_json?.priority_score || 0))
   }, [issueRadar])
 
@@ -200,7 +382,7 @@ export function ProductEngineeringDivision() {
     return cxSnapshot.actions.filter(a => productKpis.includes(a.trigger_kpi) || a.co_owner === 'Kyle')
   }, [cxSnapshot])
 
-  /* Market intel: product innovation ideas + competitor pain points */
+  /* Market intel */
   const innovations = marketIntel?.product_innovation?.posts || []
   const competitorPains = marketIntel?.competitor_pain_points?.posts || []
   const purchaseIntents = marketIntel?.purchase_intent?.posts || []
@@ -208,64 +390,65 @@ export function ProductEngineeringDivision() {
 
   /* Firmware/grill health from telemetry */
   const firmwareHealth = telemetry?.firmware_health || []
-  const grillTypeHealth = telemetry?.grill_type_health || []
+  const grillTypeHealth = useMemo(() =>
+    (telemetry?.grill_type_health || []).map(g => ({ ...g, key: displayModelName(g.key) })),
+    [telemetry]
+  )
   const topErrors = telemetry?.top_error_codes || []
   const issuePatterns = telemetry?.top_issue_patterns || []
 
+  /* Cook style pie data */
+  const cookStylePie = useMemo(() => {
+    if (!cookAnalysis?.cook_styles) return []
+    return Object.entries(cookAnalysis.cook_styles)
+      .filter(([, v]) => v > 0)
+      .map(([key, value]) => ({ name: COOK_STYLE_LABELS[key] || key, value, key }))
+  }, [cookAnalysis])
+
   /* ------------------------------------------------------------------
-   * Generate auto-insights for the product team
+   * Auto-insights for product team
    * ------------------------------------------------------------------ */
   const productInsights = useMemo(() => {
     const items: { icon: string; text: string; severity: 'good' | 'warn' | 'bad' | 'info' }[] = []
 
-    // Reliability insight
     if (successRate != null) {
-      if (successRate >= 0.95) items.push({ icon: '\u2705', text: `Session reliability is excellent at ${fmtPct(successRate)} — no firmware intervention needed.`, severity: 'good' })
-      else if (successRate >= 0.85) items.push({ icon: '\u26a0\ufe0f', text: `Session reliability at ${fmtPct(successRate)} — review disconnect patterns and consider firmware patch.`, severity: 'warn' })
-      else items.push({ icon: '\ud83d\udea8', text: `Session reliability critically low at ${fmtPct(successRate)} — immediate investigation required.`, severity: 'bad' })
+      if (successRate >= 0.95) items.push({ icon: '\u2705', text: `Session reliability is ${fmtPct(successRate)} — strong performance.`, severity: 'good' })
+      else if (successRate >= 0.85) items.push({ icon: '\u26a0\ufe0f', text: `Session reliability at ${fmtPct(successRate)}. Note: short startup-only sessions that end before reaching target count as "incomplete" and lower this number. Check cook type mix below for context.`, severity: 'warn' })
+      else items.push({ icon: '\ud83d\udea8', text: `Session reliability at ${fmtPct(successRate)}. Review cook type breakdown — startup-only sessions pulling down the average may not indicate a real product issue.`, severity: 'bad' })
     }
 
-    // Overshoot insight
-    if (overshootRate != null && overshootRate > 0.15) {
-      items.push({ icon: '\ud83c\udf21\ufe0f', text: `Temperature overshoot rate at ${fmtPct(overshootRate)} (>15% threshold) — PID tuning review recommended for affected models.`, severity: 'warn' })
-    }
-
-    // WiFi insight
-    if (medianRssi != null && medianRssi < -75) {
-      items.push({ icon: '\ud83d\udcf6', text: `Median RSSI at ${medianRssi} dBm — weak signal causing disconnects. Consider antenna design improvement or documentation update.`, severity: 'warn' })
-    }
-
-    // Firmware fragmentation
-    if (firmwareHealth.length > 3) {
-      const unhealthy = firmwareHealth.filter(f => f.severity === 'warning' || f.severity === 'critical')
-      if (unhealthy.length > 0) {
-        items.push({ icon: '\u2699\ufe0f', text: `${unhealthy.length} firmware version(s) showing degraded health — prioritize OTA update push for ${unhealthy.map(f => f.key).join(', ')}.`, severity: 'warn' })
+    // Cook mix insight
+    if (cookAnalysis?.cook_styles) {
+      const total = cookAnalysis.total_sessions
+      const startup = cookAnalysis.cook_styles.startup_only || 0
+      const lowSlow = cookAnalysis.cook_styles.low_and_slow || 0
+      if (total > 0 && startup / total > 0.3) {
+        items.push({ icon: '\ud83d\udd25', text: `${fmtPct(startup / total)} of sessions are startup-only (< 15 min) — users lighting the grill and switching to manual. This is a normal use case, not an error.`, severity: 'info' })
+      }
+      if (total > 0 && lowSlow / total > 0.2) {
+        items.push({ icon: '\ud83c\udf56', text: `${fmtPct(lowSlow / total)} of sessions are low-and-slow cooks. Temperature stability is critical for these users — monitor the stability score closely.`, severity: 'info' })
       }
     }
 
-    // Product issue clusters
+    if (overshootRate != null && overshootRate > 0.15) {
+      items.push({ icon: '\ud83c\udf21\ufe0f', text: `Overshoot rate at ${fmtPct(overshootRate)} — may indicate PID tuning needed. Check if specific grill types or firmware versions are disproportionately affected.`, severity: 'warn' })
+    }
+
+    if (medianRssi != null && medianRssi < -75) {
+      items.push({ icon: '\ud83d\udcf6', text: `Median WiFi signal at ${medianRssi} dBm (weak). Outdoor grill placement far from routers is common — consider documentation guidance or antenna improvements.`, severity: 'warn' })
+    }
+
     if (productClusters.length > 0) {
       const topCluster = productClusters[0]
       const d = topCluster.details_json || {}
-      items.push({ icon: '\ud83d\udce6', text: `Top product issue: "${topCluster.title}" (${d.total_tickets || '?'} tickets, ${topCluster.severity} severity) — ${d.trend_label || 'stable'} trend.`, severity: topCluster.severity === 'critical' ? 'bad' : 'warn' })
+      items.push({ icon: '\ud83d\udce6', text: `Top product issue cluster: "${topCluster.title}" (${d.total_tickets || '?'} tickets, ${topCluster.severity} severity).`, severity: topCluster.severity === 'critical' ? 'bad' : 'warn' })
     }
 
-    // Innovation signals
-    if (innovations.length > 0) {
-      items.push({ icon: '\ud83d\udca1', text: `${innovations.length} product innovation signals detected from market conversations — review for roadmap alignment.`, severity: 'info' })
-    }
-
-    // Competitor pain points
-    if (competitorPains.length > 0) {
-      items.push({ icon: '\ud83c\udfaf', text: `${competitorPains.length} competitor pain points captured — potential differentiation opportunities for Spider Grills.`, severity: 'info' })
-    }
-
-    if (items.length === 0) {
-      items.push({ icon: '\u2705', text: 'All product health metrics within normal ranges. No action required.', severity: 'good' })
-    }
-
+    if (innovations.length > 0) items.push({ icon: '\ud83d\udca1', text: `${innovations.length} product innovation signals from market conversations.`, severity: 'info' })
+    if (competitorPains.length > 0) items.push({ icon: '\ud83c\udfaf', text: `${competitorPains.length} competitor pain points captured — differentiation opportunities.`, severity: 'info' })
+    if (items.length === 0) items.push({ icon: '\u2705', text: 'All product health metrics within normal ranges.', severity: 'good' })
     return items
-  }, [successRate, overshootRate, medianRssi, firmwareHealth, productClusters, innovations, competitorPains])
+  }, [successRate, overshootRate, medianRssi, productClusters, innovations, competitorPains, cookAnalysis])
 
 
   return (
@@ -285,18 +468,21 @@ export function ProductEngineeringDivision() {
               { key: 'voice' as SubView, label: 'Voice of Customer' },
               { key: 'roadmap' as SubView, label: 'Innovation Radar' },
             ]).map(tab => (
-              <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => setView(tab.key)}>{tab.label}</button>
+              <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
             ))}
           </div>
-          <div className="venom-range-group">
-            {([
-              { key: '24h' as TimeRange, label: '24h' },
-              { key: '1w' as TimeRange, label: '7d' },
-              { key: '2w' as TimeRange, label: '14d' },
-              { key: '1m' as TimeRange, label: '30d' },
-            ]).map(r => (
-              <button key={r.key} className={`range-button${range === r.key ? ' active' : ''}`} onClick={() => setRange(r.key)}>{r.label}</button>
-            ))}
+          {/* Date Range Picker */}
+          <div style={{ position: 'relative' }}>
+            <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>
+              {dateStart.slice(5)} to {dateEnd.slice(5)} ({daysDiff}d)
+            </button>
+            {showDatePicker && (
+              <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 20, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>From <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="deci-input" /></label>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>To <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="deci-input" /></label>
+                <button className="range-button" onClick={() => setShowDatePicker(false)}>Apply</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -306,7 +492,7 @@ export function ProductEngineeringDivision() {
 
       {!loading && !error ? (
         <>
-          {/* Product Intelligence Briefing — always visible */}
+          {/* Intelligence Briefing */}
           <section className="card">
             <div className="venom-panel-head">
               <strong>Product Intelligence Briefing</strong>
@@ -343,26 +529,18 @@ export function ProductEngineeringDivision() {
                   <div className="venom-kpi-label">Reliability</div>
                   <div className="venom-kpi-value">{fmtPct(successRate)}</div>
                   <div className="venom-kpi-sub">session success · n={fmtInt(sampleSize)}</div>
-                  <div className="venom-kpi-badges">
-                    <TruthBadge state="estimated" />
-                    {historyStats && <span className="venom-delta venom-delta-flat">error rate: {fmtPct(historyStats.errorRate)}</span>}
-                  </div>
+                  <div className="venom-kpi-badges"><TruthBadge state="estimated" /></div>
                 </div>
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Control Quality</div>
+                  <div className="venom-kpi-label">Temp Stability</div>
                   <div className="venom-kpi-value">{fmtDecimal(stabilityScore)}</div>
-                  <div className="venom-kpi-sub">stability · p50 stabilize {fmtDuration(p50Stabilize)}</div>
+                  <div className="venom-kpi-sub">score (0-1, higher = steadier)</div>
                   <div className="venom-kpi-badges"><TruthBadge state="estimated" /></div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Product Issues</div>
                   <div className="venom-kpi-value">{productClusters.length}</div>
                   <div className="venom-kpi-sub">active clusters from support + telemetry</div>
-                  <div className="venom-kpi-badges">
-                    {productClusters.filter(c => c.severity === 'critical').length > 0 && (
-                      <span className="venom-delta venom-delta-down">{productClusters.filter(c => c.severity === 'critical').length} critical</span>
-                    )}
-                  </div>
                 </div>
               </div>
 
@@ -371,7 +549,7 @@ export function ProductEngineeringDivision() {
                 <div className="venom-panel-head">
                   <div>
                     <strong>Fleet Activity — Daily Active Devices</strong>
-                    <p className="venom-chart-sub">Showing {rangedHistory.length} day{rangedHistory.length !== 1 ? 's' : ''} of data</p>
+                    <p className="venom-chart-sub">Showing {rangedHistory.length} day{rangedHistory.length !== 1 ? 's' : ''} ({dateStart} to {dateEnd})</p>
                   </div>
                   {historyStats?.peakDay && <span className="venom-panel-hint">Peak: {historyStats.peakDay.active_devices} on {historyStats.peakDay.business_date}</span>}
                 </div>
@@ -391,26 +569,94 @@ export function ProductEngineeringDivision() {
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
-                ) : <div className="state-message">No historical daily data available yet. Run the S3 import to populate fleet history.</div>}
+                ) : <div className="state-message">No historical daily data available for this date range. Run the S3 import to populate fleet history.</div>}
               </section>
 
-              {/* Reliability + Control Quality */}
+              {/* Cook Type Analysis */}
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>How Customers Use the Venom</strong>
+                  <span className="venom-panel-hint">{cookAnalysis?.total_sessions || 0} sessions analyzed</span>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+                  Understanding cook types helps interpret all other metrics. A "Startup Only" session (&lt;15 min) means the user lit the grill with Venom, reached temp, then switched to manual — that's a normal use case, not a failure. Low-and-slow cooks (brisket, pulled pork) demand tight temperature stability. Hot-and-fast cooks (burgers, searing) are brief and less stability-sensitive.
+                </p>
+                {cookStylePie.length > 0 ? (
+                  <div className="two-col two-col-equal">
+                    <div>
+                      <div className="chart-wrap-short">
+                        <ResponsiveContainer width="100%" height={240}>
+                          <PieChart>
+                            <Pie data={cookStylePie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                              {cookStylePie.map((entry) => <Cell key={entry.key} fill={COOK_STYLE_COLORS[entry.key] || '#555'} />)}
+                            </Pie>
+                            <Tooltip />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="venom-breakdown-label">Per-Style Performance</div>
+                      <div className="venom-breakdown-list">
+                        {Object.entries(cookAnalysis?.style_details || {}).filter(([, d]) => d.count > 0).map(([style, d]) => (
+                          <div key={style} className="venom-breakdown-row" style={{ flexWrap: 'wrap' }}>
+                            <span style={{ color: COOK_STYLE_COLORS[style], fontWeight: 600, minWidth: 160 }}>{COOK_STYLE_LABELS[style] || style}</span>
+                            <span className="venom-breakdown-val" style={{ minWidth: 200 }}>
+                              {d.count} sessions · avg {fmtDuration(d.avg_duration_seconds)}
+                              {d.avg_stability_score != null ? ` · stability ${fmtDecimal(d.avg_stability_score)}` : ''}
+                              {d.success_rate != null ? ` · success ${fmtPct(d.success_rate)}` : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : <div className="state-message">Cook type data populates from telemetry sessions. Data will appear after sufficient device activity.</div>}
+              </section>
+
+              {/* Control Quality + Reliability */}
               <div className="two-col two-col-equal">
                 <section className="card">
                   <div className="venom-panel-head">
-                    <strong>Reliability Breakdown</strong>
+                    <strong>Temperature Control Quality</strong>
+                    <Link to="/analysis/temp-curves" className="analysis-link">View curves &#x2197;</Link>
+                  </div>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+                    These metrics measure how well the Venom maintains the target temperature. Stabilization time depends on charcoal type, ambient conditions, and how the fire was started — treat as directional, not absolute.
+                  </p>
+                  <div className="venom-bar-list">
+                    <div className="venom-bar-row"><span className="venom-bar-label">Stability score</span><BarIndicator value={(stabilityScore || 0) * 100} max={100} color="var(--green)" /><span className="venom-bar-value">{fmtDecimal(stabilityScore)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Overshoot rate</span><BarIndicator value={(overshootRate || 0) * 100} max={100} color="var(--orange)" /><span className="venom-bar-value">{fmtPct(overshootRate, 0)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p50)</span><BarIndicator value={p50Stabilize || 0} max={p95Stabilize || 1200} color="var(--blue)" /><span className="venom-bar-value">{fmtDuration(p50Stabilize)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p95)</span><BarIndicator value={p95Stabilize || 0} max={p95Stabilize || 1200} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95Stabilize)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Median cook</span><BarIndicator value={medianCookDuration || 0} max={p95CookDuration || 14400} color="#9b7bff" /><span className="venom-bar-value">{fmtDuration(medianCookDuration)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Cook p95</span><BarIndicator value={p95CookDuration || 0} max={p95CookDuration || 14400} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95CookDuration)}</span></div>
+                  </div>
+                  <small className="venom-panel-footer">
+                    Stability = how tightly temp stays within target band after reaching setpoint. Stabilize time = seconds from grill-lit detection (&gt;150F) to 3 consecutive readings within +/-15F of target. Varies by charcoal, ambient temp, fire-start method.
+                  </small>
+                </section>
+
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Connectivity & Reliability</strong>
                     <Link to="/issues" className="analysis-link">View issues &#x2197;</Link>
                   </div>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+                    Session success requires: reaching target temp, stabilizing, no disconnects, and zero errors. Startup-only sessions (&lt;15 min) that end before target may count as incomplete.
+                  </p>
                   <div className="venom-breakdown-list">
-                    <div className="venom-breakdown-row"><span>Session success</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state="estimated" /></div>
-                    <div className="venom-breakdown-row"><span>Disconnect (proxy)</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state="proxy" /></div>
+                    <div className="venom-breakdown-row"><span>Session success rate</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state="estimated" /></div>
+                    <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state="proxy" /></div>
                     <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
                     <div className="venom-breakdown-row"><span>Median RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${medianRssi} dBm` : '\u2014'}</span></div>
                   </div>
-                  {/* Grill type health */}
+                  <small className="venom-panel-footer">
+                    Disconnect rate = sessions where a &gt;45-minute gap was detected between telemetry events (proxy for WiFi dropout). Probe error = sessions where food probe readings were expected but missing. RSSI = WiFi signal strength (below -75 dBm = weak). n={fmtInt(sampleSize)} sessions.
+                  </small>
                   {grillTypeHealth.length > 0 && (
-                    <>
-                      <div className="venom-breakdown-label" style={{ marginTop: 12 }}>By Grill Type</div>
+                    <div style={{ marginTop: 12 }}>
+                      <div className="venom-breakdown-label">By Grill Type</div>
                       <div className="venom-breakdown-list">
                         {grillTypeHealth.map((g, i) => (
                           <div key={i} className="venom-breakdown-row">
@@ -419,28 +665,12 @@ export function ProductEngineeringDivision() {
                           </div>
                         ))}
                       </div>
-                    </>
+                    </div>
                   )}
-                  <small className="venom-panel-footer">n={fmtInt(sampleSize)} sessions</small>
-                </section>
-
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Control Quality</strong>
-                    <Link to="/analysis/temp-curves" className="analysis-link">View curves &#x2197;</Link>
-                  </div>
-                  <div className="venom-bar-list">
-                    <div className="venom-bar-row"><span className="venom-bar-label">p50 stabilize</span><BarIndicator value={p50Stabilize || 0} max={p95Stabilize || 1200} color="var(--blue)" /><span className="venom-bar-value">{fmtDuration(p50Stabilize)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">p95 stabilize</span><BarIndicator value={p95Stabilize || 0} max={p95Stabilize || 1200} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95Stabilize)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Overshoot rate</span><BarIndicator value={(overshootRate || 0) * 100} max={100} color="var(--orange)" /><span className="venom-bar-value">{fmtPct(overshootRate, 0)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Stability score</span><BarIndicator value={(stabilityScore || 0) * 100} max={100} color="var(--green)" /><span className="venom-bar-value">{fmtDecimal(stabilityScore)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Median cook</span><BarIndicator value={medianCookDuration || 0} max={p95CookDuration || 14400} color="#9b7bff" /><span className="venom-bar-value">{fmtDuration(medianCookDuration)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Cook p95</span><BarIndicator value={p95CookDuration || 0} max={p95CookDuration || 14400} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95CookDuration)}</span></div>
-                  </div>
                 </section>
               </div>
 
-              {/* Model + Firmware + Peak Hours */}
+              {/* Model + Peak Hours */}
               <div className="two-col two-col-equal">
                 <section className="card">
                   <div className="venom-panel-head"><strong>Peak Cooking Hours</strong></div>
@@ -466,7 +696,7 @@ export function ProductEngineeringDivision() {
                         <BarChart data={modelData} layout="vertical">
                           <CartesianGrid stroke="rgba(255,255,255,0.06)" />
                           <XAxis type="number" stroke="#9fb0d4" />
-                          <YAxis type="category" dataKey="model" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={120} />
+                          <YAxis type="category" dataKey="model" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={160} />
                           <Tooltip />
                           <Bar dataKey="events" name="Events" fill="var(--green)" radius={[0, 4, 4, 0]} />
                         </BarChart>
@@ -476,7 +706,7 @@ export function ProductEngineeringDivision() {
                 </section>
               </div>
 
-              {/* Firmware + Error Codes */}
+              {/* Firmware + Errors */}
               <div className="two-col two-col-equal">
                 <section className="card">
                   <div className="venom-panel-head">
@@ -496,7 +726,6 @@ export function ProductEngineeringDivision() {
                       </ResponsiveContainer>
                     </div>
                   ) : <div className="state-message">Firmware data populates after S3 history import.</div>}
-                  {/* Firmware health table */}
                   {firmwareHealth.length > 0 && (
                     <div style={{ marginTop: 12 }}>
                       <div className="venom-breakdown-label">Firmware Health</div>
@@ -505,9 +734,7 @@ export function ProductEngineeringDivision() {
                           <div key={i} className="venom-breakdown-row">
                             <span>{f.key}</span>
                             <span className="venom-breakdown-val">{f.sessions} sessions</span>
-                            <span style={{ color: f.severity === 'critical' ? 'var(--red)' : f.severity === 'warning' ? 'var(--orange)' : 'var(--green)', fontWeight: 600, fontSize: 12 }}>
-                              {fmtDecimal(f.health_score)}
-                            </span>
+                            <span style={{ color: f.severity === 'critical' ? 'var(--red)' : f.severity === 'warning' ? 'var(--orange)' : 'var(--green)', fontWeight: 600, fontSize: 12 }}>{fmtDecimal(f.health_score)}</span>
                           </div>
                         ))}
                       </div>
@@ -520,14 +747,13 @@ export function ProductEngineeringDivision() {
                     <div className="venom-breakdown-list">
                       {topErrors.map((e, i) => (
                         <div key={i} className="venom-breakdown-row">
-                          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{e.error_code}</span>
+                          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{e.error_code || e.code}</span>
                           <span className="venom-breakdown-val">{fmtInt(e.count)} events</span>
-                          <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(e.pct_of_errors)}</span>
+                          <span style={{ color: 'var(--muted)', fontSize: 11 }}>{e.pct_of_errors ? fmtPct(e.pct_of_errors) : ''}</span>
                         </div>
                       ))}
                     </div>
                   ) : <div className="state-message">No error codes captured yet.</div>}
-                  {/* Issue patterns */}
                   {issuePatterns.length > 0 && (
                     <div style={{ marginTop: 16 }}>
                       <div className="venom-breakdown-label">Detected Issue Patterns</div>
@@ -544,7 +770,7 @@ export function ProductEngineeringDivision() {
                 </section>
               </div>
 
-              {/* P0/P1 Engineering Issues + Product Issue Clusters */}
+              {/* GitHub Issues + Product Clusters */}
               <div className="two-col two-col-equal">
                 <section className="card">
                   <div className="venom-panel-head">
@@ -561,59 +787,44 @@ export function ProductEngineeringDivision() {
                             <strong>#{issue.number} {issue.title}</strong>
                             <div className="inline-badges">
                               {issue.priority && <span className={`badge ${issue.priority === 'P0' ? 'badge-bad' : 'badge-warn'}`}>{issue.priority}</span>}
-                              {issue.is_bug && <span className="badge badge-neutral">bug</span>}
                             </div>
                           </div>
-                          <p>{issue.assignees.length > 0 ? `Assigned to ${issue.assignees.join(', ')}` : 'Unassigned'} · Updated {formatFreshness(issue.updated_at)}</p>
+                          <p>{issue.assignees.length > 0 ? `Assigned: ${issue.assignees.join(', ')}` : 'Unassigned'} · Updated {formatFreshness(issue.updated_at)}</p>
                         </a>
                       ))}
                     </div>
-                  ) : (
-                    <div className="state-message">{githubIssues?.configured === false ? 'GitHub integration not configured.' : 'No P0/P1 issues found'}</div>
-                  )}
+                  ) : <div className="state-message">{githubIssues?.configured === false ? 'GitHub not configured.' : 'No P0/P1 issues'}</div>}
                 </section>
-
                 <section className="card">
                   <div className="venom-panel-head">
                     <strong>Product Issue Clusters</strong>
                     <Link to="/issues" className="analysis-link">Full radar &#x2197;</Link>
                   </div>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>Click any cluster for ticket-level detail.</p>
                   {productClusters.length > 0 ? (
                     <div className="stack-list compact">
                       {productClusters.slice(0, 6).map((cluster, i) => {
                         const d = cluster.details_json || {}
                         return (
-                          <div key={i} className={`list-item status-${cluster.severity === 'critical' ? 'bad' : cluster.severity === 'high' ? 'warn' : 'muted'}`}>
+                          <div key={i} className={`list-item status-${cluster.severity === 'critical' ? 'bad' : cluster.severity === 'high' ? 'warn' : 'muted'}`}
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => loadClusterDetail(d.theme)}>
                             <div className="item-head">
                               <strong>{cluster.title}</strong>
                               {severityBadge(cluster.severity)}
                             </div>
-                            <p>
-                              {d.total_tickets && `${d.total_tickets} tickets`}
-                              {d.trend_label && ` · ${d.trend_label}`}
-                              {d.affected_products?.length > 0 && ` · ${d.affected_products.join(', ')}`}
-                            </p>
+                            <p>{d.total_tickets && `${d.total_tickets} tickets`}{d.trend_label && ` · ${d.trend_label}`}{d.affected_products?.length > 0 && ` · ${d.affected_products.join(', ')}`}</p>
                           </div>
                         )
                       })}
                     </div>
-                  ) : <div className="state-message">No product-specific issue clusters detected.</div>}
-                  {/* Product CX escalations */}
-                  {productActions.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="venom-breakdown-label">Product Escalations from CX</div>
-                      <div className="stack-list compact">
-                        {productActions.slice(0, 3).map((action, i) => (
-                          <div key={i} className={`list-item status-${action.priority === 'critical' ? 'bad' : 'warn'}`}>
-                            <div className="item-head"><strong>{action.title}</strong><span className={`badge ${action.priority === 'critical' ? 'badge-bad' : 'badge-warn'}`}>{action.status}</span></div>
-                            <p>{action.required_action}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  ) : <div className="state-message">No product issue clusters detected.</div>}
                 </section>
               </div>
+
+              {/* Cluster detail panel (expanded) */}
+              {clusterDetailLoading && <Card title="Loading"><div className="state-message">Loading ticket detail...</div></Card>}
+              {clusterDetail && !clusterDetailLoading && <ClusterDetailPanel detail={clusterDetail} onClose={() => setClusterDetail(null)} />}
 
               {/* Drill-down routes */}
               <section className="card">
@@ -635,12 +846,11 @@ export function ProductEngineeringDivision() {
           {/* ============================================================ */}
           {view === 'voice' && (
             <>
-              {/* VOC KPI strip */}
               <div className="venom-kpi-strip">
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Product Issue Clusters</div>
-                  <div className="venom-kpi-value">{productClusters.length}</div>
-                  <div className="venom-kpi-sub">from support tickets + telemetry</div>
+                  <div className="venom-kpi-label">Issue Clusters</div>
+                  <div className="venom-kpi-value">{allClusters.length}</div>
+                  <div className="venom-kpi-sub">categorized from support tickets</div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">CX Escalations</div>
@@ -653,58 +863,68 @@ export function ProductEngineeringDivision() {
                   <div className="venom-kpi-sub">Reddit + YouTube + Amazon (30d)</div>
                 </div>
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Brand Sentiment</div>
+                  <div className="venom-kpi-label">Share of Voice</div>
                   <div className="venom-kpi-value" style={{ color: sentimentColor(marketIntel?.competitive_landscape?.brand_share_of_voice) }}>
                     {marketIntel?.competitive_landscape?.brand_share_of_voice != null ? `${(marketIntel.competitive_landscape.brand_share_of_voice * 100).toFixed(1)}%` : '\u2014'}
                   </div>
-                  <div className="venom-kpi-sub">share of voice</div>
+                  <div className="venom-kpi-sub">Spider Grills vs competitors</div>
                 </div>
               </div>
 
-              {/* Product Issue Deep-Dive */}
+              {/* Issue clusters with drill-down */}
               <section className="card">
                 <div className="venom-panel-head">
-                  <strong>Product Issue Analysis — What Customers Are Reporting</strong>
+                  <strong>Customer Issue Analysis</strong>
                   <Link to="/issues" className="analysis-link">Full radar &#x2197;</Link>
                 </div>
-                {productClusters.length > 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                  Tickets are classified by topic, ranked by business impact. Click any cluster to see individual tickets, unique customer count, and sub-topics within the category.
+                </p>
+                {allClusters.length > 0 ? (
                   <div className="stack-list">
-                    {productClusters.map((cluster, i) => {
+                    {allClusters.map((cluster, i) => {
                       const d = cluster.details_json || {}
                       const trendPct = d.trend_pct ?? 0
+                      const isExpanded = clusterDetail?.theme === d.theme
                       return (
-                        <div key={i} className={`list-item status-${cluster.severity === 'critical' ? 'bad' : cluster.severity === 'high' ? 'warn' : 'muted'}`}>
-                          <div className="item-head">
-                            <strong>{cluster.title}</strong>
-                            <div className="inline-badges">
-                              {severityBadge(cluster.severity)}
-                              <span className={`badge ${trendPct > 10 ? 'badge-bad' : trendPct < -10 ? 'badge-good' : 'badge-neutral'}`}>
-                                {trendPct > 0 ? '+' : ''}{trendPct.toFixed(0)}% trend
-                              </span>
+                        <div key={i}>
+                          <div className={`list-item status-${cluster.severity === 'critical' ? 'bad' : cluster.severity === 'high' ? 'warn' : 'muted'}`}
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => isExpanded ? setClusterDetail(null) : loadClusterDetail(d.theme)}>
+                            <div className="item-head">
+                              <strong>{cluster.title}</strong>
+                              <div className="inline-badges">
+                                {severityBadge(cluster.severity)}
+                                <span className={`badge ${trendPct > 10 ? 'badge-bad' : trendPct < -10 ? 'badge-good' : 'badge-neutral'}`}>
+                                  {trendPct > 0 ? '+' : ''}{trendPct.toFixed(0)}% trend
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                          <p>
-                            {d.total_tickets && <><strong>{d.total_tickets}</strong> tickets</>}
-                            {d.recent_7d != null && <> · <strong>{d.recent_7d}</strong> this week</>}
-                            {d.affected_products?.length > 0 && <> · Affects: {d.affected_products.join(', ')}</>}
-                          </p>
-                          {d.tickets_per_100_orders && (
-                            <p style={{ fontSize: 12, color: 'var(--muted)' }}>
-                              Impact: {d.tickets_per_100_orders.toFixed(1)} tickets/100 orders
-                              {d.estimated_conversion_impact_pct && ` · est. ${d.estimated_conversion_impact_pct.toFixed(1)}% conversion impact`}
+                            <p>
+                              <strong>{d.total_tickets}</strong> tickets · <strong>{d.recent_7d}</strong> this week
+                              {d.affected_products?.length > 0 && <> · Affects: {d.affected_products.join(', ')}</>}
+                              {d.owner_team && <> · Owner: {d.owner_team}</>}
                             </p>
-                          )}
-                          <p style={{ fontSize: 12 }}>
-                            <strong>Action:</strong> {cluster.severity === 'critical' ? 'Requires immediate engineering review' : d.owner_team ? `Owner: ${d.owner_team}` : 'Assign to engineering team'}
-                          </p>
+                            {d.tickets_per_100_orders_by_theme && (
+                              <p style={{ fontSize: 12, color: 'var(--muted)' }}>
+                                Impact: {d.tickets_per_100_orders_by_theme.toFixed(1)} tickets/100 orders
+                                {d.estimated_conversion_impact_pct && ` · est. ${d.estimated_conversion_impact_pct.toFixed(1)}% conversion impact`}
+                              </p>
+                            )}
+                            <p style={{ fontSize: 11, color: 'var(--accent)' }}>
+                              {isExpanded ? 'Click to collapse' : 'Click for ticket detail'}
+                            </p>
+                          </div>
+                          {isExpanded && clusterDetail && <ClusterDetailPanel detail={clusterDetail} onClose={() => setClusterDetail(null)} />}
                         </div>
                       )
                     })}
                   </div>
-                ) : <div className="state-message">No product-specific issue clusters detected from customer data.</div>}
+                ) : <div className="state-message">No issue clusters detected from customer data.</div>}
+                {clusterDetailLoading && <div className="state-message">Loading ticket detail...</div>}
               </section>
 
-              {/* CX Escalations for Product Team */}
+              {/* CX Escalations */}
               <section className="card">
                 <div className="venom-panel-head">
                   <strong>Product Escalations from Customer Support</strong>
@@ -722,22 +942,19 @@ export function ProductEngineeringDivision() {
                           </div>
                         </div>
                         <p>{action.required_action}</p>
-                        <p style={{ fontSize: 11, color: 'var(--muted)' }}>Trigger: {action.trigger_kpi} {action.trigger_condition} · Owner: {action.owner}{action.co_owner ? ` + ${action.co_owner}` : ''}</p>
                       </div>
                     ))}
                   </div>
-                ) : <div className="state-message">No product-linked CX escalations. All support metrics within thresholds.</div>}
+                ) : <div className="state-message">No product-linked CX escalations.</div>}
               </section>
 
-              {/* Purchase Intent Monitor — what are buyers looking for? */}
+              {/* Purchase intent */}
               <section className="card">
                 <div className="venom-panel-head">
-                  <strong>Purchase Intent Monitor — What Buyers Want</strong>
+                  <strong>Purchase Intent Monitor</strong>
                   <Link to="/social" className="analysis-link">Social Intel &#x2197;</Link>
                 </div>
-                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                  Conversations where people are actively shopping for charcoal grill controllers. Each signal is a potential customer or feature request.
-                </p>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>People actively shopping for charcoal grill controllers — each signal is a potential customer or feature request.</p>
                 {purchaseIntents.length > 0 ? (
                   <div className="stack-list compact">
                     {purchaseIntents.slice(0, 8).map((post, i) => (
@@ -764,12 +981,11 @@ export function ProductEngineeringDivision() {
           {/* ============================================================ */}
           {view === 'roadmap' && (
             <>
-              {/* Innovation KPI strip */}
               <div className="venom-kpi-strip">
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Innovation Signals</div>
                   <div className="venom-kpi-value">{innovations.length}</div>
-                  <div className="venom-kpi-sub">product ideas from market conversations</div>
+                  <div className="venom-kpi-sub">from market conversations</div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Competitor Weaknesses</div>
@@ -779,25 +995,21 @@ export function ProductEngineeringDivision() {
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Trending Topics</div>
                   <div className="venom-kpi-value">{trendMomentum.length}</div>
-                  <div className="venom-kpi-sub">cross-platform industry trends</div>
+                  <div className="venom-kpi-sub">cross-platform trends</div>
                 </div>
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Amazon Position</div>
+                  <div className="venom-kpi-label">Amazon BSR</div>
                   <div className="venom-kpi-value">
                     {marketIntel?.amazon_positioning?.bsr?.our_best_bsr ? `#${fmtInt(marketIntel.amazon_positioning.bsr.our_best_bsr)}` : '\u2014'}
                   </div>
-                  <div className="venom-kpi-sub">best BSR ranking</div>
+                  <div className="venom-kpi-sub">best ranking</div>
                 </div>
               </div>
 
-              {/* Industry Trend Momentum */}
+              {/* Trend Momentum */}
               <section className="card">
-                <div className="venom-panel-head">
-                  <strong>Industry Trend Momentum — What's Moving in Charcoal Grilling</strong>
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-                  Topics gaining traction across Reddit, YouTube, and Amazon. Cross-platform signals have the highest reliability for identifying real market shifts.
-                </p>
+                <div className="venom-panel-head"><strong>Industry Trend Momentum</strong></div>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>Topics gaining traction across Reddit, YouTube, and Amazon. Cross-platform signals indicate real market shifts.</p>
                 {trendMomentum.length > 0 ? (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
                     {trendMomentum.map((trend, i) => (
@@ -806,9 +1018,7 @@ export function ProductEngineeringDivision() {
                           <strong style={{ fontSize: 14 }}>{trend.topic}</strong>
                           {momentumBadge(trend.momentum)}
                         </div>
-                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                          {fmtInt(trend.mentions)} mentions · {fmtInt(trend.total_engagement)} engagement
-                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>{fmtInt(trend.mentions)} mentions · {fmtInt(trend.total_engagement)} engagement</div>
                         <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
                           {trend.platforms.map(p => <span key={p} className="badge badge-neutral" style={{ fontSize: 10 }}>{p}</span>)}
                           {trend.cross_platform && <span className="badge badge-good" style={{ fontSize: 10 }}>cross-platform</span>}
@@ -816,49 +1026,32 @@ export function ProductEngineeringDivision() {
                       </div>
                     ))}
                   </div>
-                ) : <div className="state-message">No trend momentum data available yet. Social connectors will populate this.</div>}
+                ) : <div className="state-message">No trend data yet. Social connectors will populate this.</div>}
               </section>
 
-              {/* Product Innovation Signals */}
+              {/* Innovation Signals */}
               <section className="card">
-                <div className="venom-panel-head">
-                  <strong>Product Innovation Signals — Ideas From The Market</strong>
-                  <Link to="/social" className="analysis-link">Social Intel &#x2197;</Link>
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                  Conversations where users discuss product features they wish existed, modifications they've made, or innovations they've seen. Each is a potential product roadmap input.
-                </p>
+                <div className="venom-panel-head"><strong>Product Innovation Signals</strong><Link to="/social" className="analysis-link">Social Intel &#x2197;</Link></div>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Feature requests, DIY mods, and wishlist items from real users.</p>
                 {innovations.length > 0 ? (
                   <div className="stack-list">
                     {innovations.slice(0, 10).map((post, i) => (
                       <a key={i} href={post.source_url} target="_blank" rel="noopener noreferrer" className="list-item status-muted" style={{ textDecoration: 'none', color: 'inherit' }}>
                         <div className="item-head">
                           <strong>{post.title || post.body?.slice(0, 100) || 'Untitled'}</strong>
-                          <div className="inline-badges">
-                            <span className="badge badge-neutral">{post.platform}</span>
-                            {post.product_mentioned && <span className="badge badge-good">{post.product_mentioned}</span>}
-                          </div>
+                          <span className="badge badge-neutral">{post.platform}</span>
                         </div>
-                        {post.body && <p style={{ fontSize: 12, lineHeight: 1.5 }}>{post.body.slice(0, 200)}{post.body.length > 200 ? '...' : ''}</p>}
-                        <p style={{ fontSize: 11, color: 'var(--muted)' }}>
-                          {post.engagement_score > 0 && `${fmtInt(post.engagement_score)} engagement`}
-                          {post.comment_count > 0 && ` · ${post.comment_count} comments`}
-                          {post.published_at && ` · ${formatFreshness(post.published_at)}`}
-                        </p>
+                        {post.body && <p style={{ fontSize: 12 }}>{post.body.slice(0, 200)}{post.body.length > 200 ? '...' : ''}</p>}
                       </a>
                     ))}
                   </div>
-                ) : <div className="state-message">No product innovation signals captured yet.</div>}
+                ) : <div className="state-message">No innovation signals yet.</div>}
               </section>
 
-              {/* Competitor Pain Points — opportunities */}
+              {/* Competitor Pain Points */}
               <section className="card">
-                <div className="venom-panel-head">
-                  <strong>Competitor Pain Points — Differentiation Opportunities</strong>
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                  Complaints and frustrations about competitor products. Each pain point is an opportunity for Spider Grills to differentiate with superior design.
-                </p>
+                <div className="venom-panel-head"><strong>Competitor Pain Points</strong></div>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Complaints about competitor products — each is a differentiation opportunity.</p>
                 {competitorPains.length > 0 ? (
                   <div className="stack-list">
                     {competitorPains.slice(0, 10).map((post, i) => (
@@ -870,144 +1063,95 @@ export function ProductEngineeringDivision() {
                             <span className="badge badge-neutral">{post.platform}</span>
                           </div>
                         </div>
-                        {post.body && <p style={{ fontSize: 12, lineHeight: 1.5 }}>{post.body.slice(0, 200)}{post.body.length > 200 ? '...' : ''}</p>}
-                        <p style={{ fontSize: 11, color: 'var(--muted)' }}>
-                          {post.engagement_score > 0 && `${fmtInt(post.engagement_score)} engagement`}
-                          {post.comment_count > 0 && ` · ${post.comment_count} comments`}
-                        </p>
+                        {post.body && <p style={{ fontSize: 12 }}>{post.body.slice(0, 200)}{post.body.length > 200 ? '...' : ''}</p>}
                       </a>
                     ))}
                   </div>
-                ) : <div className="state-message">No competitor pain points captured yet.</div>}
+                ) : <div className="state-message">No competitor pain points yet.</div>}
               </section>
 
-              {/* Competitive Landscape */}
+              {/* Competitive Landscape + Amazon */}
               {marketIntel?.competitive_landscape && (
                 <div className="two-col two-col-equal">
                   <section className="card">
                     <div className="venom-panel-head"><strong>Competitive Share of Voice</strong></div>
                     {marketIntel.competitive_landscape.competitors.length > 0 ? (
-                      <>
-                        <div className="chart-wrap-short">
-                          <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={[
-                              { brand: 'Spider Grills', mentions: marketIntel.competitive_landscape.brand_mentions, fill: 'var(--green)' },
-                              ...marketIntel.competitive_landscape.competitors.slice(0, 6).map(c => ({ brand: c.competitor, mentions: c.mentions, fill: 'var(--blue)' }))
-                            ]} layout="vertical">
-                              <CartesianGrid stroke="rgba(255,255,255,0.06)" />
-                              <XAxis type="number" stroke="#9fb0d4" />
-                              <YAxis type="category" dataKey="brand" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={100} />
-                              <Tooltip />
-                              <Bar dataKey="mentions" name="Mentions" radius={[0, 4, 4, 0]}>
-                                {[
-                                  { brand: 'Spider Grills', mentions: marketIntel.competitive_landscape.brand_mentions },
-                                  ...marketIntel.competitive_landscape.competitors.slice(0, 6)
-                                ].map((_, i) => <Cell key={i} fill={i === 0 ? '#4ade80' : CHART_COLORS[i % CHART_COLORS.length]} />)}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
-                        <small className="venom-panel-footer">
-                          Spider Grills SOV: {(marketIntel.competitive_landscape.brand_share_of_voice * 100).toFixed(1)}% · {marketIntel.competitive_landscape.brand_mentions} mentions
-                        </small>
-                      </>
-                    ) : <div className="state-message">No competitor data available yet.</div>}
+                      <div className="chart-wrap-short">
+                        <ResponsiveContainer width="100%" height={240}>
+                          <BarChart data={[
+                            { brand: 'Spider Grills', mentions: marketIntel.competitive_landscape.brand_mentions },
+                            ...marketIntel.competitive_landscape.competitors.slice(0, 6).map(c => ({ brand: c.competitor, mentions: c.mentions }))
+                          ]} layout="vertical">
+                            <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                            <XAxis type="number" stroke="#9fb0d4" />
+                            <YAxis type="category" dataKey="brand" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={100} />
+                            <Tooltip />
+                            <Bar dataKey="mentions" name="Mentions" radius={[0, 4, 4, 0]}>
+                              {[marketIntel.competitive_landscape, ...marketIntel.competitive_landscape.competitors.slice(0, 6)].map((_, i) => <Cell key={i} fill={i === 0 ? '#4ade80' : CHART_COLORS[i % CHART_COLORS.length]} />)}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : <div className="state-message">No competitor data yet.</div>}
                   </section>
-
-                  {/* Amazon Market Position */}
                   <section className="card">
                     <div className="venom-panel-head"><strong>Amazon Market Position</strong></div>
                     {marketIntel.amazon_positioning ? (
                       <div className="venom-breakdown-list">
                         {marketIntel.amazon_positioning.bsr && (
                           <>
-                            <div className="venom-breakdown-row">
-                              <span>Our Best BSR</span>
-                              <span className="venom-breakdown-val">#{fmtInt(marketIntel.amazon_positioning.bsr.our_best_bsr)}</span>
-                            </div>
-                            <div className="venom-breakdown-row">
-                              <span>Competitor Best BSR</span>
-                              <span className="venom-breakdown-val">#{fmtInt(marketIntel.amazon_positioning.bsr.competitor_best_bsr)}</span>
-                            </div>
-                            <div className="venom-breakdown-row">
-                              <span>Outranking Competitors</span>
-                              <span className="venom-breakdown-val" style={{ color: marketIntel.amazon_positioning.bsr.outranking_competitors ? 'var(--green)' : 'var(--red)' }}>
-                                {marketIntel.amazon_positioning.bsr.outranking_competitors ? 'Yes' : 'No'}
-                              </span>
-                            </div>
+                            <div className="venom-breakdown-row"><span>Our Best BSR</span><span className="venom-breakdown-val">#{fmtInt(marketIntel.amazon_positioning.bsr.our_best_bsr)}</span></div>
+                            <div className="venom-breakdown-row"><span>Competitor Best BSR</span><span className="venom-breakdown-val">#{fmtInt(marketIntel.amazon_positioning.bsr.competitor_best_bsr)}</span></div>
+                            <div className="venom-breakdown-row"><span>Outranking</span><span className="venom-breakdown-val" style={{ color: marketIntel.amazon_positioning.bsr.outranking_competitors ? 'var(--green)' : 'var(--red)' }}>{marketIntel.amazon_positioning.bsr.outranking_competitors ? 'Yes' : 'No'}</span></div>
                           </>
                         )}
                         {marketIntel.amazon_positioning.price && (
                           <>
-                            <div className="venom-breakdown-row">
-                              <span>Our Avg Price</span>
-                              <span className="venom-breakdown-val">${marketIntel.amazon_positioning.price.our_avg_price.toFixed(2)}</span>
-                            </div>
-                            <div className="venom-breakdown-row">
-                              <span>Competitor Avg Price</span>
-                              <span className="venom-breakdown-val">${marketIntel.amazon_positioning.price.competitor_avg_price.toFixed(2)}</span>
-                            </div>
-                            <div className="venom-breakdown-row">
-                              <span>Price Position</span>
-                              <span className="venom-breakdown-val">{marketIntel.amazon_positioning.price.position} ({marketIntel.amazon_positioning.price.price_delta_pct > 0 ? '+' : ''}{marketIntel.amazon_positioning.price.price_delta_pct.toFixed(0)}%)</span>
-                            </div>
+                            <div className="venom-breakdown-row"><span>Our Avg Price</span><span className="venom-breakdown-val">${marketIntel.amazon_positioning.price.our_avg_price.toFixed(2)}</span></div>
+                            <div className="venom-breakdown-row"><span>Competitor Avg</span><span className="venom-breakdown-val">${marketIntel.amazon_positioning.price.competitor_avg_price.toFixed(2)}</span></div>
+                            <div className="venom-breakdown-row"><span>Position</span><span className="venom-breakdown-val">{marketIntel.amazon_positioning.price.position}</span></div>
                           </>
                         )}
-                        <div className="venom-breakdown-row">
-                          <span>Our Products Listed</span>
-                          <span className="venom-breakdown-val">{marketIntel.amazon_positioning.our_products}</span>
-                        </div>
-                        <div className="venom-breakdown-row">
-                          <span>Competitor Products Tracked</span>
-                          <span className="venom-breakdown-val">{marketIntel.amazon_positioning.competitor_products}</span>
-                        </div>
                       </div>
-                    ) : <div className="state-message">Amazon positioning data not available yet.</div>}
+                    ) : <div className="state-message">Amazon data not available yet.</div>}
                   </section>
                 </div>
               )}
 
-              {/* Product Roadmap Input Summary */}
+              {/* Roadmap Input Summary */}
               <section className="card">
                 <div className="venom-panel-head"><strong>Roadmap Input Summary</strong></div>
-                <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-                  Aggregated signals that should inform the next product development cycle. Review these inputs when planning sprints or quarterly roadmaps.
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
                   <div style={{ background: 'var(--panel-2)', borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>From Customer Support</div>
-                    <strong style={{ fontSize: 20 }}>{productClusters.length}</strong>
-                    <span style={{ fontSize: 13, color: 'var(--muted)' }}> issue clusters</span>
-                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text)' }}>
+                    <strong style={{ fontSize: 20 }}>{productClusters.length}</strong><span style={{ fontSize: 13, color: 'var(--muted)' }}> issue clusters</span>
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12 }}>
                       {productClusters.slice(0, 3).map((c, i) => <li key={i}>{c.title} ({c.severity})</li>)}
                       {productClusters.length === 0 && <li>No clusters</li>}
                     </ul>
                   </div>
                   <div style={{ background: 'var(--panel-2)', borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>From Market Research</div>
-                    <strong style={{ fontSize: 20 }}>{innovations.length}</strong>
-                    <span style={{ fontSize: 13, color: 'var(--muted)' }}> innovation signals</span>
-                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text)' }}>
+                    <strong style={{ fontSize: 20 }}>{innovations.length}</strong><span style={{ fontSize: 13, color: 'var(--muted)' }}> innovation signals</span>
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12 }}>
                       {innovations.slice(0, 3).map((p, i) => <li key={i}>{(p.title || p.body || '').slice(0, 60)}...</li>)}
                       {innovations.length === 0 && <li>No signals yet</li>}
                     </ul>
                   </div>
                   <div style={{ background: 'var(--panel-2)', borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>From Competitors</div>
-                    <strong style={{ fontSize: 20 }}>{competitorPains.length}</strong>
-                    <span style={{ fontSize: 13, color: 'var(--muted)' }}> pain points to exploit</span>
-                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text)' }}>
+                    <strong style={{ fontSize: 20 }}>{competitorPains.length}</strong><span style={{ fontSize: 13, color: 'var(--muted)' }}> pain points</span>
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12 }}>
                       {competitorPains.slice(0, 3).map((p, i) => <li key={i}>{p.competitor_mentioned || 'Competitor'}: {(p.title || p.body || '').slice(0, 50)}...</li>)}
-                      {competitorPains.length === 0 && <li>No pain points yet</li>}
+                      {competitorPains.length === 0 && <li>No data yet</li>}
                     </ul>
                   </div>
                   <div style={{ background: 'var(--panel-2)', borderRadius: 8, padding: 16 }}>
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>From Telemetry</div>
-                    <strong style={{ fontSize: 20 }}>{issuePatterns.length}</strong>
-                    <span style={{ fontSize: 13, color: 'var(--muted)' }}> detected patterns</span>
-                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text)' }}>
+                    <strong style={{ fontSize: 20 }}>{issuePatterns.length}</strong><span style={{ fontSize: 13, color: 'var(--muted)' }}> detected patterns</span>
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12 }}>
                       {issuePatterns.slice(0, 3).map((p, i) => <li key={i}>{p.pattern.replace(/_/g, ' ')} ({p.severity})</li>)}
-                      {issuePatterns.length === 0 && <li>No patterns detected</li>}
+                      {issuePatterns.length === 0 && <li>No patterns</li>}
                     </ul>
                   </div>
                 </div>

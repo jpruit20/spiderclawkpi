@@ -11,7 +11,7 @@ from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, F
 from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, CXSnapshotOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
 from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
 from app.services.cx_snapshot import build_customer_experience_snapshot
-from app.services.issue_radar import build_issue_radar
+from app.services.issue_radar import build_issue_radar, get_cluster_ticket_detail
 from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_telemetry_history_daily
 from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
@@ -78,6 +78,11 @@ def get_recommendations(db: Session = Depends(db_session)):
 @router.get("/issues")
 def get_issues(db: Session = Depends(db_session)):
     return build_issue_radar(db)
+
+
+@router.get("/issues/clusters/{theme}/detail")
+def get_cluster_detail(theme: str, db: Session = Depends(db_session)):
+    return get_cluster_ticket_detail(db, theme)
 
 
 @router.get("/support/overview")
