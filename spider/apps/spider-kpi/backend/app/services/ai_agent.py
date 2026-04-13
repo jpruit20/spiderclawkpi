@@ -74,8 +74,38 @@ def _build_prompt(user_message: str, history: list[dict[str, str]] | None) -> st
 
 
 def _find_claude_binary() -> str | None:
-    """Locate the ``claude`` CLI binary on PATH."""
-    return shutil.which("claude")
+    """Locate the ``claude`` CLI binary.
+
+    systemd services have a minimal PATH, so we check common npm global
+    install locations in addition to the process PATH.
+    """
+    found = shutil.which("claude")
+    if found:
+        return found
+    # Check common global install paths
+    import os
+    candidates = [
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+        os.path.expanduser("~/.npm-global/bin/claude"),
+        os.path.expanduser("~/node_modules/.bin/claude"),
+        "/opt/spiderclawkpi/.nvm/versions/node/current/bin/claude",
+    ]
+    # Also check NVM paths
+    nvm_dir = os.environ.get("NVM_DIR", os.path.expanduser("~/.nvm"))
+    if os.path.isdir(nvm_dir):
+        versions_dir = os.path.join(nvm_dir, "versions", "node")
+        if os.path.isdir(versions_dir):
+            for ver in sorted(os.listdir(versions_dir), reverse=True):
+                candidates.append(os.path.join(versions_dir, ver, "bin", "claude"))
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    # Last resort: try npx
+    npx = shutil.which("npx")
+    if npx:
+        return npx  # caller will need to adjust command
+    return None
 
 
 async def run_cli_turn(
@@ -91,23 +121,38 @@ async def run_cli_turn(
     """
     claude_bin = _find_claude_binary()
     if not claude_bin:
-        yield SSEEvent(event="error", data={"message": "Claude Code CLI not found on server. Please install it."})
+        yield SSEEvent(event="error", data={"message": "Claude Code CLI not found on server. Please install it with: npm install -g @anthropic-ai/claude-code"})
         return
 
     prompt = _build_prompt(user_message, history)
     system_prompt = _build_system_prompt(scope)
 
-    cmd = [
-        claude_bin,
-        "-p", prompt,
-        "--output-format", "stream-json",
-        "--model", "sonnet",
-        "--bare",
-        "--dangerously-skip-permissions",
-        "--append-system-prompt", system_prompt,
-        "--allowed-tools", "Read", "Edit", "Glob", "Grep",
-        "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
-    ]
+    # If we found npx instead of claude directly, prefix the command
+    is_npx = claude_bin.endswith("npx")
+    if is_npx:
+        cmd = [
+            claude_bin, "@anthropic-ai/claude-code",
+            "-p", prompt,
+            "--output-format", "stream-json",
+            "--model", "sonnet",
+            "--bare",
+            "--dangerously-skip-permissions",
+            "--append-system-prompt", system_prompt,
+            "--allowed-tools", "Read", "Edit", "Glob", "Grep",
+            "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
+        ]
+    else:
+        cmd = [
+            claude_bin,
+            "-p", prompt,
+            "--output-format", "stream-json",
+            "--model", "sonnet",
+            "--bare",
+            "--dangerously-skip-permissions",
+            "--append-system-prompt", system_prompt,
+            "--allowed-tools", "Read", "Edit", "Glob", "Grep",
+            "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
+        ]
 
     logger.info("AI agent start: user=%s division=%s", scope.email, scope.division)
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})

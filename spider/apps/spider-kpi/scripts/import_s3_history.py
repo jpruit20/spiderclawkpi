@@ -25,6 +25,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+# Allow imports from backend/app
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from app.services.cook_classification import EventRow, derive_sessions_from_rows, build_daily_cook_columns
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -150,6 +154,7 @@ class DailyBucket:
     cook_temp_sum: float = 0.0
     cook_temp_count: int = 0
     hour_counts: dict[int, int] = field(default_factory=lambda: defaultdict(int))
+    session_events: list[EventRow] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +270,7 @@ def process_record(
 
     # RSSI
     rssi_raw = reported.get("RSSI")
+    rssi_val: float | None = None
     if rssi_raw is not None:
         try:
             rssi_val = float(rssi_raw)
@@ -290,10 +296,42 @@ def process_record(
 
     # Errors
     errors = reported.get("errors")
+    error_list = []
     if isinstance(errors, list) and len(errors) > 0:
-        # Any non-zero error code counts as an error event
-        if any(e not in (0, None, False) for e in errors):
+        error_list = [e for e in errors if e not in (None, False)]
+        if any(e != 0 for e in error_list):
             bucket.error_events += 1
+
+    # Accumulate EventRow for session derivation
+    current_temp_raw = reported.get("mainTemp")
+    current_temp = None
+    if current_temp_raw is not None:
+        try:
+            current_temp = float(current_temp_raw)
+        except (TypeError, ValueError):
+            pass
+
+    target_temp = None
+    if isinstance(heat, dict):
+        t2 = heat.get("t2")
+        if isinstance(t2, dict):
+            try:
+                target_temp = float(t2.get("trgt") or 0) or None
+            except (TypeError, ValueError):
+                pass
+
+    bucket.session_events.append(EventRow(
+        device_id=device_id,
+        sample_timestamp=sample_dt,
+        created_at=sample_dt,
+        current_temp=current_temp,
+        target_temp=target_temp,
+        rssi=rssi_val,
+        firmware_version=firmware or None,
+        grill_type=model or None,
+        engaged=engaged is True or engaged == 1,
+        error_codes_json=error_list,
+    ))
 
     return True
 
@@ -319,7 +357,7 @@ def get_db_url() -> str:
     return raw
 
 
-def write_to_database(buckets: dict[str, DailyBucket]) -> int:
+def write_to_database(buckets: dict[str, DailyBucket], cook_columns: dict[str, dict[str, Any]]) -> int:
     """Upsert daily aggregates into telemetry_history_daily.
 
     Returns the number of rows upserted.
@@ -341,6 +379,13 @@ def write_to_database(buckets: dict[str, DailyBucket]) -> int:
             model_distribution,
             avg_cook_temp,
             peak_hour_distribution,
+            session_count,
+            successful_sessions,
+            cook_styles_json,
+            cook_style_details_json,
+            temp_range_json,
+            duration_range_json,
+            unique_devices_seen,
             source,
             updated_at
         ) VALUES (
@@ -354,21 +399,35 @@ def write_to_database(buckets: dict[str, DailyBucket]) -> int:
             %(model_distribution)s,
             %(avg_cook_temp)s,
             %(peak_hour_distribution)s,
+            %(session_count)s,
+            %(successful_sessions)s,
+            %(cook_styles_json)s,
+            %(cook_style_details_json)s,
+            %(temp_range_json)s,
+            %(duration_range_json)s,
+            %(unique_devices_seen)s,
             %(source)s,
             NOW()
         )
         ON CONFLICT (business_date) DO UPDATE SET
-            active_devices = EXCLUDED.active_devices,
-            engaged_devices = EXCLUDED.engaged_devices,
-            total_events = EXCLUDED.total_events,
-            avg_rssi = EXCLUDED.avg_rssi,
-            error_events = EXCLUDED.error_events,
-            firmware_distribution = EXCLUDED.firmware_distribution,
-            model_distribution = EXCLUDED.model_distribution,
-            avg_cook_temp = EXCLUDED.avg_cook_temp,
-            peak_hour_distribution = EXCLUDED.peak_hour_distribution,
-            source = EXCLUDED.source,
-            updated_at = NOW()
+            active_devices          = EXCLUDED.active_devices,
+            engaged_devices         = EXCLUDED.engaged_devices,
+            total_events            = EXCLUDED.total_events,
+            avg_rssi                = EXCLUDED.avg_rssi,
+            error_events            = EXCLUDED.error_events,
+            firmware_distribution   = EXCLUDED.firmware_distribution,
+            model_distribution      = EXCLUDED.model_distribution,
+            avg_cook_temp           = EXCLUDED.avg_cook_temp,
+            peak_hour_distribution  = EXCLUDED.peak_hour_distribution,
+            session_count           = EXCLUDED.session_count,
+            successful_sessions     = EXCLUDED.successful_sessions,
+            cook_styles_json        = EXCLUDED.cook_styles_json,
+            cook_style_details_json = EXCLUDED.cook_style_details_json,
+            temp_range_json         = EXCLUDED.temp_range_json,
+            duration_range_json     = EXCLUDED.duration_range_json,
+            unique_devices_seen     = EXCLUDED.unique_devices_seen,
+            source                  = EXCLUDED.source,
+            updated_at              = NOW()
     """
 
     rows_written = 0
@@ -379,6 +438,7 @@ def write_to_database(buckets: dict[str, DailyBucket]) -> int:
 
             for date_key in sorted_dates:
                 b = buckets[date_key]
+                cc = cook_columns.get(date_key, {})
                 row = {
                     "business_date": date_key,
                     "active_devices": len(b.active_device_ids),
@@ -393,6 +453,13 @@ def write_to_database(buckets: dict[str, DailyBucket]) -> int:
                         {str(h): c for h, c in sorted(b.hour_counts.items())},
                         sort_keys=True,
                     ),
+                    "session_count": cc.get("session_count"),
+                    "successful_sessions": cc.get("successful_sessions"),
+                    "cook_styles_json": json.dumps(cc.get("cook_styles_json", {})),
+                    "cook_style_details_json": json.dumps(cc.get("cook_style_details_json", {})),
+                    "temp_range_json": json.dumps(cc.get("temp_range_json", {})),
+                    "duration_range_json": json.dumps(cc.get("duration_range_json", {})),
+                    "unique_devices_seen": cc.get("unique_devices_seen") or len(b.active_device_ids),
                     "source": "ddb_export_backfill",
                 }
                 batch.append(row)
@@ -575,6 +642,25 @@ def main() -> int:
         total_errors,
     )
 
+    # ---- Derive cook sessions per day -------------------------------------
+    logger.info("Deriving cook sessions for %d days ...", len(buckets))
+    cook_columns_by_date: dict[str, dict[str, Any]] = {}
+    for date_key in sorted(buckets.keys()):
+        b = buckets[date_key]
+        if not b.session_events:
+            cook_columns_by_date[date_key] = build_daily_cook_columns([], b.active_device_ids)
+            continue
+        device_events: dict[str, list[EventRow]] = defaultdict(list)
+        for ev in b.session_events:
+            device_events[ev.device_id].append(ev)
+        all_sessions = []
+        for did, events in device_events.items():
+            all_sessions.extend(derive_sessions_from_rows(did, events))
+        cook_columns_by_date[date_key] = build_daily_cook_columns(all_sessions, b.active_device_ids)
+        # Free memory
+        b.session_events.clear()
+    logger.info("Session derivation complete.")
+
     # ---- Summary ----------------------------------------------------------
     print_summary(buckets)
 
@@ -586,7 +672,7 @@ def main() -> int:
             logger.info("No data to write.")
             return 0
         try:
-            rows = write_to_database(buckets)
+            rows = write_to_database(buckets, cook_columns_by_date)
             logger.info("Successfully upserted %d rows into telemetry_history_daily.", rows)
         except Exception:
             logger.exception("Database write failed.")
