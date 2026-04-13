@@ -176,9 +176,23 @@ class Settings(BaseSettings):
     ai_assistant_enabled: bool = False
     ai_assistant_model: str = "sonnet"
     workspace_root: str = Field(
-        default="/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi",
+        default="",
         validation_alias=AliasChoices('WORKSPACE_ROOT', 'KPI_WORKSPACE_ROOT'),
     )
+
+    @field_validator("workspace_root", mode="before")
+    @classmethod
+    def detect_workspace_root(cls, value: Any):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        # Auto-detect: prefer the production droplet path, fall back to dev
+        for candidate in [
+            "/opt/spiderclawkpi/spider/apps/spider-kpi",
+            str(ROOT_DIR),
+        ]:
+            if os.path.isdir(os.path.join(candidate, "frontend", "src")):
+                return candidate
+        return str(ROOT_DIR)
 
     sync_interval_minutes: int = 5
     clarity_sync_interval_minutes: int = 120  # Data is daily-granularity; polling less often avoids 429s
