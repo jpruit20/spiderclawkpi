@@ -842,6 +842,23 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
     }
   }
 
+  async function handleInlineRoleAdd(d: DeciDecision, role: 'executors' | 'contributors' | 'informed', memberId: number) {
+    const existing = (d[role] as Array<{ member_id: number }> || []).map(a => a.member_id)
+    if (existing.includes(memberId)) return
+    try {
+      await api.deciUpdateDecision(d.id, { [role]: [...existing, memberId] })
+      onReload()
+    } catch { /* ignore */ }
+  }
+
+  async function handleInlineRoleRemove(d: DeciDecision, role: 'executors' | 'contributors' | 'informed', memberId: number) {
+    const existing = (d[role] as Array<{ member_id: number }> || []).map(a => a.member_id)
+    try {
+      await api.deciUpdateDecision(d.id, { [role]: existing.filter(id => id !== memberId) })
+      onReload()
+    } catch { /* ignore */ }
+  }
+
   return (
     <>
       <section className="card">
@@ -873,13 +890,15 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
 
         {filtered.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 900 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 1100 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
                   <th style={{ textAlign: 'left', padding: '8px' }}>Decision</th>
                   <th style={{ textAlign: 'left', padding: '8px' }}>Domain</th>
-                  <th style={{ textAlign: 'left', padding: '8px' }}>Driver</th>
-                  <th style={{ textAlign: 'left', padding: '8px' }}>Executors</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>D</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>E — Executors</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>C — Contributors</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>I — Informed</th>
                   <th style={{ textAlign: 'center', padding: '8px' }}>Status</th>
                   <th style={{ textAlign: 'center', padding: '8px' }}>Priority</th>
                   <th style={{ textAlign: 'center', padding: '8px' }}>Due</th>
@@ -915,8 +934,68 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
                       <td style={{ padding: '8px', color: noDriver ? 'var(--red)' : undefined, fontWeight: noDriver ? 700 : 400 }}>
                         {d.driver_name || (noDriver ? 'MISSING' : '—')}
                       </td>
-                      <td style={{ padding: '8px' }}>
-                        {(d.executors?.length ?? 0) > 0 ? d.executors.map(e => e.member_name).join(', ') : <span style={{ color: noExecutor ? 'var(--orange)' : 'var(--muted)' }}>{noExecutor ? 'MISSING' : '—'}</span>}
+                      {/* E — Executors */}
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+                          {(d.executors?.length ?? 0) > 0 ? d.executors.map(a => (
+                            <span key={a.id} style={{ fontSize: 11, background: 'rgba(57,208,143,0.15)', border: '1px solid rgba(57,208,143,0.3)', borderRadius: 4, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                              {a.member_name}
+                              <span style={{ cursor: 'pointer', opacity: 0.6, fontSize: 10 }} onClick={() => handleInlineRoleRemove(d, 'executors', a.member_id)} title="Remove">&times;</span>
+                            </span>
+                          )) : <span style={{ color: noExecutor ? 'var(--orange)' : 'var(--muted)', fontSize: 11 }}>{noExecutor ? 'MISSING' : '—'}</span>}
+                          <select
+                            value=""
+                            onChange={e => { if (e.target.value) handleInlineRoleAdd(d, 'executors', Number(e.target.value)) }}
+                            className="deci-input"
+                            style={{ fontSize: 10, padding: '1px 2px', width: 28, opacity: 0.5, cursor: 'pointer' }}
+                            title="Add executor"
+                          >
+                            <option value="">+</option>
+                            {team.filter(m => m.active && !d.executors?.some(a => a.member_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          </select>
+                        </div>
+                      </td>
+                      {/* C — Contributors */}
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+                          {(d.contributors?.length ?? 0) > 0 ? d.contributors.map(a => (
+                            <span key={a.id} style={{ fontSize: 11, background: 'rgba(159,176,212,0.12)', border: '1px solid rgba(159,176,212,0.25)', borderRadius: 4, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                              {a.member_name}
+                              <span style={{ cursor: 'pointer', opacity: 0.6, fontSize: 10 }} onClick={() => handleInlineRoleRemove(d, 'contributors', a.member_id)} title="Remove">&times;</span>
+                            </span>
+                          )) : <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>}
+                          <select
+                            value=""
+                            onChange={e => { if (e.target.value) handleInlineRoleAdd(d, 'contributors', Number(e.target.value)) }}
+                            className="deci-input"
+                            style={{ fontSize: 10, padding: '1px 2px', width: 28, opacity: 0.5, cursor: 'pointer' }}
+                            title="Add contributor"
+                          >
+                            <option value="">+</option>
+                            {team.filter(m => m.active && !d.contributors?.some(a => a.member_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          </select>
+                        </div>
+                      </td>
+                      {/* I — Informed */}
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+                          {(d.informed?.length ?? 0) > 0 ? d.informed.map(a => (
+                            <span key={a.id} style={{ fontSize: 11, background: 'rgba(159,176,212,0.08)', border: '1px solid rgba(159,176,212,0.15)', borderRadius: 4, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                              {a.member_name}
+                              <span style={{ cursor: 'pointer', opacity: 0.6, fontSize: 10 }} onClick={() => handleInlineRoleRemove(d, 'informed', a.member_id)} title="Remove">&times;</span>
+                            </span>
+                          )) : <span style={{ color: 'var(--muted)', fontSize: 11 }}>—</span>}
+                          <select
+                            value=""
+                            onChange={e => { if (e.target.value) handleInlineRoleAdd(d, 'informed', Number(e.target.value)) }}
+                            className="deci-input"
+                            style={{ fontSize: 10, padding: '1px 2px', width: 28, opacity: 0.5, cursor: 'pointer' }}
+                            title="Add informed"
+                          >
+                            <option value="">+</option>
+                            {team.filter(m => m.active && !d.informed?.some(a => a.member_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          </select>
+                        </div>
                       </td>
                       <td style={{ textAlign: 'center', padding: '8px' }}>
                         <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus] || d.status}</span>
@@ -1324,9 +1403,64 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
             <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
               <select value={kpiName} onChange={e => setKpiName(e.target.value)} className="deci-input">
                 <option value="">Select KPI...</option>
-                {['Revenue', 'Orders', 'AOV', 'Sessions', 'Conversion Rate', 'MER', 'CSAT', 'First Response Time', 'Resolution Time', 'Ticket Volume', 'SLA Breach Rate', 'Cook Success Rate', 'Disconnect Rate'].map(k => (
-                  <option key={k} value={k}>{k}</option>
-                ))}
+                <optgroup label="Financial / Revenue">
+                  <option value="Revenue">Revenue</option>
+                  <option value="Gross Profit">Gross Profit</option>
+                  <option value="Refunds">Refunds</option>
+                  <option value="Discounts">Discounts</option>
+                  <option value="Discount Rate">Discount Rate</option>
+                  <option value="Ad Spend">Ad Spend</option>
+                  <option value="Orders">Orders</option>
+                  <option value="AOV">AOV (Avg Order Value)</option>
+                  <option value="Revenue Per Session">Revenue Per Session</option>
+                  <option value="MER">MER (Marketing Efficiency)</option>
+                  <option value="Cost Per Purchase">Cost Per Purchase</option>
+                </optgroup>
+                <optgroup label="Conversion / Funnel">
+                  <option value="Sessions">Sessions</option>
+                  <option value="Conversion Rate">Conversion Rate</option>
+                  <option value="Bounce Rate">Bounce Rate</option>
+                  <option value="Add to Cart Rate">Add to Cart Rate</option>
+                  <option value="Cart Abandonment Rate">Cart Abandonment Rate</option>
+                  <option value="Checkout Completion Rate">Checkout Completion Rate</option>
+                </optgroup>
+                <optgroup label="Customer Experience">
+                  <option value="CSAT">CSAT</option>
+                  <option value="First Response Time">First Response Time</option>
+                  <option value="Resolution Time">Resolution Time</option>
+                  <option value="Ticket Volume">Ticket Volume</option>
+                  <option value="SLA Breach Rate">SLA Breach Rate</option>
+                  <option value="Reopen Rate">Reopen Rate</option>
+                  <option value="Open Backlog">Open Backlog</option>
+                  <option value="Tickets per 100 Orders">Tickets per 100 Orders</option>
+                  <option value="First Contact Resolution">First Contact Resolution</option>
+                </optgroup>
+                <optgroup label="Product / Telemetry">
+                  <option value="Cook Success Rate">Cook Success Rate</option>
+                  <option value="Disconnect Rate">Disconnect Rate</option>
+                  <option value="Temperature Stability">Temperature Stability</option>
+                  <option value="Active Devices">Active Devices</option>
+                  <option value="Error Rate">Error Rate</option>
+                  <option value="Overshoot Rate">Overshoot Rate</option>
+                  <option value="Time to Stabilize">Time to Stabilize</option>
+                  <option value="RSSI Signal Strength">RSSI Signal Strength</option>
+                  <option value="Probe Error Rate">Probe Error Rate</option>
+                  <option value="Fleet Reliability">Fleet Reliability</option>
+                </optgroup>
+                <optgroup label="Social / Brand">
+                  <option value="Brand Mentions">Brand Mentions</option>
+                  <option value="Sentiment Score">Sentiment Score</option>
+                  <option value="Share of Voice">Share of Voice</option>
+                  <option value="Competitor Mentions">Competitor Mentions</option>
+                  <option value="YouTube Engagement">YouTube Engagement</option>
+                </optgroup>
+                <optgroup label="Operational">
+                  <option value="Issue Resolution Rate">Issue Resolution Rate</option>
+                  <option value="Escalation Count">Escalation Count</option>
+                  <option value="Decision Velocity">Decision Velocity</option>
+                  <option value="Source Health Coverage">Source Health Coverage</option>
+                  <option value="Amazon BSR">Amazon BSR</option>
+                </optgroup>
               </select>
               <button className="range-button active" onClick={handleAddKpiLink} disabled={addingKpi || !kpiName}>Link</button>
             </div>
