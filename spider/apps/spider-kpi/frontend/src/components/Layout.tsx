@@ -24,6 +24,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav className="nav">
           <small className="nav-group-label">Company</small>
           <NavLink to="/">Command Center</NavLink>
+          <NavLink to="/deci">DECI</NavLink>
           <NavLink to="/revenue">Financial / Revenue</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
           <NavLink to="/social">Social Intelligence</NavLink>

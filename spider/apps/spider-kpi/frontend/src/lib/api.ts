@@ -5,6 +5,9 @@ import type {
   CXActionItem,
   CXSnapshotResponse,
   DataQualityResponse,
+  DeciDecision,
+  DeciOverview,
+  DeciTeamMember,
   DiagnosticItem,
   FreshdeskAgentDailyItem,
   FreshdeskTicketItem,
@@ -207,6 +210,49 @@ export const api = {
     request<AmazonProductHealth>('/api/social/amazon-products', { signal }),
   marketIntelligence: (days?: number, signal?: AbortSignal) =>
     request<MarketIntelligence>(`/api/social/market-intelligence${days ? `?days=${days}` : ''}`, { signal }),
+  // DECI Decision Framework
+  deciTeam: (signal?: AbortSignal) =>
+    request<DeciTeamMember[]>('/api/deci/team', { signal }),
+  deciCreateTeamMember: (body: { name: string; email?: string; role?: string; department?: string }) =>
+    fetch(`${API_BASE}/api/deci/team`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json() as Promise<DeciTeamMember>),
+  deciDecisions: (params?: { department?: string; status?: string; priority?: string; driver_id?: number }, signal?: AbortSignal) =>
+    request<DeciDecision[]>(`/api/deci/decisions${params ? '?' + new URLSearchParams(Object.entries(params).filter(([,v]) => v != null).map(([k,v]) => [k, String(v)])).toString() : ''}`, { signal }),
+  deciDecision: (id: string, signal?: AbortSignal) =>
+    request<DeciDecision>(`/api/deci/decisions/${id}`, { signal }),
+  deciCreateDecision: (body: Record<string, unknown>) =>
+    fetch(`${API_BASE}/api/deci/decisions`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json() as Promise<DeciDecision>),
+  deciUpdateDecision: (id: string, body: Record<string, unknown>) =>
+    fetch(`${API_BASE}/api/deci/decisions/${id}`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json() as Promise<DeciDecision>),
+  deciAddLog: (id: string, body: { decision_text: string; made_by: string; notes?: string }) =>
+    fetch(`${API_BASE}/api/deci/decisions/${id}/log`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json()),
+  deciAddKpiLink: (id: string, body: { kpi_name: string }) =>
+    fetch(`${API_BASE}/api/deci/decisions/${id}/kpi-links`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json()),
+  deciDeleteKpiLink: (decisionId: string, linkId: number) =>
+    fetch(`${API_BASE}/api/deci/decisions/${decisionId}/kpi-links/${linkId}`, {
+      method: 'DELETE', credentials: 'include',
+    }).then(r => r.json()),
+  deciOverview: (signal?: AbortSignal) =>
+    request<DeciOverview>('/api/deci/overview', { signal }),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),

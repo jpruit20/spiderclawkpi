@@ -719,6 +719,96 @@ export interface MarketIntelligence {
   }
 }
 
+// DECI Decision Framework
+export interface DeciTeamMember {
+  id: number
+  name: string
+  email?: string
+  role?: string
+  department?: string
+  active: boolean
+}
+
+export type DeciDecisionType = 'KPI' | 'Project' | 'Initiative' | 'Issue'
+export type DeciStatus = 'not_started' | 'in_progress' | 'blocked' | 'complete'
+export type DeciPriority = 'low' | 'medium' | 'high' | 'critical'
+export type DeciRole = 'executor' | 'contributor' | 'informed'
+
+export interface DeciAssignment {
+  id: number
+  member_id: number
+  member_name: string
+  role: DeciRole
+}
+
+export interface DeciDecisionLog {
+  id: number
+  decision_text: string
+  made_by: string
+  notes?: string
+  created_at: string
+}
+
+export interface DeciKpiLink {
+  id: number
+  kpi_name: string
+  created_at: string
+}
+
+export interface DeciDecision {
+  id: string
+  title: string
+  description?: string
+  type: DeciDecisionType
+  status: DeciStatus
+  priority: DeciPriority
+  department?: string
+  driver_id?: number
+  driver_name?: string
+  executors: DeciAssignment[]
+  contributors: DeciAssignment[]
+  informed: DeciAssignment[]
+  logs: DeciDecisionLog[]
+  kpi_links: DeciKpiLink[]
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DeciBottleneck {
+  id: string
+  title: string
+  type: string
+  reason: string
+  status: string
+  priority: string
+  department?: string
+  updated_at: string
+}
+
+export interface DeciOwnershipEntry {
+  member: DeciTeamMember
+  driver_count: number
+  executor_count: number
+  blocked_count: number
+}
+
+export interface DeciOverview {
+  bottlenecks: {
+    no_driver: DeciBottleneck[]
+    stale: DeciBottleneck[]
+    overloaded_contributors: DeciBottleneck[]
+  }
+  ownership_map: DeciOwnershipEntry[]
+  critical_feed: DeciDecision[]
+  velocity: {
+    avg_creation_to_decision_hours: number | null
+    avg_decision_to_complete_hours: number | null
+    total_decisions: number
+    completed_decisions: number
+  }
+}
+
 export interface GithubIssue {
   id: number
   number: number

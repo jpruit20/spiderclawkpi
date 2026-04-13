@@ -17,6 +17,7 @@ const IssueRadar = lazy(() => import('./pages/IssueRadar').then((m) => ({ defaul
 const RootCause = lazy(() => import('./pages/RootCause').then((m) => ({ default: m.RootCause })))
 const SystemHealthPage = lazy(() => import('./pages/SystemHealth').then((m) => ({ default: m.SystemHealthPage })))
 const SocialIntelligence = lazy(() => import('./pages/SocialIntelligence').then((m) => ({ default: m.SocialIntelligence })))
+const Deci = lazy(() => import('./pages/Deci').then((m) => ({ default: m.Deci })))
 const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage').then((m) => ({ default: m.TelemetryAnalysisPage })))
 
 function withBoundary(label: string, node: React.ReactNode) {
@@ -46,6 +47,7 @@ export function App() {
         <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />
         <Route path="/social" element={withBoundary('Social Intelligence', <SocialIntelligence />)} />
+        <Route path="/deci" element={withBoundary('DECI', <Deci />)} />
         <Route path="/root-cause" element={withBoundary('Root Cause', <RootCause />)} />
         <Route path="/system-health" element={withBoundary('System Health', <SystemHealthPage />)} />
         <Route path="/commercial" element={withBoundary('Revenue Engine', <RevenueEngine />)} />

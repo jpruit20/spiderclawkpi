@@ -537,6 +537,59 @@ class ClarityPageMetric(TimestampMixin, Base):
     snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
 
+class DeciTeamMember(TimestampMixin, Base):
+    __tablename__ = "deci_team_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    role: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    department: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class DeciDecision(TimestampMixin, Base):
+    __tablename__ = "deci_decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False, default="project")  # KPI, Project, Initiative, Issue
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    department: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    driver_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("deci_team_members.id"), nullable=True)
+    created_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+
+class DeciAssignment(TimestampMixin, Base):
+    __tablename__ = "deci_assignments"
+    __table_args__ = (UniqueConstraint("decision_id", "member_id", "role", name="uq_deci_assignment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(36), ForeignKey("deci_decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id: Mapped[int] = mapped_column(Integer, ForeignKey("deci_team_members.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # executor, contributor, informed
+
+
+class DeciDecisionLog(TimestampMixin, Base):
+    __tablename__ = "deci_decision_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(36), ForeignKey("deci_decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    decision_text: Mapped[str] = mapped_column(Text, nullable=False)
+    made_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class DeciKpiLink(TimestampMixin, Base):
+    __tablename__ = "deci_kpi_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(36), ForeignKey("deci_decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    kpi_name: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
 class ReviewMention(TimestampMixin, Base):
     __tablename__ = "review_mentions"
 
