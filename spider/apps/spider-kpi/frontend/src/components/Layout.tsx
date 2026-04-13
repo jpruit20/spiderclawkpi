@@ -14,8 +14,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <img src={spiderGrillsLogo} alt="Spider Grills" className="brand-mark-image" />
           </div>
           <div>
-            <h1>Spider KPI</h1>
-            <p>Decision Engine</p>
+            <h1>Spider Grills HQ</h1>
           </div>
         </div>
         <div className="sidebar-summary">
