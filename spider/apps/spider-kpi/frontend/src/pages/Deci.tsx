@@ -1641,6 +1641,10 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
   const [newPriority, setNewPriority] = useState<DeciPriority>('medium')
   const [creating, setCreating] = useState(false)
   const [hoveredCell, setHoveredCell] = useState<{ row: string; memberId: string; role: string } | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)  // domain_id being saved
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null) // domain_id pending delete
+
+  const ROLE_CYCLE: (string | null)[] = ['D', 'E', 'C', 'I', null]
 
   const loadMatrix = useCallback(async () => {
     setMatrixLoading(true)
@@ -1701,6 +1705,54 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
     } finally { setCreating(false) }
   }
 
+  /** Cycle a cell's DECI role and persist via deciUpdateDomain */
+  async function handleCellClick(row: DeciMatrixRow, memberId: number) {
+    if (!matrix) return
+    const memberIdStr = String(memberId)
+    const currentRole = row.assignments[memberIdStr] || null
+    const nextIdx = (ROLE_CYCLE.indexOf(currentRole) + 1) % ROLE_CYCLE.length
+    const nextRole = ROLE_CYCLE[nextIdx]
+
+    // Build the updated assignment lists from the current row
+    let newDriverId: number | null = null
+    const newExecutorIds: number[] = []
+    const newContributorIds: number[] = []
+    const newInformedIds: number[] = []
+
+    for (const m of matrix.members) {
+      const mid = m.id
+      const role = mid === memberId ? nextRole : (row.assignments[String(mid)] || null)
+      if (role === 'D') newDriverId = mid
+      else if (role === 'E') newExecutorIds.push(mid)
+      else if (role === 'C') newContributorIds.push(mid)
+      else if (role === 'I') newInformedIds.push(mid)
+    }
+
+    setSaving(String(row.domain_id))
+    try {
+      await api.deciUpdateDomain(row.domain_id, {
+        default_driver_id: newDriverId,
+        default_executor_ids: newExecutorIds,
+        default_contributor_ids: newContributorIds,
+        default_informed_ids: newInformedIds,
+      })
+      await loadMatrix()
+    } catch { /* ignore */ }
+    finally { setSaving(null) }
+  }
+
+  /** Delete a domain row */
+  async function handleDeleteDomain(domainId: number) {
+    setSaving(String(domainId))
+    try {
+      await api.deciDeleteDomain(domainId)
+      setConfirmDelete(null)
+      onReload()
+      await loadMatrix()
+    } catch { /* ignore */ }
+    finally { setSaving(null) }
+  }
+
   if (matrixLoading) return <Card title="Loading"><div className="state-message">Loading leadership matrix...</div></Card>
 
   if (!matrix || matrix.members.length === 0) {
@@ -1759,7 +1811,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
           </div>
         </div>
         <p style={{ color: 'var(--muted)', fontSize: 12, margin: '4px 0 12px' }}>
-          Person-first ownership matrix. Every row defines who Drives, Executes, Contributes, and is Informed for each decision area. Click any row to create a decision with auto-filled DECI assignments.
+          Person-first ownership matrix. Every row defines who Drives, Executes, Contributes, and is Informed for each decision area. Click any <strong style={{ color: '#e2e8f0' }}>cell</strong> to cycle its role (D &rarr; E &rarr; C &rarr; I &rarr; empty). Click the <strong style={{ color: '#e2e8f0' }}>row name</strong> to create a new decision in that domain.
         </p>
         {/* Legend */}
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -1772,6 +1824,29 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
               <span style={{ color: 'var(--muted)' }}>{MATRIX_ROLE_TOOLTIPS[role].split('—')[1]?.trim()}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* How It Works — at the top for orientation */}
+      <section className="card">
+        <div className="venom-panel-head"><strong>How the Matrix Works</strong></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.D.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.D.fg, marginBottom: 4 }}>1. Edit Roles</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click any cell in the matrix to cycle through D &rarr; E &rarr; C &rarr; I &rarr; empty. Changes save automatically.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.E.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.E.fg, marginBottom: 4 }}>2. Create Decisions</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click a row name to start a new decision. DECI assignments pre-fill from the matrix.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.C.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.C.fg, marginBottom: 4 }}>3. Conflict Detection</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Active decisions whose Driver differs from the matrix default are flagged automatically.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--green)' }}>
+            <div style={{ fontWeight: 700, color: 'var(--green)', marginBottom: 4 }}>4. Delete Rows</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Use the &times; button on any row to remove a decision area. Linked decisions are preserved but unlinked.</div>
+          </div>
         </div>
       </section>
 
@@ -1846,7 +1921,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
             <span className="venom-panel-hint">{rows.length} decision area{rows.length !== 1 ? 's' : ''}</span>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 600 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 650 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
                   <th style={{ textAlign: 'left', padding: '8px 10px', minWidth: 180 }}>Decision Area</th>
@@ -1856,76 +1931,140 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                       <div style={{ fontWeight: 400, fontSize: 10, color: 'var(--muted)' }}>{m.role || m.department || ''}</div>
                     </th>
                   ))}
-                  <th style={{ textAlign: 'center', padding: '8px 6px', minWidth: 60 }}>Active</th>
+                  <th style={{ textAlign: 'center', padding: '8px 6px', minWidth: 50 }}>Active</th>
+                  <th style={{ textAlign: 'center', padding: '8px 4px', width: 36 }}></th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(row => (
-                  <tr
-                    key={row.domain_id}
-                    style={{
-                      borderBottom: '1px solid rgba(255,255,255,0.06)',
-                      cursor: 'pointer',
-                      transition: 'background 0.15s',
-                    }}
-                    onClick={() => setCreateFromRow({ domainId: row.domain_id, name: row.name })}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(59,130,246,0.06)' }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
-                  >
-                    <td style={{ padding: '8px 10px' }}>
-                      <div style={{ fontWeight: 500 }}>{row.name}</div>
-                      {row.description ? <div style={{ fontSize: 11, color: 'var(--muted)', maxWidth: 250, lineHeight: 1.3 }}>{row.description}</div> : null}
-                    </td>
-                    {members.map(m => {
-                      const role = row.assignments[String(m.id)]
-                      const colors = role ? MATRIX_ROLE_COLORS[role] : null
-                      const isHovered = hoveredCell?.row === row.name && hoveredCell?.memberId === String(m.id)
-                      return (
-                        <td
-                          key={m.id}
-                          style={{ textAlign: 'center', padding: '6px' }}
-                          onMouseEnter={() => role ? setHoveredCell({ row: row.name, memberId: String(m.id), role }) : undefined}
-                          onMouseLeave={() => setHoveredCell(null)}
-                          onClick={e => e.stopPropagation()}
-                        >
-                          {role ? (
-                            <div
+                {rows.map(row => {
+                  const isSaving = saving === String(row.domain_id)
+                  const isDeletePending = confirmDelete === row.domain_id
+                  return (
+                    <tr
+                      key={row.domain_id}
+                      style={{
+                        borderBottom: '1px solid rgba(255,255,255,0.06)',
+                        transition: 'background 0.15s',
+                        opacity: isSaving ? 0.6 : 1,
+                        background: isDeletePending ? 'rgba(239,68,68,0.08)' : undefined,
+                      }}
+                    >
+                      <td
+                        style={{ padding: '8px 10px', cursor: 'pointer' }}
+                        onClick={() => setCreateFromRow({ domainId: row.domain_id, name: row.name })}
+                        onMouseEnter={e => { if (!isDeletePending) (e.currentTarget as HTMLElement).style.color = '#60a5fa' }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '' }}
+                      >
+                        <div style={{ fontWeight: 500 }}>{row.name}</div>
+                        {row.description ? <div style={{ fontSize: 11, color: 'var(--muted)', maxWidth: 250, lineHeight: 1.3 }}>{row.description}</div> : null}
+                      </td>
+                      {members.map(m => {
+                        const role = row.assignments[String(m.id)]
+                        const colors = role ? MATRIX_ROLE_COLORS[role] : null
+                        const isHovered = hoveredCell?.row === row.name && hoveredCell?.memberId === String(m.id)
+                        return (
+                          <td
+                            key={m.id}
+                            style={{ textAlign: 'center', padding: '6px', cursor: 'pointer' }}
+                            onMouseEnter={() => setHoveredCell({ row: row.name, memberId: String(m.id), role: role || '' })}
+                            onMouseLeave={() => setHoveredCell(null)}
+                            onClick={() => handleCellClick(row, m.id)}
+                          >
+                            {role ? (
+                              <div
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                  width: 32, height: 26, borderRadius: 5,
+                                  background: colors!.bg, color: colors!.fg, border: `1px solid ${colors!.border}`,
+                                  fontWeight: 800, fontSize: 12, letterSpacing: 0.5,
+                                  position: 'relative', transition: 'transform 0.1s',
+                                  transform: isHovered ? 'scale(1.15)' : 'scale(1)',
+                                }}
+                                title={`Click to change. Current: ${m.name} = ${MATRIX_ROLE_TOOLTIPS[role]}`}
+                              >
+                                {role}
+                                {isHovered ? (
+                                  <div style={{
+                                    position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)',
+                                    background: '#1e293b', color: '#e2e8f0', padding: '6px 10px', borderRadius: 6,
+                                    fontSize: 11, whiteSpace: 'nowrap', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                    border: '1px solid rgba(255,255,255,0.1)', pointerEvents: 'none',
+                                  }}>
+                                    <strong>{m.name}</strong>: {MATRIX_ROLE_TOOLTIPS[role]}
+                                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>Click to change</div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                  width: 32, height: 26, borderRadius: 5,
+                                  border: isHovered ? '1px dashed rgba(255,255,255,0.3)' : '1px dashed rgba(255,255,255,0.08)',
+                                  color: isHovered ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.1)',
+                                  fontSize: 14, transition: 'all 0.15s',
+                                }}
+                                title={`Click to assign ${m.name} a role`}
+                              >
+                                +
+                              </div>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td style={{ textAlign: 'center', padding: '6px' }}>
+                        {row.active_decisions > 0 ? (
+                          <span style={{ color: 'var(--green)', fontWeight: 600 }}>{row.active_decisions}</span>
+                        ) : (
+                          <span style={{ color: 'var(--muted)' }}>0</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '4px 2px' }}>
+                        {isDeletePending ? (
+                          <div style={{ display: 'flex', gap: 2 }}>
+                            <button
+                              onClick={() => handleDeleteDomain(row.domain_id)}
+                              disabled={isSaving}
                               style={{
-                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                width: 32, height: 26, borderRadius: 5,
-                                background: colors!.bg, color: colors!.fg, border: `1px solid ${colors!.border}`,
-                                fontWeight: 800, fontSize: 12, letterSpacing: 0.5,
-                                position: 'relative',
+                                background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.5)',
+                                color: '#f87171', borderRadius: 4, padding: '2px 6px', fontSize: 10,
+                                cursor: 'pointer', fontWeight: 700,
                               }}
-                              title={`${m.name}: ${MATRIX_ROLE_TOOLTIPS[role]}`}
+                              title="Confirm delete"
                             >
-                              {role}
-                              {isHovered ? (
-                                <div style={{
-                                  position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)',
-                                  background: '#1e293b', color: '#e2e8f0', padding: '6px 10px', borderRadius: 6,
-                                  fontSize: 11, whiteSpace: 'nowrap', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                                  border: '1px solid rgba(255,255,255,0.1)', pointerEvents: 'none',
-                                }}>
-                                  <strong>{m.name}</strong>: {MATRIX_ROLE_TOOLTIPS[role]}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span style={{ color: 'rgba(255,255,255,0.08)', fontSize: 16 }}>&middot;</span>
-                          )}
-                        </td>
-                      )
-                    })}
-                    <td style={{ textAlign: 'center', padding: '6px' }}>
-                      {row.active_decisions > 0 ? (
-                        <span style={{ color: 'var(--green)', fontWeight: 600 }}>{row.active_decisions}</span>
-                      ) : (
-                        <span style={{ color: 'var(--muted)' }}>0</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                              {isSaving ? '...' : 'Yes'}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete(null)}
+                              style={{
+                                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)',
+                                color: 'var(--muted)', borderRadius: 4, padding: '2px 6px', fontSize: 10,
+                                cursor: 'pointer',
+                              }}
+                              title="Cancel"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDelete(row.domain_id)}
+                            style={{
+                              background: 'none', border: 'none', color: 'rgba(255,255,255,0.15)',
+                              cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 4px',
+                              borderRadius: 4, transition: 'color 0.15s',
+                            }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#f87171' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.15)' }}
+                            title="Delete this decision area"
+                          >
+                            &times;
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -1996,29 +2135,6 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
               })}
             </tbody>
           </table>
-        </div>
-      </section>
-
-      {/* How It Works */}
-      <section className="card">
-        <div className="venom-panel-head"><strong>How the Matrix Works</strong></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.D.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.D.fg, marginBottom: 4 }}>1. Select Domain</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click any row in the matrix to start a new decision in that domain.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.E.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.E.fg, marginBottom: 4 }}>2. Auto-Apply Matrix</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>DECI assignments are pre-filled from the matrix row. Driver, Executors, Contributors, Informed.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.C.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.C.fg, marginBottom: 4 }}>3. Assign DECI</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Verify or override defaults. The conflict detector will flag deviations.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--green)' }}>
-            <div style={{ fontWeight: 700, color: 'var(--green)', marginBottom: 4 }}>4. Execute & Track</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Decisions flow through the system with escalation, timeline, and KPI links.</div>
-          </div>
         </div>
       </section>
     </>

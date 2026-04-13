@@ -403,6 +403,24 @@ def update_domain(domain_id: int, body: DomainUpdate, db: Session = Depends(db_s
     }
 
 
+@router.delete("/domains/{domain_id}", status_code=200)
+def delete_domain(domain_id: int, db: Session = Depends(db_session)):
+    domain = db.execute(
+        select(DeciDomain).where(DeciDomain.id == domain_id)
+    ).scalar_one_or_none()
+    if domain is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    # Null out domain_id on any decisions that reference this domain
+    decisions = db.execute(
+        select(DeciDecision).where(DeciDecision.domain_id == domain_id)
+    ).scalars().all()
+    for d in decisions:
+        d.domain_id = None
+    db.delete(domain)
+    db.commit()
+    return {"ok": True, "deleted_id": domain_id, "decisions_unlinked": len(decisions)}
+
+
 # ---------------------------------------------------------------------------
 # Leadership Matrix bootstrap data
 # ---------------------------------------------------------------------------
