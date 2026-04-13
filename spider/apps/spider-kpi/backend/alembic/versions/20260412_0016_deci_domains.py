@@ -1,7 +1,7 @@
 """Add decision domains and enhance decisions
 
 Revision ID: 20260412_0016_deci_domains
-Revises: 20260412_0015_deci_framework
+Revises: 20260412_0015
 Create Date: 2026-04-12 12:00:00.000000+00:00
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "20260412_0016_deci_domains"
-down_revision = "20260412_0015_deci_framework"
+revision = "20260412_0016"
+down_revision = "20260412_0015"
 branch_labels = None
 depends_on = None
 
