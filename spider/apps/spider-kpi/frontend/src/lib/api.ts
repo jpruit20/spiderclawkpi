@@ -272,6 +272,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(r => r.json() as Promise<DeciDomain>),
+  deciDeleteDecision: (id: string) =>
+    fetch(`${API_BASE}/api/deci/decisions/${id}`, {
+      method: 'DELETE', credentials: 'include',
+    }),
   deciDeleteDomain: (id: number) =>
     fetch(`${API_BASE}/api/deci/domains/${id}`, {
       method: 'DELETE', credentials: 'include',

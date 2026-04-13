@@ -814,8 +814,12 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
     })
   }, [decisions, filterStatus, filterDept, filterPriority, filterDomain])
 
+  const { user } = useAuth()
+  const canDelete = user?.email === 'joseph@spidergrills.com'
+
   // Inline status update
   const [updatingId, setUpdatingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   async function handleQuickStatusUpdate(id: string, newStatus: DeciStatus) {
     setUpdatingId(id)
@@ -824,6 +828,17 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
       onReload()
     } finally {
       setUpdatingId(null)
+    }
+  }
+
+  async function handleDelete(id: string, title: string) {
+    if (!confirm(`Delete "${title}"? This cannot be undone.`)) return
+    setDeletingId(id)
+    try {
+      await api.deciDeleteDecision(id)
+      onReload()
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -870,6 +885,7 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
                   <th style={{ textAlign: 'center', padding: '8px' }}>Due</th>
                   <th style={{ textAlign: 'right', padding: '8px' }}>Updated</th>
                   <th style={{ textAlign: 'center', padding: '8px', width: 100 }}>Quick</th>
+                  {canDelete && <th style={{ textAlign: 'center', padding: '8px', width: 40 }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -927,6 +943,20 @@ function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload,
                           </select>
                         ) : <span className="badge badge-good" style={{ fontSize: 10 }}>Done</span>}
                       </td>
+                      {canDelete && (
+                        <td style={{ textAlign: 'center', padding: '4px' }} onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => handleDelete(d.id, d.title)}
+                            disabled={deletingId === d.id}
+                            title="Delete decision"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red)', fontSize: 14, opacity: deletingId === d.id ? 0.4 : 0.6, padding: '2px 6px' }}
+                            onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                            onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+                          >
+                            {deletingId === d.id ? '…' : '✕'}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   )
                 })}
