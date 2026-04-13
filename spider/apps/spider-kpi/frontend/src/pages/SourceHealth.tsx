@@ -90,7 +90,7 @@ export function SourceHealthPage() {
     setLoading(true)
     setError(null)
     try {
-      const [payload, telemetryPayload] = await Promise.all([api.sourceHealth(signal), api.telemetrySummary(signal)])
+      const [payload, telemetryPayload] = await Promise.all([api.sourceHealth(signal), api.telemetrySummary(undefined, signal)])
       if (signal?.aborted || requestId !== requestIdRef.current) return
       setRows(payload)
       setTelemetry(telemetryPayload)

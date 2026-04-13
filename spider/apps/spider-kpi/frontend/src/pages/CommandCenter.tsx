@@ -596,23 +596,31 @@ export function CommandCenter() {
                 <>
                   <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600, marginTop: 12, marginBottom: 6 }}>Leadership Load</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
-                    {(deci.ownership_map || []).map(o => (
-                      <div key={o.member.id} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{
-                          width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          background: o.blocked_count > 0 ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.15)',
-                          color: o.blocked_count > 0 ? '#f87171' : '#60a5fa', fontWeight: 700, fontSize: 13,
-                        }}>
-                          {o.member.name.charAt(0)}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 12, color: '#e2e8f0' }}>{o.member.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>
-                            {o.driver_count}D &middot; {o.executor_count}E{o.blocked_count > 0 ? ` · ${o.blocked_count} blocked` : ''}
+                    {(deci.ownership_map || []).map((o: Record<string, unknown>, idx: number) => {
+                      // Backend returns flat: { member_id, name, driver_count, ... }
+                      const memberName = (o.member as Record<string, unknown>)?.name as string || o.name as string || 'Unknown'
+                      const memberId = (o.member as Record<string, unknown>)?.id ?? o.member_id ?? idx
+                      const driverCount = (o.driver_count as number) ?? 0
+                      const executorCount = (o.executor_count as number) ?? 0
+                      const blockedCount = (o.blocked_count as number) ?? 0
+                      return (
+                        <div key={String(memberId)} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: blockedCount > 0 ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.15)',
+                            color: blockedCount > 0 ? '#f87171' : '#60a5fa', fontWeight: 700, fontSize: 13,
+                          }}>
+                            {memberName.charAt(0)}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 12, color: '#e2e8f0' }}>{memberName}</div>
+                            <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                              {driverCount}D &middot; {executorCount}E{blockedCount > 0 ? ` · ${blockedCount} blocked` : ''}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </>
               ) : null}
