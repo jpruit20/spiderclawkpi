@@ -47,6 +47,8 @@ jobs:
           git fetch origin
           git checkout master
           git pull --ff-only origin master
+          # Ensure YouTube API key is present in .env
+          grep -q '^YOUTUBE_API_KEY=' .env 2>/dev/null || echo 'YOUTUBE_API_KEY=AIzaSyBms6_Y8DAtnCql3PRI2XSRB39p_kvYQUI' >> .env
           ./.venv/bin/pip install -r backend/requirements.txt
           if [ -x ./.venv/bin/alembic ]; then
             (cd backend && ../.venv/bin/alembic upgrade head)

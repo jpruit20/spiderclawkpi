@@ -5,6 +5,9 @@ column.  Migration 0010 added 'platform' to replace it but never dropped
 'source'.  Any INSERT that uses the new model (which has no 'source' attr)
 will hit a NOT NULL violation on the legacy column.
 
+Also drops other legacy columns (severity, topic, product) from the old
+schema that are no longer in the model.
+
 Revision ID: 20260412_0017
 Revises: 20260412_0016
 Create Date: 2026-04-12 14:00:00.000000+00:00
@@ -22,43 +25,27 @@ depends_on = None
 def upgrade() -> None:
     conn = op.get_bind()
 
-    # Only act if the legacy 'source' column actually exists
-    has_source = conn.execute(
-        sa.text(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'social_mentions' AND column_name = 'source')"
-        )
-    ).scalar()
-
-    if has_source:
-        # Drop the old index if it exists
-        try:
-            op.drop_index("ix_social_mentions_source", table_name="social_mentions")
-        except Exception:
-            pass
-
-        # Drop legacy columns from the original schema that are no longer in the model
-        for col_name in ("source", "severity", "topic", "product"):
-            col_exists = conn.execute(
-                sa.text(
-                    "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name = 'social_mentions' AND column_name = :col)"
-                ),
-                {"col": col_name},
-            ).scalar()
-            if col_exists:
-                # Drop related index first
-                try:
-                    op.drop_index(f"ix_social_mentions_{col_name}", table_name="social_mentions")
-                except Exception:
-                    pass
-                op.drop_column("social_mentions", col_name)
+    # Use raw SQL with IF EXISTS to avoid poisoning the PostgreSQL transaction
+    # (try/except on op.drop_index aborts the PG transaction even if Python catches it)
+    for col_name in ("source", "severity", "topic", "product"):
+        col_exists = conn.execute(
+            sa.text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'social_mentions' AND column_name = :col)"
+            ),
+            {"col": col_name},
+        ).scalar()
+        if col_exists:
+            # DROP INDEX IF EXISTS is safe — won't error or abort transaction
+            conn.execute(sa.text(
+                f'DROP INDEX IF EXISTS "ix_social_mentions_{col_name}"'
+            ))
+            op.drop_column("social_mentions", col_name)
 
 
 def downgrade() -> None:
     conn = op.get_bind()
 
-    # Re-add the legacy columns if they don't exist
     for col_name, col_type, default in [
         ("source", sa.String(64), "reddit"),
         ("severity", sa.String(32), "info"),
