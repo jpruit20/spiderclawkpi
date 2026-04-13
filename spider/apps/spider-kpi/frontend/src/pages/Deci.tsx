@@ -240,6 +240,7 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
   const [newDriverId, setNewDriverId] = useState<number | ''>('')
   const [newDomainId, setNewDomainId] = useState<number | ''>('')
   const [newCrossFunctional, setNewCrossFunctional] = useState(false)
+  const [newDescription, setNewDescription] = useState('')
   const [newDueDate, setNewDueDate] = useState('')
   const [creating, setCreating] = useState(false)
   const [seeding, setSeeding] = useState(false)
@@ -262,6 +263,7 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
     try {
       await api.deciCreateDecision({
         title: newTitle.trim(),
+        description: newDescription.trim() || undefined,
         type: newType,
         priority: newPriority,
         department: newDept || undefined,
@@ -271,6 +273,7 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
         due_date: newDueDate || undefined,
       })
       setNewTitle('')
+      setNewDescription('')
       setNewDomainId('')
       setNewCrossFunctional(false)
       setNewDueDate('')
@@ -323,6 +326,10 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
             <div style={{ flex: '1 1 200px' }}>
               <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Title</label>
               <input type="text" value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Decision title..." style={{ width: '100%' }} className="deci-input" />
+            </div>
+            <div style={{ flex: '1 1 100%' }}>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Description</label>
+              <textarea value={newDescription} onChange={e => setNewDescription(e.target.value)} placeholder="What is this decision about? Context, goals, constraints..." rows={2} style={{ width: '100%', resize: 'vertical' }} className="deci-input" />
             </div>
             {domains.length > 0 ? (
               <div>
@@ -989,6 +996,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
   const [editDept, setEditDept] = useState('')
   const [editDomainId, setEditDomainId] = useState<number | ''>('')
   const [editCrossFunctional, setEditCrossFunctional] = useState(false)
+  const [editDescription, setEditDescription] = useState('')
   const [editDueDate, setEditDueDate] = useState('')
   const [editEscalation, setEditEscalation] = useState('none')
 
@@ -1016,6 +1024,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
       setEditDriverId(d.driver_id || '')
       setEditDept(d.department || '')
       setEditDomainId(d.domain_id || '')
+      setEditDescription(d.description || '')
       setEditCrossFunctional(d.cross_functional ?? false)
       setEditDueDate(d.due_date || '')
       setEditEscalation(d.escalation_status || 'none')
@@ -1034,6 +1043,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
       setEditDriverId(d.driver_id || '')
       setEditDept(d.department || '')
       setEditDomainId(d.domain_id || '')
+      setEditDescription(d.description || '')
       setEditCrossFunctional(d.cross_functional ?? false)
       setEditDueDate(d.due_date || '')
       setEditEscalation(d.escalation_status || 'none')
@@ -1059,6 +1069,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
       await api.deciUpdateDecision(decision.id, {
         status: editStatus,
         priority: editPriority,
+        description: editDescription || null,
         driver_id: editDriverId || null,
         department: editDept || null,
         domain_id: editDomainId || null,
@@ -1218,6 +1229,10 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
             <strong>Status & Controls</strong>
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Description</label>
+              <textarea value={editDescription} onChange={e => setEditDescription(e.target.value)} placeholder="What is this decision about? Context, goals, constraints..." rows={3} style={{ width: '100%', resize: 'vertical' }} className="deci-input" />
+            </div>
             <div>
               <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Status</label>
               <select value={editStatus} onChange={e => setEditStatus(e.target.value as DeciStatus)} className="deci-input" style={{ width: '100%' }}>

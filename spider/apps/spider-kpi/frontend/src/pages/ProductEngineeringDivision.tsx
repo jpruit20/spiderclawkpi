@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
-import { TruthBadge } from '../components/TruthBadge'
+import { TruthBadge, type TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ApiError, api } from '../lib/api'
@@ -305,8 +305,18 @@ export function ProductEngineeringDivision() {
   const analytics = telemetry?.analytics || null
   const historyDaily = telemetry?.history_daily || []
   const cookAnalysis = telemetry?.cook_analysis || null
+  const confidence = telemetry?.confidence || null
 
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
+
+  // Staleness: warn if newest sample is > 1 hour old
+  const newestSample = collection?.newest_sample_timestamp_seen
+  const staleMins = newestSample ? Math.floor((Date.now() - new Date(newestSample).getTime()) / 60000) : null
+  const isStale = staleMins !== null && staleMins > 60
+
+  // Truncation: warn if DynamoDB scan was bounded
+  const scanTruncated = collection?.scan_truncated === true
+  const capHit = collection?.max_record_cap_hit === true
   const sampleSize = Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
 
   const activeCooks = derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0
@@ -501,6 +511,23 @@ export function ProductEngineeringDivision() {
             caveat={!streamBacked ? 'Running on daily aggregates — live stream unavailable. Some metrics may be delayed up to 24h.' : undefined}
           />
 
+          {/* Data quality warnings */}
+          {isStale && (
+            <div className="scope-note" style={{ fontSize: 12, color: 'var(--orange)', padding: '6px 12px', background: 'var(--warning-bg)', borderRadius: 6, marginBottom: 8 }}>
+              ⚠️ Telemetry data is stale — newest sample is {staleMins! > 1440 ? `${Math.floor(staleMins! / 1440)}d` : staleMins! > 60 ? `${Math.floor(staleMins! / 60)}h` : `${staleMins}m`} old. Device metrics may not reflect current fleet state.
+            </div>
+          )}
+          {(scanTruncated || capHit) && (
+            <div className="scope-note" style={{ fontSize: 12, color: 'var(--orange)', padding: '6px 12px', background: 'var(--warning-bg)', borderRadius: 6, marginBottom: 8 }}>
+              ⚠️ Telemetry scan was bounded{scanTruncated ? ' (pagination limit)' : ''}{capHit ? ' (record cap hit)' : ''} — fleet metrics are based on a sample, not the full device population. Confidence badges reflect this.
+            </div>
+          )}
+          {sampleSize > 0 && sampleSize < 10 && (
+            <div className="scope-note" style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, marginBottom: 8 }}>
+              Sample size is low (n={fmtInt(sampleSize)}) — reliability and stability metrics are directional, not statistically significant.
+            </div>
+          )}
+
           {/* Intelligence Briefing */}
           <section className="card">
             <div className="venom-panel-head">
@@ -530,7 +557,7 @@ export function ProductEngineeringDivision() {
                   <div className="venom-kpi-value">{fmtInt(activeCooks)}</div>
                   <div className="venom-kpi-sub">{fmtInt(devicesReporting)} devices reporting (5m)</div>
                   <div className="venom-kpi-badges">
-                    <TruthBadge state="proxy" />
+                    <TruthBadge state={(confidence?.global_completeness as TruthState) || 'proxy'} />
                     {devices60m > 0 && <span className="venom-delta venom-delta-up">{fmtInt(devices60m)} in 60m · {fmtInt(devices24h)} in 24h</span>}
                   </div>
                 </div>
@@ -538,13 +565,13 @@ export function ProductEngineeringDivision() {
                   <div className="venom-kpi-label">Reliability</div>
                   <div className="venom-kpi-value">{fmtPct(successRate)}</div>
                   <div className="venom-kpi-sub">session success · n={fmtInt(sampleSize)}</div>
-                  <div className="venom-kpi-badges"><TruthBadge state="estimated" /></div>
+                  <div className="venom-kpi-badges"><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Temp Stability</div>
                   <div className="venom-kpi-value">{fmtDecimal(stabilityScore)}</div>
                   <div className="venom-kpi-sub">score (0-1, higher = steadier)</div>
-                  <div className="venom-kpi-badges"><TruthBadge state="estimated" /></div>
+                  <div className="venom-kpi-badges"><TruthBadge state={(confidence?.session_derivation as TruthState) || 'estimated'} /></div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Product Issues</div>
@@ -655,8 +682,8 @@ export function ProductEngineeringDivision() {
                     Session success requires: reaching target temp, stabilizing, no disconnects, and zero errors. Startup-only sessions (&lt;15 min) that end before target may count as incomplete.
                   </p>
                   <div className="venom-breakdown-list">
-                    <div className="venom-breakdown-row"><span>Session success rate</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state="estimated" /></div>
-                    <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state="proxy" /></div>
+                    <div className="venom-breakdown-row"><span>Session success rate</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
+                    <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state={(confidence?.disconnect_detection as TruthState) || 'proxy'} /></div>
                     <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
                     <div className="venom-breakdown-row"><span>Median RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${medianRssi} dBm` : '\u2014'}</span></div>
                   </div>
