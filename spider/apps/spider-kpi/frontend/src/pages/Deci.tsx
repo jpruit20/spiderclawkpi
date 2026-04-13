@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAuth } from '../components/AuthGate'
 import { Card } from '../components/Card'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
@@ -103,6 +104,22 @@ export function Deci() {
     }
   }, [])
 
+  /** Silent reload — refreshes data in background without showing loading state or resetting scroll */
+  const silentReload = useCallback(async () => {
+    try {
+      const [o, d, t, dom] = await Promise.all([
+        api.deciOverview().catch(() => null),
+        api.deciDecisions().catch(() => []),
+        api.deciTeam().catch(() => []),
+        api.deciDomains().catch(() => []),
+      ])
+      setOverview(o)
+      setDecisions(d)
+      setTeam(t)
+      setDomains(dom)
+    } catch { /* silent — don't flash error on background refresh */ }
+  }, [])
+
   useEffect(() => { void loadAll() }, [loadAll])
 
   const openDetail = useCallback((id: string) => {
@@ -141,13 +158,13 @@ export function Deci() {
 
       {!loading && !error ? (
         <>
-          {view === 'overview' ? <OverviewView overview={overview} decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} /> : null}
-          {view === 'map' ? <DecisionMapView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} /> : null}
-          {view === 'decisions' ? <ActiveDecisionsView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} filterStatus={filterStatus} setFilterStatus={setFilterStatus} filterDept={filterDept} setFilterDept={setFilterDept} filterPriority={filterPriority} setFilterPriority={setFilterPriority} filterDomain={filterDomain} setFilterDomain={setFilterDomain} /> : null}
-          {view === 'detail' && selectedId ? <DetailView decisionId={selectedId} team={team} domains={domains} onBack={() => setView('decisions')} onReload={loadAll} /> : null}
+          {view === 'overview' ? <OverviewView overview={overview} decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} /> : null}
+          {view === 'map' ? <DecisionMapView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} /> : null}
+          {view === 'decisions' ? <ActiveDecisionsView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} filterStatus={filterStatus} setFilterStatus={setFilterStatus} filterDept={filterDept} setFilterDept={setFilterDept} filterPriority={filterPriority} setFilterPriority={setFilterPriority} filterDomain={filterDomain} setFilterDomain={setFilterDomain} /> : null}
+          {view === 'detail' && selectedId ? <DetailView decisionId={selectedId} team={team} domains={domains} onBack={() => setView('decisions')} onReload={silentReload} /> : null}
           {view === 'detail' && !selectedId ? <div className="state-message">Select a decision from the Active Decisions view.</div> : null}
           {view === 'roleload' ? <RoleLoadView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} /> : null}
-          {view === 'matrix' ? <LeadershipMatrixView team={team} domains={domains} decisions={decisions} onOpenDetail={openDetail} onReload={loadAll} /> : null}
+          {view === 'matrix' ? <LeadershipMatrixView team={team} domains={domains} decisions={decisions} onOpenDetail={openDetail} onReload={silentReload} /> : null}
         </>
       ) : null}
     </div>
@@ -1007,6 +1024,22 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
     }
   }, [decisionId])
 
+  /** Silent re-fetch — updates state without showing loading spinner or resetting scroll */
+  const silentLoadDecision = useCallback(async () => {
+    try {
+      const d = await api.deciDecision(decisionId)
+      setDecision(d)
+      setEditStatus(d.status)
+      setEditPriority(d.priority)
+      setEditDriverId(d.driver_id || '')
+      setEditDept(d.department || '')
+      setEditDomainId(d.domain_id || '')
+      setEditCrossFunctional(d.cross_functional ?? false)
+      setEditDueDate(d.due_date || '')
+      setEditEscalation(d.escalation_status || 'none')
+    } catch { /* silent */ }
+  }, [decisionId])
+
   useEffect(() => { void loadDecision() }, [loadDecision])
 
   const domainName = useMemo(() => {
@@ -1033,7 +1066,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
         due_date: editDueDate || null,
         escalation_status: editEscalation,
       })
-      await loadDecision()
+      await silentLoadDecision()
       onReload()
     } finally {
       setSaving(false)
@@ -1047,7 +1080,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
       await api.deciAddLog(decision.id, { decision_text: logText.trim(), made_by: logBy.trim(), notes: logNotes.trim() || undefined })
       setLogText('')
       setLogNotes('')
-      await loadDecision()
+      await silentLoadDecision()
     } finally {
       setAddingLog(false)
     }
@@ -1059,7 +1092,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
     try {
       await api.deciAddKpiLink(decision.id, { kpi_name: kpiName.trim() })
       setKpiName('')
-      await loadDecision()
+      await silentLoadDecision()
     } finally {
       setAddingKpi(false)
     }
@@ -1069,7 +1102,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
     if (!decision) return
     try {
       await api.deciDeleteKpiLink(decision.id, linkId)
-      await loadDecision()
+      await silentLoadDecision()
     } catch { /* ignore */ }
   }
 
@@ -1085,7 +1118,7 @@ function DetailView({ decisionId, team, domains, onBack, onReload }: {
       }
       await api.deciUpdateDecision(decision.id, body)
       setAddMemberId('')
-      await loadDecision()
+      await silentLoadDecision()
       onReload()
     } catch { /* ignore */ }
   }
@@ -1633,6 +1666,9 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
   onOpenDetail: (id: string) => void
   onReload: () => void
 }) {
+  const { user } = useAuth()
+  const canEdit = user?.email === 'joseph@spidergrills.com'
+
   const [matrix, setMatrix] = useState<DeciMatrixResponse | null>(null)
   const [matrixLoading, setMatrixLoading] = useState(true)
   const [bootstrapping, setBootstrapping] = useState(false)
@@ -1653,6 +1689,14 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
       setMatrix(m)
     } catch { /* ignore */ }
     finally { setMatrixLoading(false) }
+  }, [])
+
+  /** Silent matrix refresh — no loading spinner, no scroll reset */
+  const silentLoadMatrix = useCallback(async () => {
+    try {
+      const m = await api.deciMatrix()
+      setMatrix(m)
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => { void loadMatrix() }, [loadMatrix])
@@ -1682,8 +1726,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
     setBootstrapping(true)
     try {
       await api.deciBootstrap()
-      onReload()
-      await loadMatrix()
+      await Promise.all([onReload(), loadMatrix()])
     } finally { setBootstrapping(false) }
   }
 
@@ -1700,12 +1743,12 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
       setNewTitle('')
       setNewPriority('medium')
       setCreateFromRow(null)
-      onReload()
-      await loadMatrix()
+      await Promise.all([onReload(), silentLoadMatrix()])
     } finally { setCreating(false) }
   }
 
-  /** Cycle a cell's DECI role and persist via deciUpdateDomain */
+  /** Cycle a cell's DECI role and persist via deciUpdateDomain.
+   *  Optimistic: update local state immediately so the UI stays in place. */
   async function handleCellClick(row: DeciMatrixRow, memberId: number) {
     if (!matrix) return
     const memberIdStr = String(memberId)
@@ -1728,6 +1771,27 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
       else if (role === 'I') newInformedIds.push(mid)
     }
 
+    // Optimistic local update — mutate matrix state in place so scroll position is preserved
+    setMatrix(prev => {
+      if (!prev) return prev
+      const updated = { ...prev, categories: { ...prev.categories } }
+      for (const [cat, rows] of Object.entries(updated.categories)) {
+        const idx = rows.findIndex(r => r.domain_id === row.domain_id)
+        if (idx !== -1) {
+          const newRow = { ...rows[idx], assignments: { ...rows[idx].assignments } }
+          if (nextRole) {
+            newRow.assignments[memberIdStr] = nextRole
+          } else {
+            delete newRow.assignments[memberIdStr]
+          }
+          updated.categories[cat] = [...rows]
+          updated.categories[cat][idx] = newRow
+          break
+        }
+      }
+      return updated
+    })
+
     setSaving(String(row.domain_id))
     try {
       await api.deciUpdateDomain(row.domain_id, {
@@ -1736,8 +1800,12 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
         default_contributor_ids: newContributorIds,
         default_informed_ids: newInformedIds,
       })
-      await loadMatrix()
-    } catch { /* ignore */ }
+      // Silent background refresh to pick up any server-side changes
+      await silentLoadMatrix()
+    } catch {
+      // Revert on error — re-fetch from server
+      await silentLoadMatrix()
+    }
     finally { setSaving(null) }
   }
 
@@ -1747,9 +1815,23 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
     try {
       await api.deciDeleteDomain(domainId)
       setConfirmDelete(null)
-      onReload()
-      await loadMatrix()
-    } catch { /* ignore */ }
+      // Optimistic: remove the row from local state immediately
+      setMatrix(prev => {
+        if (!prev) return prev
+        const updated = { ...prev, categories: { ...prev.categories } }
+        for (const [cat, rows] of Object.entries(updated.categories)) {
+          const filtered = rows.filter(r => r.domain_id !== domainId)
+          if (filtered.length !== rows.length) {
+            updated.categories[cat] = filtered
+            break
+          }
+        }
+        return updated
+      })
+      await Promise.all([onReload(), silentLoadMatrix()])
+    } catch {
+      await silentLoadMatrix()
+    }
     finally { setSaving(null) }
   }
 
@@ -1824,29 +1906,6 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
               <span style={{ color: 'var(--muted)' }}>{MATRIX_ROLE_TOOLTIPS[role].split('—')[1]?.trim()}</span>
             </div>
           ))}
-        </div>
-      </section>
-
-      {/* How It Works — at the top for orientation */}
-      <section className="card">
-        <div className="venom-panel-head"><strong>How the Matrix Works</strong></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.D.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.D.fg, marginBottom: 4 }}>1. Edit Roles</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click any cell in the matrix to cycle through D &rarr; E &rarr; C &rarr; I &rarr; empty. Changes save automatically.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.E.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.E.fg, marginBottom: 4 }}>2. Create Decisions</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click a row name to start a new decision. DECI assignments pre-fill from the matrix.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.C.fg}` }}>
-            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.C.fg, marginBottom: 4 }}>3. Conflict Detection</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Active decisions whose Driver differs from the matrix default are flagged automatically.</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--green)' }}>
-            <div style={{ fontWeight: 700, color: 'var(--green)', marginBottom: 4 }}>4. Delete Rows</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Use the &times; button on any row to remove a decision area. Linked decisions are preserved but unlinked.</div>
-          </div>
         </div>
       </section>
 
@@ -1932,7 +1991,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                     </th>
                   ))}
                   <th style={{ textAlign: 'center', padding: '8px 6px', minWidth: 50 }}>Active</th>
-                  <th style={{ textAlign: 'center', padding: '8px 4px', width: 36 }}></th>
+                  {canEdit && <th style={{ textAlign: 'center', padding: '8px 4px', width: 36 }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1965,10 +2024,10 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                         return (
                           <td
                             key={m.id}
-                            style={{ textAlign: 'center', padding: '6px', cursor: 'pointer' }}
+                            style={{ textAlign: 'center', padding: '6px', cursor: canEdit ? 'pointer' : 'default' }}
                             onMouseEnter={() => setHoveredCell({ row: row.name, memberId: String(m.id), role: role || '' })}
                             onMouseLeave={() => setHoveredCell(null)}
-                            onClick={() => handleCellClick(row, m.id)}
+                            onClick={canEdit ? () => handleCellClick(row, m.id) : undefined}
                           >
                             {role ? (
                               <div
@@ -1980,7 +2039,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                                   position: 'relative', transition: 'transform 0.1s',
                                   transform: isHovered ? 'scale(1.15)' : 'scale(1)',
                                 }}
-                                title={`Click to change. Current: ${m.name} = ${MATRIX_ROLE_TOOLTIPS[role]}`}
+                                title={canEdit ? `Click to change. Current: ${m.name} = ${MATRIX_ROLE_TOOLTIPS[role]}` : `${m.name} = ${MATRIX_ROLE_TOOLTIPS[role]}`}
                               >
                                 {role}
                                 {isHovered ? (
@@ -1991,7 +2050,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                                     border: '1px solid rgba(255,255,255,0.1)', pointerEvents: 'none',
                                   }}>
                                     <strong>{m.name}</strong>: {MATRIX_ROLE_TOOLTIPS[role]}
-                                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>Click to change</div>
+                                    {canEdit && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>Click to change</div>}
                                   </div>
                                 ) : null}
                               </div>
@@ -2004,9 +2063,9 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                                   color: isHovered ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.1)',
                                   fontSize: 14, transition: 'all 0.15s',
                                 }}
-                                title={`Click to assign ${m.name} a role`}
+                                title={canEdit ? `Click to assign ${m.name} a role` : 'No role assigned'}
                               >
-                                +
+                                {canEdit ? '+' : '\u00B7'}
                               </div>
                             )}
                           </td>
@@ -2019,6 +2078,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                           <span style={{ color: 'var(--muted)' }}>0</span>
                         )}
                       </td>
+                      {canEdit && (
                       <td style={{ textAlign: 'center', padding: '4px 2px' }}>
                         {isDeletePending ? (
                           <div style={{ display: 'flex', gap: 2 }}>
@@ -2062,6 +2122,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
                           </button>
                         )}
                       </td>
+                      )}
                     </tr>
                   )
                 })}

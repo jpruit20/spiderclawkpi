@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
@@ -245,6 +246,14 @@ export function CommandCenter() {
       {!loading && !error ? (
         <>
           <VenomKpiStrip cards={kpiCards} />
+
+          <ProvenanceBanner
+            compact
+            requiredSources={['shopify', 'triplewhale', 'freshdesk', 'clarity', 'aws_telemetry']}
+            sourceHealth={sourceHealth}
+            lastUpdated={rows.length ? rows[rows.length - 1]?.business_date : undefined}
+            scope="7-day rolling window, all sources"
+          />
 
           {/* Week-over-week performance badges */}
           <div className="scope-note" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

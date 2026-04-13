@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
@@ -12,8 +14,11 @@ from app.core.config import get_settings
 from app.models.entities import ClarityPageMetric
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 TIMEOUT_SECONDS = 45
+MAX_RETRIES = 3
+BASE_BACKOFF_SECONDS = 30
 
 # Metric keys returned by the Clarity export API
 METRIC_KEYS = [
@@ -290,13 +295,41 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
 
     try:
         url = _clarity_url()
-        response = requests.get(
-            url,
-            params={'numOfDays': max(1, min(days, 3)), 'dimension1': 'URL'},
-            headers={'Authorization': f'Bearer {settings.clarity_api_token}', 'Accept': 'application/json'},
-            timeout=TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
+        params = {'numOfDays': max(1, min(days, 3)), 'dimension1': 'URL'}
+        headers = {'Authorization': f'Bearer {settings.clarity_api_token}', 'Accept': 'application/json'}
+
+        # Retry loop with exponential backoff for rate-limiting (429)
+        response = None
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT_SECONDS)
+                if response.status_code == 429:
+                    retry_after = response.headers.get('Retry-After')
+                    wait_seconds = int(retry_after) if retry_after and retry_after.isdigit() else BASE_BACKOFF_SECONDS * (2 ** attempt)
+                    wait_seconds = min(wait_seconds, 300)  # cap at 5 minutes
+                    if attempt < MAX_RETRIES:
+                        logger.warning(f"Clarity 429 rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}), waiting {wait_seconds}s before retry")
+                        time.sleep(wait_seconds)
+                        continue
+                    else:
+                        response.raise_for_status()  # will raise on final attempt
+                response.raise_for_status()
+                break  # success
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                if response is not None and response.status_code == 429 and attempt < MAX_RETRIES:
+                    continue  # already handled above
+                raise
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    wait_seconds = BASE_BACKOFF_SECONDS * (2 ** attempt)
+                    logger.warning(f"Clarity timeout (attempt {attempt + 1}/{MAX_RETRIES + 1}), waiting {wait_seconds}s before retry")
+                    time.sleep(wait_seconds)
+                    continue
+                raise
+
         body = response.json()
         records = _extract_clarity_records(body)
 
@@ -312,6 +345,7 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
             'sample': records[:3] if records else body,
             'page_metrics_upserted': upserted,
             'unique_urls_parsed': len(page_records),
+            'attempts': attempt + 1,
         }
         finish_sync_run(db, run, status='success', records_processed=len(records))
         db.commit()
@@ -320,6 +354,7 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
             'records_processed': len(records),
             'page_metrics_upserted': upserted,
             'project_id': settings.clarity_project_id,
+            'attempts': attempt + 1,
         }
     except Exception as exc:
         message = str(exc)

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
@@ -74,6 +75,7 @@ export function RevenueEngine() {
   const rev = sum(currentRows, 'revenue')
   const revPrior = sum(priorRows, 'revenue')
   const refunds = sum(currentRows, 'refunds')
+  const discounts = sum(currentRows, 'total_discounts')
   const adSpend = sum(currentRows, 'ad_spend')
   const orders = sum(currentRows, 'orders')
   const ordersPrior = sum(priorRows, 'orders')
@@ -87,13 +89,14 @@ export function RevenueEngine() {
   const merPrior = sum(priorRows, 'ad_spend') > 0 ? revPrior / sum(priorRows, 'ad_spend') : 0
   const grossProfit = rev - refunds - adSpend
   const grossProfitPrior = revPrior - sum(priorRows, 'refunds') - sum(priorRows, 'ad_spend')
+  const discountRate = rev > 0 ? (discounts / (rev + discounts)) * 100 : 0
 
   const kpiCards = useMemo<KpiCardDef[]>(() => [
     { label: 'Revenue', value: currency(rev), sub: `${currentRows.length} days`, truthState: 'canonical', delta: { text: deltaPct(rev, revPrior), direction: deltaDirection(rev, revPrior) } },
-    { label: 'Gross Profit Proxy', value: currency(grossProfit), sub: 'Revenue - refunds - ad spend', truthState: 'proxy', delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) } },
+    { label: 'Gross Profit Proxy', value: currency(grossProfit), sub: `Rev − refunds − ad spend${discounts > 0 ? ` · ${fmtPct(discountRate / 100, 1)} discount rate` : ''}`, truthState: 'proxy', delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) } },
     { label: 'MER', value: mer > 0 ? `${mer.toFixed(1)}x` : '\u2014', sub: 'Revenue / ad spend', truthState: 'canonical', delta: merPrior > 0 ? { text: deltaPct(mer, merPrior), direction: deltaDirection(mer, merPrior) } : undefined },
     { label: 'Conversion', value: fmtPct(convAvg / 100, 2), sub: 'Period average', truthState: 'canonical', delta: { text: deltaPct(convAvg, convPrior), direction: deltaDirection(convAvg, convPrior) } },
-  ], [rev, revPrior, grossProfit, grossProfitPrior, mer, merPrior, convAvg, convPrior, currentRows.length])
+  ], [rev, revPrior, grossProfit, grossProfitPrior, mer, merPrior, convAvg, convPrior, currentRows.length, discounts, discountRate])
 
   const chartData = useMemo(() => {
     return currentRows.map((r, i) => ({
@@ -126,6 +129,21 @@ export function RevenueEngine() {
 
           <VenomKpiStrip cards={kpiCards} />
 
+          <ProvenanceBanner
+            compact
+            truthState="proxy"
+            lastUpdated={currentRows.length ? currentRows[currentRows.length - 1]?.business_date : undefined}
+            scope={`${currentRows.length}-day window · Shopify + Triple Whale`}
+            caveat="Gross Profit is a proxy (revenue − refunds − ad spend). True margin requires COGS and shipping cost data not yet ingested. Discounts are pre-applied in Shopify's total_price."
+          />
+
+          {/* Auto-generated revenue insight */}
+          {currentRows.length > 0 && priorRows.length > 0 ? (
+            <div className="scope-note" style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', padding: '6px 0' }}>
+              💡 {generateRevenueInsight(rev, revPrior, sessions, sessionsPrior, convAvg, convPrior, aovAvg, aovPrior)}
+            </div>
+          ) : null}
+
           {/* Two-col breakdown */}
           <div className="two-col two-col-equal">
             <section className="card">
@@ -133,7 +151,7 @@ export function RevenueEngine() {
               <div className="venom-breakdown-list">
                 <div className="venom-breakdown-row"><span>Revenue</span><span className="venom-breakdown-val">{currency(rev)}</span><TruthBadge state="canonical" /></div>
                 <div className="venom-breakdown-row"><span>Refunds</span><span className="venom-breakdown-val">{currency(refunds)}</span><TruthBadge state="canonical" /></div>
-                <div className="venom-breakdown-row"><span>Discounts</span><span className="venom-breakdown-val">Missing data</span><TruthBadge state="unavailable" /></div>
+                <div className="venom-breakdown-row"><span>Discounts</span><span className="venom-breakdown-val">{discounts > 0 ? currency(discounts) : '$0.00'}</span><TruthBadge state={discounts > 0 ? 'canonical' : 'proxy'} />{discounts > 0 && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>({fmtPct(discountRate / 100, 1)} of gross)</span>}</div>
                 <div className="venom-breakdown-row"><span>Ad Spend</span><span className="venom-breakdown-val">{currency(adSpend)}</span><TruthBadge state="canonical" /></div>
                 <div className="venom-breakdown-row"><span>Gross Profit Proxy</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state="proxy" /></div>
                 <div className="venom-breakdown-row"><span>Contribution</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state="proxy" /></div>

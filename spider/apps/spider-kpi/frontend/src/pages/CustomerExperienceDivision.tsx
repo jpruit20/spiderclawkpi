@@ -4,6 +4,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, formatFreshness } from '../lib/format'
@@ -561,6 +562,14 @@ export function CustomerExperienceDivision() {
 
       {!loading && !error ? (
         <>
+          <ProvenanceBanner
+            compact
+            truthState="canonical"
+            lastUpdated={snapshotTimestamp !== 'n/a' ? snapshotTimestamp : undefined}
+            scope="Freshdesk + social signals · Jeremiah's team"
+            caveat={tickets.length === 0 ? 'No tickets loaded — Freshdesk may be disconnected.' : undefined}
+          />
+
           {/* Quick Stats & Navigation Bar */}
           <div className="scope-note" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

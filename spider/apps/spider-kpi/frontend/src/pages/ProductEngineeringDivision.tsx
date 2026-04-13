@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
 import type { ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
@@ -492,6 +493,14 @@ export function ProductEngineeringDivision() {
 
       {!loading && !error ? (
         <>
+          <ProvenanceBanner
+            compact
+            truthState={streamBacked ? 'canonical' : 'degraded'}
+            lastUpdated={collection?.newest_sample_timestamp_seen}
+            scope={`${daysDiff}-day window · ${fmtInt(sampleSize)} device samples`}
+            caveat={!streamBacked ? 'Running on daily aggregates — live stream unavailable. Some metrics may be delayed up to 24h.' : undefined}
+          />
+
           {/* Intelligence Briefing */}
           <section className="card">
             <div className="venom-panel-head">

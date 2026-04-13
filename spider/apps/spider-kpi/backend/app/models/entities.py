@@ -88,6 +88,7 @@ class ShopifyOrderDaily(TimestampMixin, Base):
     revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     average_order_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     refunds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    total_discounts: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("source_sync_runs.id"))
 
 
@@ -379,6 +380,8 @@ class KPIDaily(TimestampMixin, Base):
     csat: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     reopen_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     tickets_per_100_orders: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    refunds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    total_discounts: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
 
 class KPIIntraday(TimestampMixin, Base):

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
 import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth, MarketIntelligence } from '../lib/types'
@@ -245,6 +246,13 @@ export function SocialIntelligence() {
           </div>
 
           <VenomKpiStrip cards={kpiCards} />
+
+          <ProvenanceBanner
+            compact
+            truthState="estimated"
+            scope="7-day rolling · Reddit, YouTube, Amazon, Google Reviews"
+            caveat="Sentiment is NLP-estimated. Mention counts reflect indexed posts only — not total market conversation."
+          />
 
           {/* ════════════════════════════════════════════════
               SECTION: Overview

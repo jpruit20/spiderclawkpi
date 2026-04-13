@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card } from '../components/Card'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { confidenceScore, currency, frictionRankingScore, impactFromConversion } from '../lib/operatingModel'
+import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { FreshdeskTicketItem, IssueRadarResponse, KPIDaily, SourceHealthItem } from '../lib/types'
 
 function normalizeDate(value?: string) {
@@ -115,14 +116,12 @@ export function FrictionMap() {
       {error ? <Card title="Friction Map Error"><div className="state-message error">{error}</div></Card> : null}
       {!loading && !error ? (
         <>
-          {clarityDegraded ? (
-            <div className="trust-banner trust-banner-degraded">
-              <div>
-                <strong>Clarity degraded</strong>
-                <p>Clarity is rate-limited or stale. Friction conclusions that would normally depend on rage/dead click evidence are being shown with lower confidence.</p>
-              </div>
-            </div>
-          ) : null}
+          <ProvenanceBanner
+            requiredSources={['ga4', 'clarity', 'freshdesk']}
+            sourceHealth={sourceHealth}
+            scope="Merged UX (Clarity + GA4) and CX (Freshdesk) signals"
+            caveat={clarityDegraded ? 'Clarity is rate-limited or stale — friction scores using rage/dead click evidence have lower confidence.' : undefined}
+          />
           <div className="three-col">
             <Card title="Telemetry Inputs"><div className="hero-metric">{Object.values(telemetry).filter((row) => row?.derived_status === 'healthy').length}/3</div><div className="state-message">GA4 + Clarity + Freshdesk feeding friction decisions</div></Card>
             <Card title="Priority Frictions"><div className="hero-metric">{frictionQueue.length}</div><div className="state-message">Ranked by impact × confidence</div></Card>

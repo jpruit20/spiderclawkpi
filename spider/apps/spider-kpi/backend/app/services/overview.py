@@ -36,7 +36,8 @@ def build_kpi_payload(
     payload = {
         "business_date": row.business_date,
         "revenue": row.revenue,
-        "refunds": shopify.refunds if shopify else 0.0,
+        "refunds": row.refunds,
+        "total_discounts": row.total_discounts,
         "orders": row.orders,
         "average_order_value": row.average_order_value,
         "sessions": row.sessions,

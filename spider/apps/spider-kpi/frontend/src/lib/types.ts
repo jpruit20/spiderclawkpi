@@ -68,7 +68,8 @@ export interface BlockedStateOutput {
 export interface KPIDaily {
   business_date: string
   revenue: number
-  refunds?: number
+  refunds: number
+  total_discounts: number
   orders: number
   average_order_value: number
   sessions: number

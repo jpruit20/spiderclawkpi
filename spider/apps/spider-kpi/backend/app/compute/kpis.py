@@ -202,6 +202,8 @@ def recompute_daily_kpis(db: Session) -> int:
         reopen_count = support.reopened_tickets if support else 0
         record.reopen_rate = _safe_div(reopen_count * 100.0, support.tickets_created) if support and support.tickets_created else 0.0
         record.tickets_per_100_orders = _safe_div((support.tickets_created * 100.0), orders) if support and orders else 0.0
+        record.refunds = shopify.refunds if shopify else 0.0
+        record.total_discounts = shopify.total_discounts if shopify else 0.0
         processed += 1
 
         validation = _validation_warnings(record, expected_conversion, expected_rps, expected_aov)

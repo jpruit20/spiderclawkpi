@@ -138,6 +138,7 @@ def _to_decimal(value: Any) -> Decimal:
 def _extract_financials(order: dict[str, Any]) -> dict[str, Any]:
     total_price = _to_decimal(order.get("total_price"))
     current_total_price = _to_decimal(order.get("current_total_price") or order.get("total_price"))
+    total_discounts = _to_decimal(order.get("total_discounts"))
     cancelled_at = order.get("cancelled_at")
     financial_status = str(order.get("financial_status") or "").lower() or None
     refunds = total_price - current_total_price
@@ -154,6 +155,7 @@ def _extract_financials(order: dict[str, Any]) -> dict[str, Any]:
         "gross_revenue": float(total_price),
         "recognized_revenue": float(recognized_revenue),
         "refunds": float(refunds),
+        "total_discounts": float(total_discounts),
         "counts_as_order": order_counts,
     }
 
@@ -230,6 +232,7 @@ def _normalized_payload_from_order(order: dict[str, Any], financials: dict[str, 
         "cancelled_at": order.get("cancelled_at"),
         "recognized_revenue": financials["recognized_revenue"],
         "refunds": financials["refunds"],
+        "total_discounts": financials["total_discounts"],
         "counts_as_order": financials["counts_as_order"],
         "customer_id": ((order.get("customer") or {}).get("id")),
     }
@@ -240,7 +243,7 @@ def _fetch_order_by_id(order_id: str) -> dict[str, Any] | None:
     shop_domain = _normalize_shop_domain(settings.shopify_store_url)
     endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders/{order_id}.json"
     response = _request_json(session, endpoint, params={
-        "fields": "id,created_at,updated_at,processed_at,total_price,current_total_price,financial_status,cancelled_at,customer.id"
+        "fields": "id,created_at,updated_at,processed_at,total_price,current_total_price,total_discounts,financial_status,cancelled_at,customer.id"
     })
     payload = response.json()
     return payload.get("order")
@@ -297,7 +300,7 @@ def rebuild_shopify_daily_from_events(
         if row.order_id
     }
 
-    daily: dict[datetime.date, dict[str, float]] = {d: {"orders": 0, "revenue": 0.0, "refunds": 0.0} for d in business_dates}
+    daily: dict[datetime.date, dict[str, float]] = {d: {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0} for d in business_dates}
     for order_id in order_ids:
         latest = _latest_order_state(db, order_id)
         if latest is None:
@@ -311,7 +314,7 @@ def rebuild_shopify_daily_from_events(
         if business_date not in business_dates:
             continue
         if business_date not in daily:
-            daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0}
+            daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0}
         if payload.get("counts_as_order"):
             daily[business_date]["orders"] += 1
         daily[business_date]["revenue"] += float(
@@ -321,16 +324,18 @@ def rebuild_shopify_daily_from_events(
             or 0.0
         )
         daily[business_date]["refunds"] += float(payload.get("refunds") or 0.0)
+        daily[business_date]["total_discounts"] += float(payload.get("total_discounts") or 0.0)
 
     for business_date in business_dates:
         record = db.execute(select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date == business_date)).scalars().first()
-        values = daily.get(business_date, {"orders": 0, "revenue": 0.0, "refunds": 0.0})
+        values = daily.get(business_date, {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0})
         if record is None:
             record = ShopifyOrderDaily(business_date=business_date)
             db.add(record)
         record.orders = int(values["orders"])
         record.revenue = float(values["revenue"])
         record.refunds = float(values["refunds"])
+        record.total_discounts = float(values["total_discounts"])
         record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0
         if source_run_id is not None:
             record.source_run_id = source_run_id
@@ -417,7 +422,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             "limit": "250",
             "order": "created_at asc",
             "created_at_min": created_at_min,
-            "fields": "id,created_at,updated_at,total_price,current_total_price,financial_status,cancelled_at,customer.id",
+            "fields": "id,created_at,updated_at,total_price,current_total_price,total_discounts,financial_status,cancelled_at,customer.id",
         }
 
         all_orders: list[dict[str, Any]] = []
@@ -446,7 +451,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             "limit": "250",
             "order": "updated_at asc",
             "updated_at_min": updated_at_min,
-            "fields": "id,created_at,updated_at,total_price,current_total_price,financial_status,cancelled_at,customer.id",
+            "fields": "id,created_at,updated_at,total_price,current_total_price,total_discounts,financial_status,cancelled_at,customer.id",
         }
         next_url = endpoint
         next_params = updated_params

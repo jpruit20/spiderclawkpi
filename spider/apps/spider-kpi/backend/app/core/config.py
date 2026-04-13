@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))
 
     sync_interval_minutes: int = 5
-    clarity_sync_interval_minutes: int = 30
+    clarity_sync_interval_minutes: int = 120  # Data is daily-granularity; polling less often avoids 429s
     historical_start_date: str = "2024-01-01"
     backfill_days: int = 824
 
