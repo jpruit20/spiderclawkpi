@@ -161,7 +161,21 @@ async def run_cli_turn(
     # Build a rich PATH so the claude CLI (a Node.js script) can find its
     # interpreter and any required binaries.
     import os as _os
+    from app.core.config import get_settings as _get_settings
+    _settings = _get_settings()
     env = _os.environ.copy()
+    # Ensure the Anthropic API key is in the subprocess environment
+    api_key = _os.environ.get("ANTHROPIC_API_KEY") or getattr(_settings, "anthropic_api_key", None)
+    if not api_key:
+        # Try reading from .env directly
+        env_file = Path(workspace_root) / ".env"
+        if env_file.is_file():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("ANTHROPIC_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
     extra_paths = [
         "/usr/local/bin", "/usr/bin", "/usr/local/sbin", "/usr/sbin",
         _os.path.expanduser("~/.nvm/versions/node/current/bin"),
