@@ -127,34 +127,22 @@ async def run_cli_turn(
     prompt = _build_prompt(user_message, history)
     system_prompt = _build_system_prompt(scope)
 
-    # If we found npx instead of claude directly, prefix the command
-    is_npx = claude_bin.endswith("npx")
-    if is_npx:
-        cmd = [
-            claude_bin, "@anthropic-ai/claude-code",
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--model", "sonnet",
-            "--bare",
-            "--dangerously-skip-permissions",
-            "--append-system-prompt", system_prompt,
-            "--allowed-tools", "Read", "Edit", "Glob", "Grep",
-            "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
-        ]
-    else:
-        cmd = [
-            claude_bin,
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--model", "sonnet",
-            "--bare",
-            "--dangerously-skip-permissions",
-            "--append-system-prompt", system_prompt,
-            "--allowed-tools", "Read", "Edit", "Glob", "Grep",
-            "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
-        ]
+    # Build CLI command — tools must be comma-separated as one arg
+    base_cmd = [claude_bin]
+    if claude_bin.endswith("npx"):
+        base_cmd = [claude_bin, "@anthropic-ai/claude-code"]
+    cmd = base_cmd + [
+        "-p", prompt,
+        "--output-format", "stream-json",
+        "--model", "sonnet",
+        "--bare",
+        "--dangerously-skip-permissions",
+        "--append-system-prompt", system_prompt,
+        "--allowedTools", "Read,Edit,Glob,Grep",
+        "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
+    ]
 
-    logger.info("AI agent start: user=%s division=%s", scope.email, scope.division)
+    logger.info("AI agent start: user=%s division=%s binary=%s cwd=%s", scope.email, scope.division, claude_bin, workspace_root)
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})
 
     # systemd services have a minimal PATH that may not include node/npm.
@@ -202,13 +190,21 @@ async def run_cli_turn(
 
     try:
         assert process.stdout is not None
+        line_count = 0
+        # Also capture stderr for diagnostics
+        stderr_task = asyncio.create_task(process.stderr.read()) if process.stderr else None
+
         async for raw_line in _read_lines_with_timeout(process.stdout, CLI_TIMEOUT_SECONDS):
             line = raw_line.strip()
             if not line:
                 continue
+            line_count += 1
+            if line_count <= 3:
+                logger.info("AI CLI stdout line %d (first 200 chars): %s", line_count, line[:200])
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                logger.warning("AI CLI non-JSON line: %s", line[:200])
                 continue
 
             top_type = obj.get("type")
@@ -217,6 +213,7 @@ async def run_cli_turn(
             if top_type == "result":
                 result_text = obj.get("result", "")
                 usage = obj.get("usage", {})
+                logger.info("AI CLI result received: %d chars, %d files modified", len(result_text), len(files_modified))
                 yield SSEEvent(event="done", data={
                     "result": result_text,
                     "files_changed": len(files_modified),
@@ -313,6 +310,15 @@ async def run_cli_turn(
         logger.exception("AI agent error for user=%s", scope.email)
         yield SSEEvent(event="error", data={"message": f"AI assistant error: {exc}"})
     finally:
+        # Log stderr for diagnostics
+        if stderr_task:
+            try:
+                stderr_data = await asyncio.wait_for(stderr_task, timeout=2)
+                if stderr_data:
+                    logger.warning("AI CLI stderr: %s", stderr_data.decode("utf-8", errors="replace")[:500])
+            except Exception:
+                pass
+        logger.info("AI CLI finished: %d stdout lines read, returncode=%s", line_count, process.returncode)
         # Ensure process is cleaned up
         if process.returncode is None:
             try:
