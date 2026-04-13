@@ -20,6 +20,7 @@ from app.models.entities import (
     DeciAssignment,
     DeciDecision,
     DeciDecisionLog,
+    DeciDomain,
     DeciKpiLink,
     DeciTeamMember,
 )
@@ -66,6 +67,9 @@ class DecisionCreate(BaseModel):
     executors: list[int] = []
     contributors: list[int] = []
     informed: list[int] = []
+    domain_id: Optional[int] = None
+    cross_functional: bool = False
+    due_date: Optional[str] = None  # ISO date string
 
 
 class DecisionUpdate(BaseModel):
@@ -79,6 +83,10 @@ class DecisionUpdate(BaseModel):
     executors: Optional[list[int]] = None
     contributors: Optional[list[int]] = None
     informed: Optional[list[int]] = None
+    domain_id: Optional[int] = None
+    cross_functional: Optional[bool] = None
+    due_date: Optional[str] = None
+    escalation_status: Optional[str] = None
 
 
 class AssignmentOut(BaseModel):
@@ -117,6 +125,55 @@ class KpiLinkOut(BaseModel):
     decision_id: str
     kpi_name: str
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DomainCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: str = "operations"
+    default_driver_id: Optional[int] = None
+    default_executor_ids: list[int] = []
+    default_contributor_ids: list[int] = []
+    default_informed_ids: list[int] = []
+    escalation_owner_id: Optional[int] = None
+    escalation_threshold_days: int = 7
+    sort_order: int = 0
+
+
+class DomainUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    default_driver_id: Optional[int] = None
+    default_executor_ids: Optional[list[int]] = None
+    default_contributor_ids: Optional[list[int]] = None
+    default_informed_ids: Optional[list[int]] = None
+    escalation_owner_id: Optional[int] = None
+    escalation_threshold_days: Optional[int] = None
+    active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class DomainOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    category: str
+    default_driver_id: Optional[int] = None
+    default_driver_name: Optional[str] = None
+    default_executor_ids: list[int] = []
+    default_contributor_ids: list[int] = []
+    default_informed_ids: list[int] = []
+    escalation_owner_id: Optional[int] = None
+    escalation_owner_name: Optional[str] = None
+    escalation_threshold_days: int = 7
+    active: bool = True
+    sort_order: int = 0
+    decision_count: int = 0
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -168,6 +225,12 @@ def _enrich_decision(
         "executors": executors,
         "contributors": contributors,
         "informed": informed,
+        "domain_id": decision.domain_id,
+        "escalation_status": decision.escalation_status,
+        "escalated_at": decision.escalated_at,
+        "cross_functional": decision.cross_functional,
+        "due_date": decision.due_date.isoformat() if decision.due_date else None,
+        "resolved_at": decision.resolved_at,
         "created_at": decision.created_at,
         "updated_at": decision.updated_at,
     }
@@ -216,6 +279,158 @@ def _sync_assignments(
                     role=role,
                 )
             )
+
+
+# ---------------------------------------------------------------------------
+# Decision Domains
+# ---------------------------------------------------------------------------
+
+
+@router.get("/domains")
+def list_domains(db: Session = Depends(db_session)):
+    domains = db.execute(
+        select(DeciDomain).order_by(DeciDomain.sort_order, DeciDomain.name)
+    ).scalars().all()
+    member_names = _member_name_map(db)
+
+    # Count decisions per domain
+    domain_decision_counts = {}
+    count_rows = db.execute(
+        select(DeciDecision.domain_id, func.count().label("cnt"))
+        .where(DeciDecision.domain_id.is_not(None))
+        .group_by(DeciDecision.domain_id)
+    ).all()
+    for row in count_rows:
+        domain_decision_counts[row[0]] = row[1]
+
+    return [
+        {
+            "id": d.id,
+            "name": d.name,
+            "description": d.description,
+            "category": d.category,
+            "default_driver_id": d.default_driver_id,
+            "default_driver_name": member_names.get(d.default_driver_id) if d.default_driver_id else None,
+            "default_executor_ids": d.default_executor_ids or [],
+            "default_contributor_ids": d.default_contributor_ids or [],
+            "default_informed_ids": d.default_informed_ids or [],
+            "escalation_owner_id": d.escalation_owner_id,
+            "escalation_owner_name": member_names.get(d.escalation_owner_id) if d.escalation_owner_id else None,
+            "escalation_threshold_days": d.escalation_threshold_days,
+            "active": d.active,
+            "sort_order": d.sort_order,
+            "decision_count": domain_decision_counts.get(d.id, 0),
+            "created_at": d.created_at,
+            "updated_at": d.updated_at,
+        }
+        for d in domains
+    ]
+
+
+@router.post("/domains", status_code=201)
+def create_domain(body: DomainCreate, db: Session = Depends(db_session)):
+    domain = DeciDomain(
+        name=body.name,
+        description=body.description,
+        category=body.category,
+        default_driver_id=body.default_driver_id,
+        default_executor_ids=body.default_executor_ids,
+        default_contributor_ids=body.default_contributor_ids,
+        default_informed_ids=body.default_informed_ids,
+        escalation_owner_id=body.escalation_owner_id,
+        escalation_threshold_days=body.escalation_threshold_days,
+        sort_order=body.sort_order,
+    )
+    db.add(domain)
+    db.commit()
+    db.refresh(domain)
+    member_names = _member_name_map(db)
+    return {
+        "id": domain.id,
+        "name": domain.name,
+        "description": domain.description,
+        "category": domain.category,
+        "default_driver_id": domain.default_driver_id,
+        "default_driver_name": member_names.get(domain.default_driver_id) if domain.default_driver_id else None,
+        "default_executor_ids": domain.default_executor_ids or [],
+        "default_contributor_ids": domain.default_contributor_ids or [],
+        "default_informed_ids": domain.default_informed_ids or [],
+        "escalation_owner_id": domain.escalation_owner_id,
+        "escalation_owner_name": member_names.get(domain.escalation_owner_id) if domain.escalation_owner_id else None,
+        "escalation_threshold_days": domain.escalation_threshold_days,
+        "active": domain.active,
+        "sort_order": domain.sort_order,
+        "decision_count": 0,
+        "created_at": domain.created_at,
+        "updated_at": domain.updated_at,
+    }
+
+
+@router.put("/domains/{domain_id}")
+def update_domain(domain_id: int, body: DomainUpdate, db: Session = Depends(db_session)):
+    domain = db.execute(
+        select(DeciDomain).where(DeciDomain.id == domain_id)
+    ).scalar_one_or_none()
+    if domain is None:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(domain, field, value)
+    db.commit()
+    db.refresh(domain)
+    member_names = _member_name_map(db)
+    decision_count = db.execute(
+        select(func.count()).select_from(DeciDecision).where(DeciDecision.domain_id == domain_id)
+    ).scalar_one()
+    return {
+        "id": domain.id,
+        "name": domain.name,
+        "description": domain.description,
+        "category": domain.category,
+        "default_driver_id": domain.default_driver_id,
+        "default_driver_name": member_names.get(domain.default_driver_id) if domain.default_driver_id else None,
+        "default_executor_ids": domain.default_executor_ids or [],
+        "default_contributor_ids": domain.default_contributor_ids or [],
+        "default_informed_ids": domain.default_informed_ids or [],
+        "escalation_owner_id": domain.escalation_owner_id,
+        "escalation_owner_name": member_names.get(domain.escalation_owner_id) if domain.escalation_owner_id else None,
+        "escalation_threshold_days": domain.escalation_threshold_days,
+        "active": domain.active,
+        "sort_order": domain.sort_order,
+        "decision_count": decision_count,
+        "created_at": domain.created_at,
+        "updated_at": domain.updated_at,
+    }
+
+
+@router.post("/domains/seed", status_code=201)
+def seed_domains(db: Session = Depends(db_session)):
+    """Seed the 12 initial decision domains if they don't exist."""
+    INITIAL_DOMAINS = [
+        {"name": "New Product Concept Direction", "category": "product", "description": "Go/no-go decisions on new product ideas, market fit analysis, and concept validation", "sort_order": 1},
+        {"name": "Product Improvements & Iterations", "category": "product", "description": "Feature enhancements, design refinements, and iterative improvements to existing products", "sort_order": 2},
+        {"name": "Production Readiness & Launch", "category": "manufacturing", "description": "Manufacturing readiness, tooling decisions, supplier selection, and launch timing", "sort_order": 3},
+        {"name": "Quality & Warranty Standards", "category": "manufacturing", "description": "Quality control thresholds, warranty policy changes, and defect resolution protocols", "sort_order": 4},
+        {"name": "Pricing & Revenue Strategy", "category": "commercial", "description": "Pricing changes, discount structures, bundle strategies, and revenue optimization", "sort_order": 5},
+        {"name": "Marketing & Brand Positioning", "category": "commercial", "description": "Campaign decisions, channel strategy, brand messaging, and market positioning", "sort_order": 6},
+        {"name": "Customer Experience & Support", "category": "cx", "description": "Support process changes, SLA adjustments, customer journey improvements", "sort_order": 7},
+        {"name": "Technology & Infrastructure", "category": "engineering", "description": "Tech stack decisions, infrastructure investments, firmware architecture", "sort_order": 8},
+        {"name": "Supply Chain & Logistics", "category": "operations", "description": "Supplier changes, inventory strategy, shipping and fulfillment decisions", "sort_order": 9},
+        {"name": "Partnership & Channel Strategy", "category": "commercial", "description": "Retail partnerships, distribution agreements, co-marketing deals", "sort_order": 10},
+        {"name": "Regulatory & Compliance", "category": "operations", "description": "Safety certifications, regulatory compliance, legal requirements", "sort_order": 11},
+        {"name": "Team & Organizational", "category": "operations", "description": "Hiring decisions, role changes, organizational structure, vendor relationships", "sort_order": 12},
+    ]
+
+    existing = {d.name for d in db.execute(select(DeciDomain)).scalars().all()}
+    created = []
+    for domain_data in INITIAL_DOMAINS:
+        if domain_data["name"] not in existing:
+            domain = DeciDomain(**domain_data)
+            db.add(domain)
+            created.append(domain_data["name"])
+
+    db.commit()
+    return {"seeded": len(created), "domains": created}
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +533,12 @@ def create_decision(body: DecisionCreate, db: Session = Depends(db_session)):
         department=body.department,
         driver_id=body.driver_id,
     )
+    if body.domain_id:
+        decision.domain_id = body.domain_id
+    decision.cross_functional = body.cross_functional
+    if body.due_date:
+        from datetime import date as date_type
+        decision.due_date = date_type.fromisoformat(body.due_date)
     db.add(decision)
     db.flush()
 
@@ -413,10 +634,23 @@ def update_decision(
     # Apply scalar field updates
     update_data = body.model_dump(exclude_unset=True)
     assignment_fields = {"executors", "contributors", "informed"}
+    skip_fields = assignment_fields | {"due_date"}
     for field, value in update_data.items():
-        if field in assignment_fields:
+        if field in skip_fields:
             continue
         setattr(decision, field, value)
+
+    # Parse due_date if provided
+    if "due_date" in update_data:
+        if update_data["due_date"] is not None:
+            from datetime import date as date_type
+            decision.due_date = date_type.fromisoformat(update_data["due_date"])
+        else:
+            decision.due_date = None
+
+    # Set resolved_at when status changes to "complete"
+    if "status" in update_data and update_data["status"] == "complete" and decision.resolved_at is None:
+        decision.resolved_at = datetime.now(timezone.utc)
 
     # Validate driver constraint: if driver_id is being explicitly set, ensure
     # there is exactly one driver (the one being set).
@@ -777,9 +1011,72 @@ def get_deci_overview(db: Session = Depends(db_session)):
         "avg_decision_to_completion_hours": avg_decision_to_completion_hours,
     }
 
+    # ---- Domain Stats ----
+    domains = db.execute(
+        select(DeciDomain).where(DeciDomain.active.is_(True)).order_by(DeciDomain.sort_order)
+    ).scalars().all()
+
+    domain_decision_counts: dict[int, int] = {}
+    domain_active_counts: dict[int, int] = {}
+    count_rows = db.execute(
+        select(DeciDecision.domain_id, func.count().label("cnt"))
+        .where(DeciDecision.domain_id.is_not(None))
+        .group_by(DeciDecision.domain_id)
+    ).all()
+    for row in count_rows:
+        domain_decision_counts[row[0]] = row[1]
+
+    active_rows = db.execute(
+        select(DeciDecision.domain_id, func.count().label("cnt"))
+        .where(
+            DeciDecision.domain_id.is_not(None),
+            DeciDecision.status.in_(["not_started", "in_progress", "blocked"]),
+        )
+        .group_by(DeciDecision.domain_id)
+    ).all()
+    for row in active_rows:
+        domain_active_counts[row[0]] = row[1]
+
+    domain_stats = [
+        {
+            "id": d.id,
+            "name": d.name,
+            "category": d.category,
+            "total_decisions": domain_decision_counts.get(d.id, 0),
+            "active_decisions": domain_active_counts.get(d.id, 0),
+            "default_driver_name": member_names.get(d.default_driver_id) if d.default_driver_id else None,
+            "escalation_owner_name": member_names.get(d.escalation_owner_id) if d.escalation_owner_id else None,
+        }
+        for d in domains
+    ]
+
+    # ---- Escalation Check ----
+    # Auto-detect decisions that should be escalated
+    escalation_warnings = []
+    non_complete = db.execute(
+        select(DeciDecision).where(DeciDecision.status != "complete")
+    ).scalars().all()
+
+    for d in non_complete:
+        if d.domain_id:
+            domain = next((dom for dom in domains if dom.id == d.domain_id), None)
+            if domain:
+                days_since_update = (now - d.updated_at).total_seconds() / 86400 if d.updated_at else 999
+                if days_since_update > domain.escalation_threshold_days and d.escalation_status != "escalated":
+                    escalation_warnings.append({
+                        "id": d.id,
+                        "title": d.title,
+                        "domain": domain.name,
+                        "days_stale": round(days_since_update),
+                        "threshold_days": domain.escalation_threshold_days,
+                        "escalation_owner": member_names.get(domain.escalation_owner_id) if domain.escalation_owner_id else None,
+                    })
+
     return {
         "bottlenecks": bottlenecks,
         "ownership_map": ownership_map,
         "critical_feed": critical_feed,
         "velocity": velocity,
+        "domain_stats": domain_stats,
+        "escalation_warnings": escalation_warnings,
     }

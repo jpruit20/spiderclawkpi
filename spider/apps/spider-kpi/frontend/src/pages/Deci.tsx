@@ -4,14 +4,27 @@ import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct } from '../lib/format'
-import type { DeciDecision, DeciOverview, DeciTeamMember, DeciStatus, DeciPriority, DeciDecisionType } from '../lib/types'
+import type {
+  DeciDecision, DeciOverview, DeciTeamMember, DeciDomain,
+  DeciStatus, DeciPriority, DeciDecisionType,
+  DeciDomainStat, DeciEscalationWarning,
+} from '../lib/types'
 
-type DeciView = 'overview' | 'matrix' | 'detail' | 'department'
+type DeciView = 'overview' | 'map' | 'decisions' | 'detail' | 'roleload'
 
 const STATUS_LABELS: Record<DeciStatus, string> = { not_started: 'Not Started', in_progress: 'In Progress', blocked: 'Blocked', complete: 'Complete' }
 const PRIORITY_LABELS: Record<DeciPriority, string> = { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' }
 const TYPE_LABELS: Record<DeciDecisionType, string> = { KPI: 'KPI', Project: 'Project', Initiative: 'Initiative', Issue: 'Issue' }
-const DEPARTMENTS = ['Marketing', 'Ops', 'Product', 'CX', 'Manufacturing']
+const DEPARTMENTS = ['Marketing', 'Ops', 'Product', 'CX', 'Manufacturing', 'Engineering']
+
+const DOMAIN_CATEGORY_COLORS: Record<string, string> = {
+  product: '#3b82f6',
+  manufacturing: '#f59e0b',
+  commercial: '#10b981',
+  cx: '#8b5cf6',
+  engineering: '#06b6d4',
+  operations: '#6b7280',
+}
 
 function statusColor(s: string) {
   if (s === 'complete') return 'good'
@@ -24,6 +37,12 @@ function priorityBadge(p: string) {
   if (p === 'critical') return 'badge-bad'
   if (p === 'high') return 'badge-warn'
   return 'badge-muted'
+}
+
+function escalationBadge(s: string) {
+  if (s === 'escalated') return 'badge-bad'
+  if (s === 'warning') return 'badge-warn'
+  return ''
 }
 
 function daysSince(dateStr: string | undefined): number {
@@ -42,32 +61,40 @@ function formatTimeAgo(dateStr: string | undefined): string {
   return `${Math.floor(days / 30)}mo ago`
 }
 
+function formatDate(dateStr: string | undefined): string {
+  if (!dateStr) return '—'
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 // ── Main Component ──
 export function Deci() {
   const [view, setView] = useState<DeciView>('overview')
   const [overview, setOverview] = useState<DeciOverview | null>(null)
   const [decisions, setDecisions] = useState<DeciDecision[]>([])
   const [team, setTeam] = useState<DeciTeamMember[]>([])
+  const [domains, setDomains] = useState<DeciDomain[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selectedDept, setSelectedDept] = useState<string>('Marketing')
   const [filterStatus, setFilterStatus] = useState<string>('')
   const [filterDept, setFilterDept] = useState<string>('')
   const [filterPriority, setFilterPriority] = useState<string>('')
+  const [filterDomain, setFilterDomain] = useState<string>('')
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [o, d, t] = await Promise.all([
+      const [o, d, t, dom] = await Promise.all([
         api.deciOverview().catch(() => null),
         api.deciDecisions().catch(() => []),
         api.deciTeam().catch(() => []),
+        api.deciDomains().catch(() => []),
       ])
       setOverview(o)
       setDecisions(d)
       setTeam(t)
+      setDomains(dom)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load DECI data')
     } finally {
@@ -82,20 +109,27 @@ export function Deci() {
     setView('detail')
   }, [])
 
+  const TAB_ITEMS: [DeciView, string][] = [
+    ['overview', 'Executive Overview'],
+    ['map', 'Decision Map'],
+    ['decisions', 'Active Decisions'],
+    ['roleload', 'Role Load'],
+  ]
+
   return (
     <div className="page-grid venom-page">
       <div className="venom-header">
         <div>
-          <h2 className="venom-title">DECI Decision Framework</h2>
+          <h2 className="venom-title">DECI Decision Operating System</h2>
           <p className="venom-subtitle">
-            Driver &middot; Executor &middot; Contributor &middot; Informed — operational control for every decision
+            Driver &middot; Executor &middot; Contributor &middot; Informed — active control layer for every decision at Spider Grills
           </p>
         </div>
       </div>
 
       {/* View tabs */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-        {([['overview', 'Executive Overview'], ['matrix', 'DECI Matrix'], ['department', 'Departments']] as const).map(([v, label]) => (
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+        {TAB_ITEMS.map(([v, label]) => (
           <button key={v} className={`range-button${view === v ? ' active' : ''}`} onClick={() => setView(v)}>{label}</button>
         ))}
       </div>
@@ -105,11 +139,12 @@ export function Deci() {
 
       {!loading && !error ? (
         <>
-          {view === 'overview' ? <OverviewView overview={overview} decisions={decisions} team={team} onOpenDetail={openDetail} onReload={loadAll} /> : null}
-          {view === 'matrix' ? <MatrixView decisions={decisions} team={team} onOpenDetail={openDetail} onReload={loadAll} filterStatus={filterStatus} setFilterStatus={setFilterStatus} filterDept={filterDept} setFilterDept={setFilterDept} filterPriority={filterPriority} setFilterPriority={setFilterPriority} /> : null}
-          {view === 'detail' && selectedId ? <DetailView decisionId={selectedId} team={team} onBack={() => setView('matrix')} onReload={loadAll} /> : null}
-          {view === 'detail' && !selectedId ? <div className="state-message">Select a decision from the Matrix view.</div> : null}
-          {view === 'department' ? <DepartmentView decisions={decisions} team={team} selectedDept={selectedDept} setSelectedDept={setSelectedDept} onOpenDetail={openDetail} /> : null}
+          {view === 'overview' ? <OverviewView overview={overview} decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} /> : null}
+          {view === 'map' ? <DecisionMapView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} /> : null}
+          {view === 'decisions' ? <ActiveDecisionsView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={loadAll} filterStatus={filterStatus} setFilterStatus={setFilterStatus} filterDept={filterDept} setFilterDept={setFilterDept} filterPriority={filterPriority} setFilterPriority={setFilterPriority} filterDomain={filterDomain} setFilterDomain={setFilterDomain} /> : null}
+          {view === 'detail' && selectedId ? <DetailView decisionId={selectedId} team={team} domains={domains} onBack={() => setView('decisions')} onReload={loadAll} /> : null}
+          {view === 'detail' && !selectedId ? <div className="state-message">Select a decision from the Active Decisions view.</div> : null}
+          {view === 'roleload' ? <RoleLoadView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} /> : null}
         </>
       ) : null}
     </div>
@@ -119,10 +154,11 @@ export function Deci() {
 // ═══════════════════════════════════════════════════════
 // VIEW 1: Executive Overview
 // ═══════════════════════════════════════════════════════
-function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
+function OverviewView({ overview, decisions, team, domains, onOpenDetail, onReload }: {
   overview: DeciOverview | null
   decisions: DeciDecision[]
   team: DeciTeamMember[]
+  domains: DeciDomain[]
   onOpenDetail: (id: string) => void
   onReload: () => void
 }) {
@@ -132,13 +168,18 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
   const complete = decisions.filter(d => d.status === 'complete').length
   const inProgress = decisions.filter(d => d.status === 'in_progress').length
   const stale = decisions.filter(d => d.status !== 'complete' && daysSince(d.updated_at) > 7).length
+  const escalated = decisions.filter(d => d.escalation_status === 'escalated' || d.escalation_status === 'warning').length
+  const crossFunctional = decisions.filter(d => d.cross_functional && d.status !== 'complete').length
 
   const kpiCards = useMemo<KpiCardDef[]>(() => [
-    { label: 'Total Decisions', value: fmtInt(totalDecisions), sub: `${fmtInt(complete)} complete`, truthState: 'canonical' },
-    { label: 'No Driver', value: fmtInt(noDriver), sub: noDriver > 0 ? 'Unmanaged!' : 'All assigned', truthState: noDriver > 0 ? 'stale' : 'canonical', delta: noDriver > 0 ? { text: 'Action needed', direction: 'down' as const } : undefined },
+    { label: 'Total Decisions', value: fmtInt(totalDecisions), sub: `${fmtInt(inProgress)} active, ${fmtInt(complete)} done`, truthState: 'canonical' },
+    { label: 'No Driver', value: fmtInt(noDriver), sub: noDriver > 0 ? 'Governance gap!' : 'All assigned', truthState: noDriver > 0 ? 'stale' : 'canonical', delta: noDriver > 0 ? { text: 'Action needed', direction: 'down' as const } : undefined },
     { label: 'Blocked', value: fmtInt(blocked), sub: 'need escalation', truthState: blocked > 0 ? 'stale' : 'canonical' },
     { label: 'Stale (>7d)', value: fmtInt(stale), sub: 'no update', truthState: stale > 0 ? 'stale' : 'canonical' },
-  ], [totalDecisions, noDriver, blocked, complete, stale])
+  ], [totalDecisions, noDriver, blocked, complete, inProgress, stale])
+
+  // Escalation warnings from overview
+  const escalationWarnings = overview?.escalation_warnings ?? []
 
   // Critical decisions feed
   const criticalDecisions = useMemo(() =>
@@ -154,7 +195,8 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
     for (const d of decisions) {
       if (!d.driver_id && d.status !== 'complete') items.push({ id: d.id, title: d.title, reason: 'No driver assigned', priority: d.priority })
       else if (d.status !== 'complete' && daysSince(d.updated_at) > 7) items.push({ id: d.id, title: d.title, reason: `Stale: ${formatTimeAgo(d.updated_at)}`, priority: d.priority })
-      if (d.contributors.length > 5) items.push({ id: d.id, title: d.title, reason: `${d.contributors.length} contributors (noise)`, priority: d.priority })
+      if (d.contributors && d.contributors.length > 5) items.push({ id: d.id, title: d.title, reason: `${d.contributors.length} contributors (noise)`, priority: d.priority })
+      if (d.escalation_status === 'escalated') items.push({ id: d.id, title: d.title, reason: 'Escalated — needs leadership attention', priority: d.priority })
     }
     return items.slice(0, 10)
   }, [decisions])
@@ -163,7 +205,7 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
   const ownershipMap = useMemo(() => {
     return team.filter(m => m.active).map(m => {
       const driverCount = decisions.filter(d => d.driver_id === m.id).length
-      const executorCount = decisions.filter(d => d.executors.some(e => e.member_id === m.id)).length
+      const executorCount = decisions.filter(d => d.executors?.some(e => e.member_id === m.id)).length
       const blockedCount = decisions.filter(d => d.driver_id === m.id && d.status === 'blocked').length
       return { member: m, driverCount, executorCount, blockedCount, total: driverCount + executorCount }
     }).sort((a, b) => b.total - a.total)
@@ -176,7 +218,23 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
   const [newPriority, setNewPriority] = useState<DeciPriority>('medium')
   const [newDept, setNewDept] = useState('')
   const [newDriverId, setNewDriverId] = useState<number | ''>('')
+  const [newDomainId, setNewDomainId] = useState<number | ''>('')
+  const [newCrossFunctional, setNewCrossFunctional] = useState(false)
+  const [newDueDate, setNewDueDate] = useState('')
   const [creating, setCreating] = useState(false)
+  const [seeding, setSeeding] = useState(false)
+
+  // Auto-fill from domain
+  const selectedDomain = useMemo(() => {
+    if (!newDomainId) return null
+    return domains.find(d => d.id === newDomainId) ?? null
+  }, [newDomainId, domains])
+
+  useEffect(() => {
+    if (selectedDomain) {
+      if (selectedDomain.default_driver_id) setNewDriverId(selectedDomain.default_driver_id)
+    }
+  }, [selectedDomain])
 
   async function handleCreate() {
     if (!newTitle.trim()) return
@@ -188,8 +246,14 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
         priority: newPriority,
         department: newDept || undefined,
         driver_id: newDriverId || undefined,
+        domain_id: newDomainId || undefined,
+        cross_functional: newCrossFunctional,
+        due_date: newDueDate || undefined,
       })
       setNewTitle('')
+      setNewDomainId('')
+      setNewCrossFunctional(false)
+      setNewDueDate('')
       setShowCreate(false)
       onReload()
     } finally {
@@ -197,9 +261,34 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
     }
   }
 
+  async function handleSeedDomains() {
+    setSeeding(true)
+    try {
+      await api.deciSeedDomains()
+      onReload()
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   return (
     <>
       <VenomKpiStrip cards={kpiCards} />
+
+      {/* Seed domains if empty */}
+      {domains.length === 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Setup Required</strong>
+          </div>
+          <p style={{ color: 'var(--muted)', fontSize: 13, margin: '4px 0 12px' }}>
+            Decision Domains haven't been configured yet. Seed the 12 default governance domains to get started.
+          </p>
+          <button className="range-button active" onClick={handleSeedDomains} disabled={seeding}>
+            {seeding ? 'Seeding...' : 'Seed Default Domains'}
+          </button>
+        </section>
+      ) : null}
 
       {/* Create Decision */}
       <section className="card">
@@ -215,6 +304,15 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
               <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Title</label>
               <input type="text" value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Decision title..." style={{ width: '100%' }} className="deci-input" />
             </div>
+            {domains.length > 0 ? (
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Domain</label>
+                <select value={newDomainId} onChange={e => setNewDomainId(e.target.value ? Number(e.target.value) : '')} className="deci-input">
+                  <option value="">— Custom —</option>
+                  {domains.filter(d => d.active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            ) : null}
             <div>
               <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Type</label>
               <select value={newType} onChange={e => setNewType(e.target.value as DeciDecisionType)} className="deci-input">
@@ -241,12 +339,51 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
                 {team.filter(m => m.active).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             </div>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Due Date</label>
+              <input type="date" value={newDueDate} onChange={e => setNewDueDate(e.target.value)} className="deci-input" />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingBottom: 4 }}>
+              <input type="checkbox" checked={newCrossFunctional} onChange={e => setNewCrossFunctional(e.target.checked)} id="cf-check" />
+              <label htmlFor="cf-check" style={{ fontSize: 11, color: 'var(--muted)' }}>Cross-functional</label>
+            </div>
             <button className="range-button active" onClick={handleCreate} disabled={creating || !newTitle.trim()}>
               {creating ? 'Creating...' : 'Create'}
             </button>
           </div>
         ) : null}
+        {showCreate && selectedDomain ? (
+          <div style={{ fontSize: 12, color: 'var(--blue)', padding: '4px 0', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 6 }}>
+            Domain auto-fill: Driver → {selectedDomain.default_driver_name || 'none'} | Escalation → {selectedDomain.escalation_owner_name || 'none'} ({selectedDomain.escalation_threshold_days}d threshold)
+          </div>
+        ) : null}
       </section>
+
+      {/* Escalation Warnings */}
+      {escalationWarnings.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Escalation Alerts</strong>
+            <span className="badge badge-bad">{escalationWarnings.length} decisions overdue</span>
+          </div>
+          <div className="stack-list compact">
+            {escalationWarnings.map(w => (
+              <div key={w.id} className="list-item status-bad" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(w.id)}>
+                <div className="item-head">
+                  <strong>{w.title}</strong>
+                  <div className="inline-badges">
+                    <span className="badge badge-bad">{w.days_stale}d stale (threshold: {w.threshold_days}d)</span>
+                    <span className="badge badge-muted">{w.domain}</span>
+                  </div>
+                </div>
+                {w.escalation_owner ? (
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>Escalation owner: <strong style={{ color: 'var(--orange)' }}>{w.escalation_owner}</strong></div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* Decision Bottleneck Panel */}
       <section className="card">
@@ -257,7 +394,7 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
         {bottlenecks.length > 0 ? (
           <div className="stack-list compact">
             {bottlenecks.map((b, i) => (
-              <div key={`${b.id}-${i}`} className={`list-item status-bad`} style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(b.id)}>
+              <div key={`${b.id}-${i}`} className="list-item status-bad" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(b.id)}>
                 <div className="item-head">
                   <strong>{b.title}</strong>
                   <div className="inline-badges">
@@ -319,12 +456,14 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
                     <div className="inline-badges">
                       <span className={`badge ${priorityBadge(d.priority)}`}>{d.priority}</span>
                       <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus] || d.status}</span>
+                      {d.cross_functional ? <span className="badge badge-warn">Cross-func</span> : null}
                     </div>
                   </div>
                   <div className="venom-mention-meta">
                     <span className="badge badge-neutral">D: {d.driver_name || 'NONE'}</span>
                     <span className="badge badge-muted">{formatTimeAgo(d.updated_at)}</span>
                     {d.department ? <span className="badge badge-muted">{d.department}</span> : null}
+                    {d.due_date ? <span className="badge badge-muted">Due: {formatDate(d.due_date)}</span> : null}
                   </div>
                 </div>
               ))}
@@ -343,11 +482,11 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             <div className="mini-stat">
               <span className="mini-stat-value">{overview.velocity.avg_creation_to_decision_hours != null ? `${Math.round(overview.velocity.avg_creation_to_decision_hours)}h` : '—'}</span>
-              <span className="mini-stat-label">Avg Creation to Decision</span>
+              <span className="mini-stat-label">Avg Creation → Decision</span>
             </div>
             <div className="mini-stat">
               <span className="mini-stat-value">{overview.velocity.avg_decision_to_complete_hours != null ? `${Math.round(overview.velocity.avg_decision_to_complete_hours)}h` : '—'}</span>
-              <span className="mini-stat-label">Avg Decision to Complete</span>
+              <span className="mini-stat-label">Avg Decision → Complete</span>
             </div>
             <div className="mini-stat">
               <span className="mini-stat-value">{fmtInt(overview.velocity.total_decisions)}</span>
@@ -361,6 +500,14 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
               <span className="mini-stat-value">{overview.velocity.total_decisions > 0 ? fmtPct(overview.velocity.completed_decisions / overview.velocity.total_decisions) : '—'}</span>
               <span className="mini-stat-label">Completion Rate</span>
             </div>
+            <div className="mini-stat">
+              <span className="mini-stat-value" style={{ color: escalated > 0 ? 'var(--red)' : undefined }}>{fmtInt(escalated)}</span>
+              <span className="mini-stat-label">Escalations</span>
+            </div>
+            <div className="mini-stat">
+              <span className="mini-stat-value">{fmtInt(crossFunctional)}</span>
+              <span className="mini-stat-label">Cross-Functional</span>
+            </div>
           </div>
         </section>
       ) : null}
@@ -369,37 +516,295 @@ function OverviewView({ overview, decisions, team, onOpenDetail, onReload }: {
 }
 
 // ═══════════════════════════════════════════════════════
-// VIEW 2: DECI Matrix
+// VIEW 2: Company Decision Map
 // ═══════════════════════════════════════════════════════
-function MatrixView({ decisions, team, onOpenDetail, onReload, filterStatus, setFilterStatus, filterDept, setFilterDept, filterPriority, setFilterPriority }: {
+function DecisionMapView({ decisions, team, domains, onOpenDetail, onReload }: {
   decisions: DeciDecision[]
   team: DeciTeamMember[]
+  domains: DeciDomain[]
+  onOpenDetail: (id: string) => void
+  onReload: () => void
+}) {
+  const [seeding, setSeeding] = useState(false)
+
+  // Group domains by category
+  const domainsByCategory = useMemo(() => {
+    const map: Record<string, DeciDomain[]> = {}
+    for (const d of domains.filter(d => d.active)) {
+      const cat = d.category || 'operations'
+      if (!map[cat]) map[cat] = []
+      map[cat].push(d)
+    }
+    return map
+  }, [domains])
+
+  // Category labels
+  const CATEGORY_LABELS: Record<string, string> = {
+    product: 'Product & Innovation',
+    manufacturing: 'Manufacturing & Quality',
+    commercial: 'Commercial & Revenue',
+    cx: 'Customer Experience',
+    engineering: 'Technology & Engineering',
+    operations: 'Operations & Org',
+  }
+
+  // Decisions by domain
+  const decisionsByDomain = useMemo(() => {
+    const map: Record<number, DeciDecision[]> = {}
+    for (const d of decisions) {
+      if (d.domain_id) {
+        if (!map[d.domain_id]) map[d.domain_id] = []
+        map[d.domain_id].push(d)
+      }
+    }
+    return map
+  }, [decisions])
+
+  // Unassigned decisions (no domain)
+  const unassigned = useMemo(() => decisions.filter(d => !d.domain_id), [decisions])
+
+  // Cross-functional hot zones
+  const crossFunctionalDecisions = useMemo(() =>
+    decisions.filter(d => d.cross_functional && d.status !== 'complete')
+      .sort((a, b) => {
+        const pOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+        return (pOrder[a.priority] ?? 9) - (pOrder[b.priority] ?? 9)
+      })
+  , [decisions])
+
+  // Leadership cards
+  const leadershipCards = useMemo(() => {
+    const leaders: { member: DeciTeamMember; domainCount: number; activeDecisions: number; blockedDecisions: number }[] = []
+    for (const m of team.filter(t => t.active)) {
+      const driverDomains = domains.filter(d => d.default_driver_id === m.id).length
+      const escalationDomains = domains.filter(d => d.escalation_owner_id === m.id).length
+      if (driverDomains > 0 || escalationDomains > 0) {
+        const active = decisions.filter(d => d.driver_id === m.id && d.status !== 'complete').length
+        const blocked = decisions.filter(d => d.driver_id === m.id && d.status === 'blocked').length
+        leaders.push({ member: m, domainCount: driverDomains + escalationDomains, activeDecisions: active, blockedDecisions: blocked })
+      }
+    }
+    return leaders.sort((a, b) => b.domainCount - a.domainCount)
+  }, [team, domains, decisions])
+
+  async function handleSeedDomains() {
+    setSeeding(true)
+    try {
+      await api.deciSeedDomains()
+      onReload()
+    } finally {
+      setSeeding(false)
+    }
+  }
+
+  if (domains.length === 0) {
+    return (
+      <section className="card">
+        <div className="venom-panel-head"><strong>Decision Map</strong></div>
+        <p style={{ color: 'var(--muted)', fontSize: 13, margin: '8px 0 16px' }}>
+          No decision domains configured. Seed the default 12 governance domains to build your company decision map.
+        </p>
+        <button className="range-button active" onClick={handleSeedDomains} disabled={seeding}>
+          {seeding ? 'Seeding...' : 'Seed Default Domains'}
+        </button>
+      </section>
+    )
+  }
+
+  return (
+    <>
+      {/* Leadership Cards */}
+      {leadershipCards.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Leadership Accountability</strong>
+            <span className="venom-panel-hint">{leadershipCards.length} domain owners</span>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {leadershipCards.map(l => (
+              <div key={l.member.id} style={{
+                padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 8, minWidth: 160,
+                borderLeft: l.blockedDecisions > 0 ? '3px solid var(--red)' : '3px solid var(--green)',
+              }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{l.member.name}</div>
+                {l.member.role ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{l.member.role}</div> : null}
+                {l.member.department ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{l.member.department}</div> : null}
+                <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 12 }}>
+                  <span>{l.domainCount} domain{l.domainCount !== 1 ? 's' : ''}</span>
+                  <span style={{ color: 'var(--green)' }}>{l.activeDecisions} active</span>
+                  {l.blockedDecisions > 0 ? <span style={{ color: 'var(--red)', fontWeight: 700 }}>{l.blockedDecisions} blocked</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Domain Table by Category */}
+      {Object.entries(domainsByCategory).map(([category, categoryDomains]) => (
+        <section key={category} className="card">
+          <div className="venom-panel-head">
+            <strong style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: DOMAIN_CATEGORY_COLORS[category] || '#6b7280', display: 'inline-block' }} />
+              {CATEGORY_LABELS[category] || category}
+            </strong>
+            <span className="venom-panel-hint">{categoryDomains.length} domains</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Domain</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Default Driver</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Escalation Owner</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Threshold</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Active</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categoryDomains.map(dom => {
+                  const domDecisions = decisionsByDomain[dom.id] || []
+                  const activeCount = domDecisions.filter(d => d.status !== 'complete').length
+                  return (
+                    <tr key={dom.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <td style={{ padding: '6px 8px' }}>
+                        <div style={{ fontWeight: 500 }}>{dom.name}</div>
+                        {dom.description ? <div style={{ fontSize: 11, color: 'var(--muted)', maxWidth: 400 }}>{dom.description}</div> : null}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: dom.default_driver_name ? undefined : 'var(--orange)' }}>
+                        {dom.default_driver_name || 'Unassigned'}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: dom.escalation_owner_name ? undefined : 'var(--muted)' }}>
+                        {dom.escalation_owner_name || '—'}
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>{dom.escalation_threshold_days}d</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px', color: activeCount > 0 ? 'var(--green)' : 'var(--muted)' }}>{activeCount}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>{domDecisions.length}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
+
+      {/* Cross-Functional Hot Zones */}
+      {crossFunctionalDecisions.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Cross-Functional Hot Zones</strong>
+            <span className="badge badge-warn">{crossFunctionalDecisions.length} active</span>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px' }}>
+            Decisions that span multiple departments or domains — high coordination risk.
+          </p>
+          <div className="stack-list compact">
+            {crossFunctionalDecisions.map(d => (
+              <div key={d.id} className={`list-item status-${statusColor(d.status)}`} style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
+                <div className="item-head">
+                  <strong>{d.title}</strong>
+                  <div className="inline-badges">
+                    <span className={`badge ${priorityBadge(d.priority)}`}>{d.priority}</span>
+                    <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus]}</span>
+                    <span className="badge badge-warn">Cross-functional</span>
+                  </div>
+                </div>
+                <div className="venom-mention-meta">
+                  <span className="badge badge-neutral">D: {d.driver_name || 'NONE'}</span>
+                  {d.department ? <span className="badge badge-muted">{d.department}</span> : null}
+                  {d.due_date ? <span className="badge badge-muted">Due: {formatDate(d.due_date)}</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Unassigned Decisions */}
+      {unassigned.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Decisions Without Domain</strong>
+            <span className="badge badge-warn">{unassigned.length} unassigned</span>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px' }}>
+            These decisions haven't been assigned to a governance domain. Assign them to enable escalation rules and ownership tracking.
+          </p>
+          <div className="stack-list compact">
+            {unassigned.slice(0, 10).map(d => (
+              <div key={d.id} className={`list-item status-${statusColor(d.status)}`} style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
+                <div className="item-head">
+                  <strong>{d.title}</strong>
+                  <div className="inline-badges">
+                    <span className={`badge ${priorityBadge(d.priority)}`}>{d.priority}</span>
+                    <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus]}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {unassigned.length > 10 ? <div className="state-message">...and {unassigned.length - 10} more</div> : null}
+          </div>
+        </section>
+      ) : null}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// VIEW 3: Active Decisions
+// ═══════════════════════════════════════════════════════
+function ActiveDecisionsView({ decisions, team, domains, onOpenDetail, onReload, filterStatus, setFilterStatus, filterDept, setFilterDept, filterPriority, setFilterPriority, filterDomain, setFilterDomain }: {
+  decisions: DeciDecision[]
+  team: DeciTeamMember[]
+  domains: DeciDomain[]
   onOpenDetail: (id: string) => void
   onReload: () => void
   filterStatus: string; setFilterStatus: (s: string) => void
   filterDept: string; setFilterDept: (s: string) => void
   filterPriority: string; setFilterPriority: (s: string) => void
+  filterDomain: string; setFilterDomain: (s: string) => void
 }) {
+  const domainMap = useMemo(() => {
+    const map: Record<number, string> = {}
+    for (const d of domains) map[d.id] = d.name
+    return map
+  }, [domains])
+
   const filtered = useMemo(() => {
     let result = [...decisions]
     if (filterStatus) result = result.filter(d => d.status === filterStatus)
     if (filterDept) result = result.filter(d => d.department === filterDept)
     if (filterPriority) result = result.filter(d => d.priority === filterPriority)
+    if (filterDomain) result = result.filter(d => d.domain_id?.toString() === filterDomain)
     return result.sort((a, b) => {
-      // Sort by priority (critical first), then by status (blocked first)
       const pOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
       const sOrder: Record<string, number> = { blocked: 0, in_progress: 1, not_started: 2, complete: 3 }
       const pDiff = (pOrder[a.priority] ?? 9) - (pOrder[b.priority] ?? 9)
       if (pDiff !== 0) return pDiff
       return (sOrder[a.status] ?? 9) - (sOrder[b.status] ?? 9)
     })
-  }, [decisions, filterStatus, filterDept, filterPriority])
+  }, [decisions, filterStatus, filterDept, filterPriority, filterDomain])
+
+  // Inline status update
+  const [updatingId, setUpdatingId] = useState<string | null>(null)
+
+  async function handleQuickStatusUpdate(id: string, newStatus: DeciStatus) {
+    setUpdatingId(id)
+    try {
+      await api.deciUpdateDecision(id, { status: newStatus })
+      onReload()
+    } finally {
+      setUpdatingId(null)
+    }
+  }
 
   return (
     <>
       <section className="card">
         <div className="venom-panel-head">
-          <strong>DECI Matrix</strong>
+          <strong>Active Decisions</strong>
           <span className="venom-panel-hint">{filtered.length} of {decisions.length} decisions</span>
         </div>
         {/* Filters */}
@@ -416,27 +821,36 @@ function MatrixView({ decisions, team, onOpenDetail, onReload, filterStatus, set
             <option value="">All priorities</option>
             {Object.entries(PRIORITY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          {domains.length > 0 ? (
+            <select value={filterDomain} onChange={e => setFilterDomain(e.target.value)} className="deci-input">
+              <option value="">All domains</option>
+              {domains.filter(d => d.active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          ) : null}
         </div>
 
         {filtered.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 700 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 900 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
                   <th style={{ textAlign: 'left', padding: '8px' }}>Decision</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>Domain</th>
                   <th style={{ textAlign: 'left', padding: '8px' }}>Driver</th>
                   <th style={{ textAlign: 'left', padding: '8px' }}>Executors</th>
-                  <th style={{ textAlign: 'left', padding: '8px' }}>Contributors</th>
                   <th style={{ textAlign: 'center', padding: '8px' }}>Status</th>
                   <th style={{ textAlign: 'center', padding: '8px' }}>Priority</th>
+                  <th style={{ textAlign: 'center', padding: '8px' }}>Due</th>
                   <th style={{ textAlign: 'right', padding: '8px' }}>Updated</th>
+                  <th style={{ textAlign: 'center', padding: '8px', width: 100 }}>Quick</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(d => {
                   const isStale = d.status !== 'complete' && daysSince(d.updated_at) > 7
                   const noDriver = !d.driver_id
-                  const noExecutor = d.executors.length === 0 && d.status === 'in_progress'
+                  const noExecutor = (d.executors?.length ?? 0) === 0 && d.status === 'in_progress'
+                  const isOverdue = d.due_date && new Date(d.due_date) < new Date() && d.status !== 'complete'
                   const rowStyle: React.CSSProperties = {
                     borderBottom: '1px solid rgba(255,255,255,0.06)',
                     cursor: 'pointer',
@@ -445,17 +859,21 @@ function MatrixView({ decisions, team, onOpenDetail, onReload, filterStatus, set
                   return (
                     <tr key={d.id} style={rowStyle} onClick={() => onOpenDetail(d.id)}>
                       <td style={{ padding: '8px', fontWeight: 500 }}>
-                        {d.title}
-                        {d.department ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{d.department}</span> : null}
+                        <div>{d.title}</div>
+                        <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                          {d.department ? <span style={{ fontSize: 10, color: 'var(--muted)' }}>{d.department}</span> : null}
+                          {d.cross_functional ? <span className="badge badge-warn" style={{ fontSize: 9, padding: '0 4px' }}>CF</span> : null}
+                          {d.escalation_status && d.escalation_status !== 'none' ? <span className={`badge ${escalationBadge(d.escalation_status)}`} style={{ fontSize: 9, padding: '0 4px' }}>{d.escalation_status}</span> : null}
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px', fontSize: 11, color: 'var(--muted)' }}>
+                        {d.domain_id ? (domainMap[d.domain_id] || `Domain #${d.domain_id}`) : '—'}
                       </td>
                       <td style={{ padding: '8px', color: noDriver ? 'var(--red)' : undefined, fontWeight: noDriver ? 700 : 400 }}>
                         {d.driver_name || (noDriver ? 'MISSING' : '—')}
                       </td>
                       <td style={{ padding: '8px' }}>
-                        {d.executors.length > 0 ? d.executors.map(e => e.member_name).join(', ') : <span style={{ color: noExecutor ? 'var(--orange)' : 'var(--muted)' }}>{noExecutor ? 'MISSING' : '—'}</span>}
-                      </td>
-                      <td style={{ padding: '8px', color: d.contributors.length > 5 ? 'var(--orange)' : undefined }}>
-                        {d.contributors.length > 0 ? `${d.contributors.length} people` : '—'}
+                        {(d.executors?.length ?? 0) > 0 ? d.executors.map(e => e.member_name).join(', ') : <span style={{ color: noExecutor ? 'var(--orange)' : 'var(--muted)' }}>{noExecutor ? 'MISSING' : '—'}</span>}
                       </td>
                       <td style={{ textAlign: 'center', padding: '8px' }}>
                         <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus] || d.status}</span>
@@ -463,8 +881,24 @@ function MatrixView({ decisions, team, onOpenDetail, onReload, filterStatus, set
                       <td style={{ textAlign: 'center', padding: '8px' }}>
                         <span className={`badge ${priorityBadge(d.priority)}`}>{d.priority}</span>
                       </td>
+                      <td style={{ textAlign: 'center', padding: '8px', color: isOverdue ? 'var(--red)' : 'var(--muted)', fontWeight: isOverdue ? 700 : 400, fontSize: 11 }}>
+                        {d.due_date ? formatDate(d.due_date) : '—'}
+                      </td>
                       <td style={{ textAlign: 'right', padding: '8px', color: isStale ? 'var(--orange)' : 'var(--muted)' }}>
                         {formatTimeAgo(d.updated_at)}
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '4px' }} onClick={e => e.stopPropagation()}>
+                        {d.status !== 'complete' ? (
+                          <select
+                            value={d.status}
+                            onChange={e => handleQuickStatusUpdate(d.id, e.target.value as DeciStatus)}
+                            disabled={updatingId === d.id}
+                            className="deci-input"
+                            style={{ fontSize: 10, padding: '2px 4px', width: 90 }}
+                          >
+                            {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                          </select>
+                        ) : <span className="badge badge-good" style={{ fontSize: 10 }}>Done</span>}
                       </td>
                     </tr>
                   )
@@ -474,16 +908,53 @@ function MatrixView({ decisions, team, onOpenDetail, onReload, filterStatus, set
           </div>
         ) : <div className="state-message">No decisions match these filters. Create a new decision from the Executive Overview.</div>}
       </section>
+
+      {/* Status Summary Bar */}
+      {decisions.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Status Distribution</strong>
+          </div>
+          <div style={{ display: 'flex', height: 28, borderRadius: 6, overflow: 'hidden', marginTop: 4 }}>
+            {(['not_started', 'in_progress', 'blocked', 'complete'] as DeciStatus[]).map(s => {
+              const count = decisions.filter(d => d.status === s).length
+              const pct = decisions.length > 0 ? (count / decisions.length) * 100 : 0
+              if (pct === 0) return null
+              const colors: Record<string, string> = { not_started: '#6b7280', in_progress: '#f59e0b', blocked: '#ef4444', complete: '#10b981' }
+              return (
+                <div key={s} style={{ width: `${pct}%`, background: colors[s], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#fff', fontWeight: 600, minWidth: pct > 5 ? 40 : 0 }}
+                  title={`${STATUS_LABELS[s]}: ${count} (${Math.round(pct)}%)`}>
+                  {pct > 10 ? `${STATUS_LABELS[s]} ${count}` : pct > 5 ? `${count}` : ''}
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+            {(['not_started', 'in_progress', 'blocked', 'complete'] as DeciStatus[]).map(s => {
+              const count = decisions.filter(d => d.status === s).length
+              const colors: Record<string, string> = { not_started: '#6b7280', in_progress: '#f59e0b', blocked: '#ef4444', complete: '#10b981' }
+              return (
+                <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors[s] }} />
+                  <span style={{ color: 'var(--muted)' }}>{STATUS_LABELS[s]}:</span>
+                  <strong>{count}</strong>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      ) : null}
     </>
   )
 }
 
 // ═══════════════════════════════════════════════════════
-// VIEW 3: Decision Detail
+// VIEW 4: Decision Detail
 // ═══════════════════════════════════════════════════════
-function DetailView({ decisionId, team, onBack, onReload }: {
+function DetailView({ decisionId, team, domains, onBack, onReload }: {
   decisionId: string
   team: DeciTeamMember[]
+  domains: DeciDomain[]
   onBack: () => void
   onReload: () => void
 }) {
@@ -496,12 +967,20 @@ function DetailView({ decisionId, team, onBack, onReload }: {
   const [editPriority, setEditPriority] = useState<DeciPriority>('medium')
   const [editDriverId, setEditDriverId] = useState<number | ''>('')
   const [editDept, setEditDept] = useState('')
+  const [editDomainId, setEditDomainId] = useState<number | ''>('')
+  const [editCrossFunctional, setEditCrossFunctional] = useState(false)
+  const [editDueDate, setEditDueDate] = useState('')
+  const [editEscalation, setEditEscalation] = useState('none')
 
   // Log entry
   const [logText, setLogText] = useState('')
   const [logBy, setLogBy] = useState('')
   const [logNotes, setLogNotes] = useState('')
   const [addingLog, setAddingLog] = useState(false)
+
+  // KPI link
+  const [kpiName, setKpiName] = useState('')
+  const [addingKpi, setAddingKpi] = useState(false)
 
   // Role assignment
   const [addRole, setAddRole] = useState<'executor' | 'contributor' | 'informed'>('executor')
@@ -516,6 +995,10 @@ function DetailView({ decisionId, team, onBack, onReload }: {
       setEditPriority(d.priority)
       setEditDriverId(d.driver_id || '')
       setEditDept(d.department || '')
+      setEditDomainId(d.domain_id || '')
+      setEditCrossFunctional(d.cross_functional ?? false)
+      setEditDueDate(d.due_date || '')
+      setEditEscalation(d.escalation_status || 'none')
     } finally {
       setLoading(false)
     }
@@ -523,11 +1006,15 @@ function DetailView({ decisionId, team, onBack, onReload }: {
 
   useEffect(() => { void loadDecision() }, [loadDecision])
 
+  const domainName = useMemo(() => {
+    if (!decision?.domain_id) return null
+    return domains.find(d => d.id === decision.domain_id)?.name ?? null
+  }, [decision, domains])
+
   async function handleSave() {
     if (!decision) return
     setSaving(true)
     try {
-      // Validate: can't go to in_progress without driver
       if (editStatus === 'in_progress' && !editDriverId) {
         alert('Cannot set status to In Progress without a Driver assigned.')
         setSaving(false)
@@ -538,6 +1025,10 @@ function DetailView({ decisionId, team, onBack, onReload }: {
         priority: editPriority,
         driver_id: editDriverId || null,
         department: editDept || null,
+        domain_id: editDomainId || null,
+        cross_functional: editCrossFunctional,
+        due_date: editDueDate || null,
+        escalation_status: editEscalation,
       })
       await loadDecision()
       onReload()
@@ -559,6 +1050,26 @@ function DetailView({ decisionId, team, onBack, onReload }: {
     }
   }
 
+  async function handleAddKpiLink() {
+    if (!decision || !kpiName.trim()) return
+    setAddingKpi(true)
+    try {
+      await api.deciAddKpiLink(decision.id, { kpi_name: kpiName.trim() })
+      setKpiName('')
+      await loadDecision()
+    } finally {
+      setAddingKpi(false)
+    }
+  }
+
+  async function handleRemoveKpiLink(linkId: number) {
+    if (!decision) return
+    try {
+      await api.deciDeleteKpiLink(decision.id, linkId)
+      await loadDecision()
+    } catch { /* ignore */ }
+  }
+
   async function handleAddAssignment() {
     if (!decision || !addMemberId) return
     try {
@@ -567,7 +1078,7 @@ function DetailView({ decisionId, team, onBack, onReload }: {
         priority: decision.priority,
         driver_id: decision.driver_id,
         department: decision.department,
-        [`${addRole}s`]: [...(decision[`${addRole}s` as keyof DeciDecision] as Array<{member_id: number}>|| []).map(a => a.member_id), Number(addMemberId)],
+        [`${addRole}s`]: [...(decision[`${addRole}s` as keyof DeciDecision] as Array<{member_id: number}> || []).map(a => a.member_id), Number(addMemberId)],
       }
       await api.deciUpdateDecision(decision.id, body)
       setAddMemberId('')
@@ -579,11 +1090,14 @@ function DetailView({ decisionId, team, onBack, onReload }: {
   if (loading) return <Card title="Loading"><div className="state-message">Loading decision...</div></Card>
   if (!decision) return <Card title="Not Found"><div className="state-message">Decision not found.</div></Card>
 
+  const isOverdue = decision.due_date && new Date(decision.due_date) < new Date() && decision.status !== 'complete'
+  const isStale = decision.status !== 'complete' && daysSince(decision.updated_at) > 7
+
   return (
     <>
       {/* Back button */}
       <div style={{ marginBottom: 8 }}>
-        <button className="range-button" onClick={onBack}>&larr; Back to Matrix</button>
+        <button className="range-button" onClick={onBack}>&larr; Back to Active Decisions</button>
       </div>
 
       {/* Header */}
@@ -594,9 +1108,19 @@ function DetailView({ decisionId, team, onBack, onReload }: {
             <span className={`badge badge-${statusColor(decision.status)}`}>{STATUS_LABELS[decision.status] || decision.status}</span>
             <span className={`badge ${priorityBadge(decision.priority)}`}>{decision.priority}</span>
             <span className="badge badge-muted">{TYPE_LABELS[decision.type] || decision.type}</span>
+            {decision.cross_functional ? <span className="badge badge-warn">Cross-functional</span> : null}
+            {decision.escalation_status && decision.escalation_status !== 'none' ? <span className={`badge ${escalationBadge(decision.escalation_status)}`}>{decision.escalation_status}</span> : null}
           </div>
         </div>
         {decision.description ? <p style={{ color: 'var(--muted)', fontSize: 13, margin: '8px 0 0' }}>{decision.description}</p> : null}
+        <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 12, color: 'var(--muted)', flexWrap: 'wrap' }}>
+          {domainName ? <span>Domain: <strong>{domainName}</strong></span> : null}
+          {decision.department ? <span>Dept: <strong>{decision.department}</strong></span> : null}
+          {decision.due_date ? <span style={{ color: isOverdue ? 'var(--red)' : undefined }}>Due: <strong>{formatDate(decision.due_date)}</strong>{isOverdue ? ' (OVERDUE)' : ''}</span> : null}
+          <span>Created: {formatDate(decision.created_at)}</span>
+          <span style={{ color: isStale ? 'var(--orange)' : undefined }}>Updated: {formatTimeAgo(decision.updated_at)}{isStale ? ' (STALE)' : ''}</span>
+          {decision.resolved_at ? <span style={{ color: 'var(--green)' }}>Resolved: {formatDate(decision.resolved_at)}</span> : null}
+        </div>
       </section>
 
       {/* DECI Assignment Block + Edit Controls */}
@@ -615,28 +1139,28 @@ function DetailView({ decisionId, team, onBack, onReload }: {
           </div>
           {/* Executors */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>E — EXECUTORS ({decision.executors.length})</div>
-            {decision.executors.map(e => (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>E — EXECUTORS ({decision.executors?.length ?? 0})</div>
+            {decision.executors?.map(e => (
               <span key={e.id} className="badge badge-good" style={{ marginRight: 4, marginBottom: 4 }}>{e.member_name}</span>
             ))}
-            {decision.executors.length === 0 ? <span style={{ fontSize: 12, color: 'var(--orange)' }}>None assigned</span> : null}
+            {(decision.executors?.length ?? 0) === 0 ? <span style={{ fontSize: 12, color: 'var(--orange)' }}>None assigned</span> : null}
           </div>
           {/* Contributors */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>C — CONTRIBUTORS ({decision.contributors.length})</div>
-            {decision.contributors.map(c => (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>C — CONTRIBUTORS ({decision.contributors?.length ?? 0})</div>
+            {decision.contributors?.map(c => (
               <span key={c.id} className="badge badge-neutral" style={{ marginRight: 4, marginBottom: 4 }}>{c.member_name}</span>
             ))}
-            {decision.contributors.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>None</span> : null}
-            {decision.contributors.length > 5 ? <span className="badge badge-warn" style={{ marginLeft: 4 }}>Too many!</span> : null}
+            {(decision.contributors?.length ?? 0) === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>None</span> : null}
+            {(decision.contributors?.length ?? 0) > 5 ? <span className="badge badge-warn" style={{ marginLeft: 4 }}>Too many contributors — governance risk!</span> : null}
           </div>
           {/* Informed */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>I — INFORMED ({decision.informed.length})</div>
-            {decision.informed.map(inf => (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 4 }}>I — INFORMED ({decision.informed?.length ?? 0})</div>
+            {decision.informed?.map(inf => (
               <span key={inf.id} className="badge badge-muted" style={{ marginRight: 4, marginBottom: 4 }}>{inf.member_name}</span>
             ))}
-            {decision.informed.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>None</span> : null}
+            {(decision.informed?.length ?? 0) === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>None</span> : null}
           </div>
           {/* Add assignment */}
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 10 }}>
@@ -677,6 +1201,31 @@ function DetailView({ decisionId, team, onBack, onReload }: {
                 {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             </div>
+            {domains.length > 0 ? (
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Domain</label>
+                <select value={editDomainId} onChange={e => setEditDomainId(e.target.value ? Number(e.target.value) : '')} className="deci-input" style={{ width: '100%' }}>
+                  <option value="">— None —</option>
+                  {domains.filter(d => d.active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            ) : null}
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Due Date</label>
+              <input type="date" value={editDueDate} onChange={e => setEditDueDate(e.target.value)} className="deci-input" style={{ width: '100%' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Escalation Status</label>
+              <select value={editEscalation} onChange={e => setEditEscalation(e.target.value)} className="deci-input" style={{ width: '100%' }}>
+                <option value="none">None</option>
+                <option value="warning">Warning</option>
+                <option value="escalated">Escalated</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={editCrossFunctional} onChange={e => setEditCrossFunctional(e.target.checked)} id="cf-detail" />
+              <label htmlFor="cf-detail" style={{ fontSize: 12, color: 'var(--muted)' }}>Cross-functional decision</label>
+            </div>
             <button className="range-button active" onClick={handleSave} disabled={saving} style={{ width: '100%', marginTop: 8 }}>
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
@@ -685,10 +1234,21 @@ function DetailView({ decisionId, team, onBack, onReload }: {
           {/* KPI Links */}
           <div style={{ marginTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Linked KPIs</div>
-            {decision.kpi_links.map(link => (
-              <span key={link.id} className="badge badge-good" style={{ marginRight: 4, marginBottom: 4 }}>{link.kpi_name}</span>
+            {decision.kpi_links?.map(link => (
+              <span key={link.id} className="badge badge-good" style={{ marginRight: 4, marginBottom: 4, cursor: 'pointer' }} onClick={() => handleRemoveKpiLink(link.id)} title="Click to remove">
+                {link.kpi_name} &times;
+              </span>
             ))}
-            {decision.kpi_links.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>No KPIs linked</span> : null}
+            {(decision.kpi_links?.length ?? 0) === 0 ? <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>No KPIs linked</div> : null}
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <select value={kpiName} onChange={e => setKpiName(e.target.value)} className="deci-input">
+                <option value="">Select KPI...</option>
+                {['Revenue', 'Orders', 'AOV', 'Sessions', 'Conversion Rate', 'MER', 'CSAT', 'First Response Time', 'Resolution Time', 'Ticket Volume', 'SLA Breach Rate', 'Cook Success Rate', 'Disconnect Rate'].map(k => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
+              </select>
+              <button className="range-button active" onClick={handleAddKpiLink} disabled={addingKpi || !kpiName}>Link</button>
+            </div>
           </div>
         </section>
       </div>
@@ -697,9 +1257,9 @@ function DetailView({ decisionId, team, onBack, onReload }: {
       <section className="card">
         <div className="venom-panel-head">
           <strong>Decision Timeline</strong>
-          <span className="venom-panel-hint">{decision.logs.length} entries</span>
+          <span className="venom-panel-hint">{decision.logs?.length ?? 0} entries</span>
         </div>
-        {decision.logs.length > 0 ? (
+        {(decision.logs?.length ?? 0) > 0 ? (
           <div className="stack-list compact">
             {decision.logs.slice().reverse().map(log => (
               <div key={log.id} className="list-item status-muted">
@@ -738,91 +1298,137 @@ function DetailView({ decisionId, team, onBack, onReload }: {
           </button>
         </div>
       </section>
+
+      {/* Action Panel */}
+      <section className="card">
+        <div className="venom-panel-head">
+          <strong>Automation Flags</strong>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {!decision.driver_id ? (
+            <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', fontSize: 12 }}>
+              <strong style={{ color: 'var(--red)' }}>Missing Driver</strong>
+              <div style={{ color: 'var(--muted)', marginTop: 2 }}>This decision has no owner. Assign a Driver before moving to In Progress.</div>
+            </div>
+          ) : null}
+          {isStale ? (
+            <div style={{ padding: '8px 12px', background: 'rgba(245,158,11,0.1)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12 }}>
+              <strong style={{ color: 'var(--orange)' }}>Stale Decision</strong>
+              <div style={{ color: 'var(--muted)', marginTop: 2 }}>No updates in {daysSince(decision.updated_at)} days. Add a log entry or update the status.</div>
+            </div>
+          ) : null}
+          {isOverdue ? (
+            <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', fontSize: 12 }}>
+              <strong style={{ color: 'var(--red)' }}>Overdue</strong>
+              <div style={{ color: 'var(--muted)', marginTop: 2 }}>Due date was {formatDate(decision.due_date)}. Update the deadline or complete the decision.</div>
+            </div>
+          ) : null}
+          {(decision.contributors?.length ?? 0) > 5 ? (
+            <div style={{ padding: '8px 12px', background: 'rgba(245,158,11,0.1)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12 }}>
+              <strong style={{ color: 'var(--orange)' }}>Contributor Bloat</strong>
+              <div style={{ color: 'var(--muted)', marginTop: 2 }}>{decision.contributors.length} contributors is too many. Reduce to 5 or fewer to maintain decision clarity.</div>
+            </div>
+          ) : null}
+          {!decision.driver_id && !isStale && !isOverdue && (decision.contributors?.length ?? 0) <= 5 ? (
+            <div style={{ color: 'var(--green)', fontSize: 12 }}>No automation flags. This decision is well-managed.</div>
+          ) : null}
+          {decision.driver_id && !isStale && !isOverdue && (decision.contributors?.length ?? 0) <= 5 ? (
+            <div style={{ color: 'var(--green)', fontSize: 12 }}>No automation flags. This decision is well-managed.</div>
+          ) : null}
+        </div>
+      </section>
     </>
   )
 }
 
 // ═══════════════════════════════════════════════════════
-// VIEW 4: Department Dashboards
+// VIEW 5: Role Load & Accountability
 // ═══════════════════════════════════════════════════════
-function DepartmentView({ decisions, team, selectedDept, setSelectedDept, onOpenDetail }: {
+function RoleLoadView({ decisions, team, domains, onOpenDetail }: {
   decisions: DeciDecision[]
   team: DeciTeamMember[]
-  selectedDept: string
-  setSelectedDept: (d: string) => void
+  domains: DeciDomain[]
   onOpenDetail: (id: string) => void
 }) {
-  const deptDecisions = useMemo(() =>
-    decisions.filter(d => d.department === selectedDept)
-      .sort((a, b) => {
-        const pOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
-        return (pOrder[a.priority] ?? 9) - (pOrder[b.priority] ?? 9)
-      })
-  , [decisions, selectedDept])
+  // Build role load data
+  const roleLoadData = useMemo(() => {
+    return team.filter(m => m.active).map(m => {
+      const driving = decisions.filter(d => d.driver_id === m.id)
+      const executing = decisions.filter(d => d.executors?.some(e => e.member_id === m.id))
+      const contributing = decisions.filter(d => d.contributors?.some(c => c.member_id === m.id))
+      const informed = decisions.filter(d => d.informed?.some(inf => inf.member_id === m.id))
 
-  const active = deptDecisions.filter(d => d.status !== 'complete')
-  const complete = deptDecisions.filter(d => d.status === 'complete')
-  const blocked = deptDecisions.filter(d => d.status === 'blocked')
-  const noDriver = deptDecisions.filter(d => !d.driver_id && d.status !== 'complete')
+      const activeDriving = driving.filter(d => d.status !== 'complete')
+      const activeExecuting = executing.filter(d => d.status !== 'complete')
+      const blockedDriving = driving.filter(d => d.status === 'blocked')
 
-  // Department member list
-  const deptMembers = useMemo(() =>
-    team.filter(m => m.active && m.department === selectedDept)
-  , [team, selectedDept])
+      const totalLoad = activeDriving.length + activeExecuting.length
+      const isOverloaded = activeDriving.length > 5 || totalLoad > 10
+
+      // Domain responsibilities
+      const ownedDomains = domains.filter(d => d.default_driver_id === m.id)
+      const escalationDomains = domains.filter(d => d.escalation_owner_id === m.id)
+
+      return {
+        member: m,
+        driving: driving.length,
+        activeDriving: activeDriving.length,
+        executing: executing.length,
+        activeExecuting: activeExecuting.length,
+        contributing: contributing.length,
+        informed: informed.length,
+        blocked: blockedDriving.length,
+        totalLoad,
+        isOverloaded,
+        ownedDomains: ownedDomains.length,
+        escalationDomains: escalationDomains.length,
+        completionRate: driving.length > 0 ? driving.filter(d => d.status === 'complete').length / driving.length : 0,
+      }
+    }).sort((a, b) => b.totalLoad - a.totalLoad)
+  }, [team, decisions, domains])
+
+  // Max load for bar scaling
+  const maxLoad = Math.max(1, ...roleLoadData.map(r => r.totalLoad))
+
+  // Department heatmap
+  const deptHeatmap = useMemo(() => {
+    const depts = [...new Set(decisions.map(d => d.department).filter(Boolean))] as string[]
+    return depts.map(dept => {
+      const deptDecisions = decisions.filter(d => d.department === dept)
+      const active = deptDecisions.filter(d => d.status !== 'complete').length
+      const blocked = deptDecisions.filter(d => d.status === 'blocked').length
+      const noDriver = deptDecisions.filter(d => !d.driver_id && d.status !== 'complete').length
+      const stale = deptDecisions.filter(d => d.status !== 'complete' && daysSince(d.updated_at) > 7).length
+      return { dept, total: deptDecisions.length, active, blocked, noDriver, stale }
+    }).sort((a, b) => b.active - a.active)
+  }, [decisions])
+
+  // Overload alerts
+  const overloaded = roleLoadData.filter(r => r.isOverloaded)
 
   return (
     <>
-      {/* Department selector */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        {DEPARTMENTS.map(d => (
-          <button key={d} className={`range-button${selectedDept === d ? ' active' : ''}`} onClick={() => setSelectedDept(d)}>{d}</button>
-        ))}
-      </div>
-
-      {/* Department KPIs */}
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
-        <div className="mini-stat">
-          <span className="mini-stat-value">{fmtInt(deptDecisions.length)}</span>
-          <span className="mini-stat-label">Total Decisions</span>
-        </div>
-        <div className="mini-stat">
-          <span className="mini-stat-value">{fmtInt(active.length)}</span>
-          <span className="mini-stat-label">Active</span>
-        </div>
-        <div className="mini-stat">
-          <span className="mini-stat-value" style={{ color: blocked.length > 0 ? 'var(--red)' : undefined }}>{fmtInt(blocked.length)}</span>
-          <span className="mini-stat-label">Blocked</span>
-        </div>
-        <div className="mini-stat">
-          <span className="mini-stat-value">{fmtInt(complete.length)}</span>
-          <span className="mini-stat-label">Complete</span>
-        </div>
-        <div className="mini-stat">
-          <span className="mini-stat-value" style={{ color: noDriver.length > 0 ? 'var(--red)' : undefined }}>{fmtInt(noDriver.length)}</span>
-          <span className="mini-stat-label">No Driver</span>
-        </div>
-      </div>
-
-      {/* Accountability flags */}
-      {(noDriver.length > 0 || blocked.length > 0) ? (
+      {/* Overload Alerts */}
+      {overloaded.length > 0 ? (
         <section className="card">
           <div className="venom-panel-head">
-            <strong>Accountability Flags</strong>
+            <strong>Overload Alerts</strong>
+            <span className="badge badge-bad">{overloaded.length} overloaded</span>
           </div>
           <div className="stack-list compact">
-            {noDriver.map(d => (
-              <div key={d.id} className="list-item status-bad" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
+            {overloaded.map(r => (
+              <div key={r.member.id} className="list-item status-bad">
                 <div className="item-head">
-                  <strong>{d.title}</strong>
-                  <span className="badge badge-bad">Missing Driver</span>
+                  <strong>{r.member.name}</strong>
+                  <div className="inline-badges">
+                    <span className="badge badge-bad">{r.totalLoad} active items</span>
+                    <span className="badge badge-warn">{r.activeDriving} driving</span>
+                    {r.blocked > 0 ? <span className="badge badge-bad">{r.blocked} blocked</span> : null}
+                  </div>
                 </div>
-              </div>
-            ))}
-            {blocked.map(d => (
-              <div key={d.id} className="list-item status-bad" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
-                <div className="item-head">
-                  <strong>{d.title}</strong>
-                  <span className="badge badge-bad">Blocked</span>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+                  {r.activeDriving > 5 ? 'Driving too many decisions — redistribute ownership. ' : ''}
+                  {r.totalLoad > 10 ? 'Total decision load exceeds recommended threshold of 10.' : ''}
                 </div>
               </div>
             ))}
@@ -830,72 +1436,154 @@ function DepartmentView({ decisions, team, selectedDept, setSelectedDept, onOpen
         </section>
       ) : null}
 
-      {/* Active Decisions with DECI overlay */}
+      {/* Role Load Table */}
       <section className="card">
         <div className="venom-panel-head">
-          <strong>Active Decisions — {selectedDept}</strong>
-          <span className="venom-panel-hint">{active.length} items</span>
+          <strong>Role Load by Person</strong>
+          <span className="venom-panel-hint">{roleLoadData.length} team members</span>
         </div>
-        {active.length > 0 ? (
-          <div className="stack-list compact">
-            {active.map(d => (
-              <div key={d.id} className={`list-item status-${statusColor(d.status)}`} style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
-                <div className="item-head">
-                  <strong>{d.title}</strong>
-                  <div className="inline-badges">
-                    <span className={`badge ${priorityBadge(d.priority)}`}>{d.priority}</span>
-                    <span className={`badge badge-${statusColor(d.status)}`}>{STATUS_LABELS[d.status as DeciStatus]}</span>
-                  </div>
-                </div>
-                <div className="venom-mention-meta" style={{ marginTop: 6 }}>
-                  <span className="badge badge-neutral" style={{ fontWeight: 600 }}>D: {d.driver_name || 'NONE'}</span>
-                  {d.executors.length > 0 ? <span className="badge badge-good">E: {d.executors.map(e => e.member_name).join(', ')}</span> : null}
-                  {d.contributors.length > 0 ? <span className="badge badge-muted">C: {d.contributors.length} people</span> : null}
-                  <span className="badge badge-muted">{formatTimeAgo(d.updated_at)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : <div className="state-message">No active decisions for {selectedDept}. Create one from the Executive Overview.</div>}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 800 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                <th style={{ textAlign: 'left', padding: '8px' }}>Person</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Driving</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Executing</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Contributing</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Blocked</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Domains</th>
+                <th style={{ textAlign: 'center', padding: '8px' }}>Completion</th>
+                <th style={{ textAlign: 'left', padding: '8px', width: 200 }}>Load</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roleLoadData.map(r => (
+                <tr key={r.member.id} style={{
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                  background: r.isOverloaded ? 'rgba(239,68,68,0.06)' : undefined,
+                }}>
+                  <td style={{ padding: '8px' }}>
+                    <div style={{ fontWeight: 600 }}>{r.member.name}</div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                      {[r.member.role, r.member.department].filter(Boolean).join(' · ')}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'center', padding: '8px', fontWeight: r.activeDriving > 5 ? 700 : 400, color: r.activeDriving > 5 ? 'var(--red)' : undefined }}>
+                    {r.activeDriving}<span style={{ color: 'var(--muted)', fontWeight: 400 }}>/{r.driving}</span>
+                  </td>
+                  <td style={{ textAlign: 'center', padding: '8px' }}>
+                    {r.activeExecuting}<span style={{ color: 'var(--muted)' }}>/{r.executing}</span>
+                  </td>
+                  <td style={{ textAlign: 'center', padding: '8px', color: 'var(--muted)' }}>{r.contributing}</td>
+                  <td style={{ textAlign: 'center', padding: '8px', color: r.blocked > 0 ? 'var(--red)' : 'var(--muted)', fontWeight: r.blocked > 0 ? 700 : 400 }}>{r.blocked}</td>
+                  <td style={{ textAlign: 'center', padding: '8px' }}>
+                    {r.ownedDomains > 0 ? <span style={{ color: 'var(--green)' }}>{r.ownedDomains} owned</span> : null}
+                    {r.ownedDomains > 0 && r.escalationDomains > 0 ? ' · ' : ''}
+                    {r.escalationDomains > 0 ? <span style={{ color: 'var(--orange)' }}>{r.escalationDomains} esc.</span> : null}
+                    {r.ownedDomains === 0 && r.escalationDomains === 0 ? <span style={{ color: 'var(--muted)' }}>—</span> : null}
+                  </td>
+                  <td style={{ textAlign: 'center', padding: '8px' }}>
+                    {r.driving > 0 ? (
+                      <span style={{ color: r.completionRate > 0.5 ? 'var(--green)' : r.completionRate > 0 ? 'var(--orange)' : 'var(--muted)' }}>
+                        {fmtPct(r.completionRate)}
+                      </span>
+                    ) : <span style={{ color: 'var(--muted)' }}>—</span>}
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, height: 14, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden', display: 'flex' }}>
+                        <div style={{
+                          width: `${(r.activeDriving / maxLoad) * 100}%`,
+                          background: r.activeDriving > 5 ? '#ef4444' : '#3b82f6',
+                          height: '100%',
+                        }} title={`Driving: ${r.activeDriving}`} />
+                        <div style={{
+                          width: `${(r.activeExecuting / maxLoad) * 100}%`,
+                          background: '#10b981',
+                          height: '100%',
+                        }} title={`Executing: ${r.activeExecuting}`} />
+                      </div>
+                      <span style={{ fontSize: 11, minWidth: 20, textAlign: 'right', color: r.isOverloaded ? 'var(--red)' : 'var(--muted)' }}>{r.totalLoad}</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11, color: 'var(--muted)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, background: '#3b82f6', borderRadius: 2, display: 'inline-block' }} /> Driving
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, background: '#10b981', borderRadius: 2, display: 'inline-block' }} /> Executing
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, background: '#ef4444', borderRadius: 2, display: 'inline-block' }} /> Overloaded (&gt;5 driving)
+          </span>
+          <span>Active/Total shown in table</span>
+        </div>
       </section>
 
-      {/* Team in this department */}
-      {deptMembers.length > 0 ? (
+      {/* Department Heatmap */}
+      {deptHeatmap.length > 0 ? (
         <section className="card">
           <div className="venom-panel-head">
-            <strong>{selectedDept} Team</strong>
+            <strong>Department Decision Health</strong>
           </div>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {deptMembers.map(m => {
-              const driving = decisions.filter(d => d.driver_id === m.id).length
-              const executing = decisions.filter(d => d.executors.some(e => e.member_id === m.id)).length
-              return (
-                <div key={m.id} style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 8, minWidth: 120 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</div>
-                  {m.role ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>{m.role}</div> : null}
-                  <div style={{ fontSize: 11, marginTop: 4 }}>
-                    <span style={{ color: 'var(--green)' }}>{driving} driving</span> &middot; <span>{executing} executing</span>
-                  </div>
-                </div>
-              )
-            })}
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Department</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Total</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Active</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Blocked</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>No Driver</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Stale</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px' }}>Health</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deptHeatmap.map(row => {
+                  const issues = row.blocked + row.noDriver + row.stale
+                  const health = row.active > 0 ? Math.max(0, 1 - issues / row.active) : 1
+                  const healthColor = health >= 0.8 ? 'var(--green)' : health >= 0.5 ? 'var(--orange)' : 'var(--red)'
+                  return (
+                    <tr key={row.dept} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <td style={{ padding: '6px 8px', fontWeight: 500 }}>{row.dept}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>{row.total}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>{row.active}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px', color: row.blocked > 0 ? 'var(--red)' : 'var(--muted)' }}>{row.blocked}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px', color: row.noDriver > 0 ? 'var(--red)' : 'var(--muted)' }}>{row.noDriver}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px', color: row.stale > 0 ? 'var(--orange)' : 'var(--muted)' }}>{row.stale}</td>
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>
+                        <span style={{ fontWeight: 700, color: healthColor }}>{fmtPct(health)}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         </section>
       ) : null}
 
-      {/* Completed */}
-      {complete.length > 0 ? (
+      {/* Unowned Members */}
+      {roleLoadData.filter(r => r.totalLoad === 0 && (r.ownedDomains > 0 || r.escalationDomains > 0)).length > 0 ? (
         <section className="card">
           <div className="venom-panel-head">
-            <strong>Completed</strong>
-            <span className="venom-panel-hint">{complete.length} done</span>
+            <strong>Domain Owners with No Active Decisions</strong>
           </div>
           <div className="stack-list compact">
-            {complete.slice(0, 5).map(d => (
-              <div key={d.id} className="list-item status-good" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(d.id)}>
+            {roleLoadData.filter(r => r.totalLoad === 0 && (r.ownedDomains > 0 || r.escalationDomains > 0)).map(r => (
+              <div key={r.member.id} className="list-item status-muted">
                 <div className="item-head">
-                  <strong>{d.title}</strong>
-                  <span className="badge badge-good">Complete</span>
+                  <strong>{r.member.name}</strong>
+                  <div className="inline-badges">
+                    <span className="badge badge-muted">{r.ownedDomains} domain{r.ownedDomains !== 1 ? 's' : ''}</span>
+                    <span className="badge badge-muted">0 active decisions</span>
+                  </div>
                 </div>
               </div>
             ))}

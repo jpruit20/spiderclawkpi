@@ -9,7 +9,7 @@ import { CompareToolbar } from '../components/CompareToolbar'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
-import { filterRowsByRange, type RangeState } from '../lib/range'
+import { buildPresetRange, filterRowsByRange, type RangeState } from '../lib/range'
 import { priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
 import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
 
@@ -52,7 +52,10 @@ export function RevenueEngine() {
       setError(null)
       try {
         const rows = await api.dailyKpis()
-        if (!cancelled) setAllRows(rows)
+        if (!cancelled) {
+          setAllRows(rows)
+          setRange(buildPresetRange('7d', rows))
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load revenue data')
       } finally {

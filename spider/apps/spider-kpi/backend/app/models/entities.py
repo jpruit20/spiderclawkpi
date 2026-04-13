@@ -548,6 +548,23 @@ class DeciTeamMember(TimestampMixin, Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class DeciDomain(TimestampMixin, Base):
+    __tablename__ = "deci_domains"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="operations")
+    default_driver_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("deci_team_members.id"), nullable=True)
+    default_executor_ids: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    default_contributor_ids: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    default_informed_ids: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    escalation_owner_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("deci_team_members.id"), nullable=True)
+    escalation_threshold_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class DeciDecision(TimestampMixin, Base):
     __tablename__ = "deci_decisions"
 
@@ -560,6 +577,12 @@ class DeciDecision(TimestampMixin, Base):
     department: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     driver_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("deci_team_members.id"), nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    domain_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("deci_domains.id"), nullable=True, index=True)
+    escalation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="none")  # none, warning, escalated
+    escalated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cross_functional: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DeciAssignment(TimestampMixin, Base):

@@ -770,6 +770,45 @@ export interface MarketIntelligence {
 }
 
 // DECI Decision Framework
+export interface DeciDomain {
+  id: number
+  name: string
+  description?: string
+  category: string
+  default_driver_id?: number
+  default_driver_name?: string
+  default_executor_ids: number[]
+  default_contributor_ids: number[]
+  default_informed_ids: number[]
+  escalation_owner_id?: number
+  escalation_owner_name?: string
+  escalation_threshold_days: number
+  active: boolean
+  sort_order: number
+  decision_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface DeciDomainStat {
+  id: number
+  name: string
+  category: string
+  total_decisions: number
+  active_decisions: number
+  default_driver_name?: string
+  escalation_owner_name?: string
+}
+
+export interface DeciEscalationWarning {
+  id: string
+  title: string
+  domain: string
+  days_stale: number
+  threshold_days: number
+  escalation_owner?: string
+}
+
 export interface DeciTeamMember {
   id: number
   name: string
@@ -815,6 +854,12 @@ export interface DeciDecision {
   department?: string
   driver_id?: number
   driver_name?: string
+  domain_id?: number
+  escalation_status: string
+  escalated_at?: string
+  cross_functional: boolean
+  due_date?: string
+  resolved_at?: string
   executors: DeciAssignment[]
   contributors: DeciAssignment[]
   informed: DeciAssignment[]
@@ -857,6 +902,8 @@ export interface DeciOverview {
     total_decisions: number
     completed_decisions: number
   }
+  domain_stats: DeciDomainStat[]
+  escalation_warnings: DeciEscalationWarning[]
 }
 
 export interface GithubIssue {

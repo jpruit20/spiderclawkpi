@@ -112,6 +112,20 @@ def run_syncs() -> None:
         if amazon_due and not _already_running(db, "amazon"):
             from app.ingestion.connectors.amazon import sync_amazon
             any_success = _successful_result(sync_amazon(db)) or any_success
+        latest_youtube_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "youtube")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        youtube_due = (
+            latest_youtube_run is None
+            or latest_youtube_run.started_at is None
+            or latest_youtube_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=360)
+        )
+        if youtube_due and not _already_running(db, "youtube"):
+            from app.ingestion.connectors.youtube import sync_youtube
+            any_success = _successful_result(sync_youtube(db)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)

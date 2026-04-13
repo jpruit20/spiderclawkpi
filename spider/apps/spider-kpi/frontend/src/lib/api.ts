@@ -7,6 +7,7 @@ import type {
   CXSnapshotResponse,
   DataQualityResponse,
   DeciDecision,
+  DeciDomain,
   DeciOverview,
   DeciTeamMember,
   DiagnosticItem,
@@ -255,6 +256,25 @@ export const api = {
     }).then(r => r.json()),
   deciOverview: (signal?: AbortSignal) =>
     request<DeciOverview>('/api/deci/overview', { signal }),
+  // DECI Domains
+  deciDomains: (signal?: AbortSignal) =>
+    request<DeciDomain[]>('/api/deci/domains', { signal }),
+  deciCreateDomain: (body: Record<string, unknown>) =>
+    fetch(`${API_BASE}/api/deci/domains`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json() as Promise<DeciDomain>),
+  deciUpdateDomain: (id: number, body: Record<string, unknown>) =>
+    fetch(`${API_BASE}/api/deci/domains/${id}`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json() as Promise<DeciDomain>),
+  deciSeedDomains: () =>
+    fetch(`${API_BASE}/api/deci/domains/seed`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<{ seeded: number; domains: string[] }>),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),
