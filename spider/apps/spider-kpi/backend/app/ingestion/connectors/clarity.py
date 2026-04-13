@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 TIMEOUT_SECONDS = 45
 MAX_RETRIES = 3
-BASE_BACKOFF_SECONDS = 30
+BASE_BACKOFF_SECONDS = 60
 
 # Metric keys returned by the Clarity export API
 METRIC_KEYS = [
@@ -295,8 +295,8 @@ def sync_clarity(db: Session, days: int = 3) -> dict[str, Any]:
 
     try:
         url = _clarity_url()
-        params = {'numOfDays': max(1, min(days, 3)), 'dimension1': 'URL'}
-        headers = {'Authorization': f'Bearer {settings.clarity_api_token}', 'Accept': 'application/json'}
+        params = {'numOfDays': 1, 'dimension1': 'URL'}
+        headers = {'Authorization': f'Bearer {settings.clarity_api_token}', 'Accept': 'application/json', 'User-Agent': 'Spider-KPI/1.0'}
 
         # Retry loop with exponential backoff for rate-limiting (429)
         response = None

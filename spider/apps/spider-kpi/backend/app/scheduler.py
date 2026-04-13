@@ -22,12 +22,25 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 def _already_running(db, source_name: str) -> bool:
-    return db.execute(
+    """Check if a connector is already running. Auto-expires stale runs (>30 min)."""
+    run = db.execute(
         select(SourceSyncRun)
         .where(SourceSyncRun.source_name == source_name, SourceSyncRun.status == "running")
         .order_by(desc(SourceSyncRun.started_at))
         .limit(1)
-    ).scalars().first() is not None
+    ).scalars().first()
+    if run is None:
+        return False
+    started_at = run.started_at or run.created_at
+    if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=30):
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        run.error_message = "Stale running sync auto-expired by scheduler (>30 min)."
+        run.metadata_json = {**(run.metadata_json or {}), "auto_expired": True, "expired_at": datetime.now(timezone.utc).isoformat()}
+        db.add(run)
+        db.commit()
+        return False  # allow new run to start
+    return True
 
 
 def _successful_result(result: dict | None) -> bool:
@@ -83,7 +96,7 @@ def run_syncs() -> None:
             or latest_clarity_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.clarity_sync_interval_minutes)
         )
         if clarity_due and not _already_running(db, "clarity"):
-            any_success = _successful_result(sync_clarity(db, days=3)) or any_success
+            any_success = _successful_result(sync_clarity(db, days=1)) or any_success
         latest_reddit_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "reddit")
