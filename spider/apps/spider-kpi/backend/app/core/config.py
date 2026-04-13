@@ -17,7 +17,6 @@ class Settings(BaseSettings):
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
-        enable_decoding=False,
     )
 
     @field_validator("cors_origins", mode="before")
@@ -173,13 +172,30 @@ class Settings(BaseSettings):
     github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))
 
     # AI assistant
-    ai_assistant_enabled: bool = False
-    ai_assistant_model: str = "sonnet"
+    ai_assistant_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices('AI_ASSISTANT_ENABLED')
+    )
+    ai_assistant_model: str = Field(
+        default="sonnet",
+        validation_alias=AliasChoices('AI_ASSISTANT_MODEL')
+    )
     anthropic_api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices('ANTHROPIC_API_KEY'))
     workspace_root: str = Field(
         default="",
         validation_alias=AliasChoices('WORKSPACE_ROOT', 'KPI_WORKSPACE_ROOT'),
     )
+
+    @field_validator("ai_assistant_enabled", mode="before")
+    @classmethod
+    def parse_ai_assistant_enabled(cls, value: Any):
+        """Parse various boolean string representations from env vars."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            cleaned = value.strip().strip('"').strip("'").lower()
+            return cleaned in ('true', '1', 'yes', 'on', 'enabled')
+        return bool(value)
 
     @field_validator("workspace_root", mode="before")
     @classmethod
