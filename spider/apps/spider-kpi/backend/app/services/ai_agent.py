@@ -136,7 +136,6 @@ async def run_cli_turn(
         "--output-format", "stream-json",
         "--model", "sonnet",
         "--bare",
-        "--dangerously-skip-permissions",
         "--append-system-prompt", system_prompt,
         "--allowedTools", "Read,Edit,Glob,Grep",
         "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
