@@ -210,7 +210,7 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             error_codes[str(code)] += 1
         if (item.disconnect_events or 0) > 0:
             issue_patterns["disconnect_cluster"] += 1
-        if (item.temp_stability_score or 1.0) < 0.75:
+        if (item.temp_stability_score or 1.0) < 0.68:
             issue_patterns["temp_instability"] += 1
         if (item.manual_override_rate or 0.0) >= 0.2:
             issue_patterns["high_manual_override"] += 1

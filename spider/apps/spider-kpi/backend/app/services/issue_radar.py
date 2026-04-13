@@ -225,8 +225,12 @@ def _severity(ticket: FreshdeskTicket, theme: str) -> str:
     priority = str(ticket.priority or "").lower()
     if priority in {"4", "urgent", "high"}:
         return "high"
-    if theme in {"damaged_on_arrival", "temperature_control_venom", "ignition_startup"}:
+    # Only auto-escalate product safety themes (damaged/ignition), not temperature
+    # which can include normal questions about temp settings during preheat, etc.
+    if theme in {"damaged_on_arrival", "ignition_startup"}:
         return "high"
+    if theme == "temperature_control_venom" and priority in {"3", "medium"}:
+        return "medium"
     if priority in {"3", "medium"}:
         return "medium"
     return "low"
@@ -562,8 +566,27 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all() if telemetry_ready else []
     if telemetry_daily_rows and telemetry_sessions:
         latest = telemetry_daily_rows[-1]
+
+        # --- Historical comparison for temperature stability ---
+        # Compare latest stability against 30-day and 7-day averages to detect
+        # actual degradation vs. normal operating range.
+        stability_history = [row.temp_stability_score for row in telemetry_daily_rows if row.temp_stability_score is not None]
+        stability_30d_avg = round(sum(stability_history[-30:]) / max(len(stability_history[-30:]), 1), 4) if stability_history else 0.0
+        stability_7d_avg = round(sum(stability_history[-7:]) / max(len(stability_history[-7:]), 1), 4) if stability_history else 0.0
+        stability_degraded = latest.temp_stability_score < stability_30d_avg - 0.05  # degraded = dropped >5pp from historical avg
+
+        # --- Cross-reference temperature telemetry with Freshdesk ticket volume ---
+        # Only flag temperature as an elevated issue if support tickets corroborate.
+        temp_ticket_cluster = next(
+            (c for c in clusters if (c.details_json or {}).get("theme") == "temperature_control_venom"),
+            None,
+        )
+        temp_ticket_count_7d = (temp_ticket_cluster.details_json or {}).get("recent_7d", 0) if temp_ticket_cluster else 0
+        temp_tickets_rising = temp_ticket_cluster and (temp_ticket_cluster.details_json or {}).get("trend_label") == "rising"
+
         rising_disconnects = latest.disconnect_rate >= 0.12
-        unstable_temp = latest.temp_stability_score <= 0.78
+        # Temperature instability: must be below threshold AND either degraded vs history OR corroborated by tickets
+        unstable_temp = latest.temp_stability_score <= 0.72 and (stability_degraded or temp_ticket_count_7d >= 3)
         high_override = latest.manual_override_rate >= 0.18
         if rising_disconnects or unstable_temp or high_override:
             if rising_disconnects and unstable_temp:
@@ -576,8 +599,10 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
                 telemetry_summary = "Disconnect rate is elevated across recent connected sessions."
             elif unstable_temp:
                 telemetry_theme = "temp_instability"
-                telemetry_title = "Temperature Instability"
-                telemetry_summary = "Temperature stability score is below target and suggests control/performance drift."
+                telemetry_title = "Temperature Instability (Post-Target)"
+                corroboration = f" Corroborated by {temp_ticket_count_7d} support tickets in 7d." if temp_ticket_count_7d >= 3 else ""
+                degradation = f" Score degraded {round((stability_30d_avg - latest.temp_stability_score) * 100, 1)}pp from 30d avg." if stability_degraded else ""
+                telemetry_summary = f"Post-target temperature stability score ({round(latest.temp_stability_score, 2)}) is below threshold after filtering preheat data.{degradation}{corroboration}"
             else:
                 telemetry_theme = "manual_override_spike"
                 telemetry_title = "Manual Override Spike"
@@ -585,14 +610,27 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
 
             firmware_counter = Counter((row.firmware_version or "unknown") for row in telemetry_sessions)
             grill_counter = Counter((row.grill_type or "unknown") for row in telemetry_sessions)
+
+            # Priority score: temperature only escalates if corroborated by tickets or historical degradation
+            temp_priority = (1 - latest.temp_stability_score) * 100 * 1.8
+            if unstable_temp and temp_tickets_rising:
+                temp_priority *= 1.3  # boost when both telemetry + tickets agree
+            elif unstable_temp and not stability_degraded:
+                temp_priority *= 0.6  # dampen if within historical norms
+
             telemetry_details = {
                 "theme": telemetry_theme,
                 "source": "aws_telemetry",
                 "truth_state": "estimated",
-                "confidence_caveat": "Telemetry reflects only the observed bounded DynamoDB slice, not full-fleet canonical completeness.",
+                "confidence_caveat": "Stability scores reflect post-target holding performance only (preheat excluded). Telemetry reflects only the observed bounded DynamoDB slice, not full-fleet canonical completeness.",
                 "evidence": [
                     f"disconnect_rate={round(latest.disconnect_rate, 4)}",
-                    f"temp_stability_score={round(latest.temp_stability_score, 4)}",
+                    f"temp_stability_score={round(latest.temp_stability_score, 4)} (post-target)",
+                    f"stability_30d_avg={stability_30d_avg}",
+                    f"stability_7d_avg={stability_7d_avg}",
+                    f"stability_degraded={stability_degraded}",
+                    f"temp_tickets_7d={temp_ticket_count_7d}",
+                    f"temp_tickets_rising={temp_tickets_rising}",
                     f"manual_override_rate={round(latest.manual_override_rate, 4)}",
                     f"firmware_health_score={round(latest.firmware_health_score, 4)}",
                     f"session_reliability_score={round(latest.session_reliability_score, 4)}",
@@ -600,22 +638,36 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
                 "owner": "Kyle",
                 "disconnect_rate": round(latest.disconnect_rate, 4),
                 "temp_stability_score": round(latest.temp_stability_score, 4),
+                "stability_30d_avg": stability_30d_avg,
+                "stability_7d_avg": stability_7d_avg,
+                "stability_degraded": stability_degraded,
+                "temp_ticket_count_7d": temp_ticket_count_7d,
+                "temp_tickets_rising": bool(temp_tickets_rising),
                 "manual_override_rate": round(latest.manual_override_rate, 4),
                 "firmware_health_score": round(latest.firmware_health_score, 4),
                 "session_reliability_score": round(latest.session_reliability_score, 4),
                 "affected_firmware_versions": [name for name, _ in firmware_counter.most_common(5)],
                 "affected_grill_types": [name for name, _ in grill_counter.most_common(5)],
-                "recommended_action": "Slice failures by firmware and grill type, then prioritize the dominant failure cohort.",
+                "recommended_action": "Slice failures by firmware and grill type, then prioritize the dominant failure cohort. Cross-reference with Freshdesk temperature complaints to isolate root cause.",
                 "priority_reason_summary": telemetry_summary,
-                "priority_score": round(max(latest.disconnect_rate * 100 * 2.2, (1 - latest.temp_stability_score) * 100 * 1.8, latest.manual_override_rate * 100 * 1.6), 2),
-                "trend_label": "rising",
+                "priority_score": round(max(latest.disconnect_rate * 100 * 2.2, temp_priority, latest.manual_override_rate * 100 * 1.6), 2),
+                "trend_label": "rising" if stability_degraded or temp_tickets_rising else "stable",
                 "impact_type": ["support_burden", "conversion"],
             }
+            # Severity: require BOTH telemetry anomaly AND ticket corroboration for "high"
+            telemetry_severity = "medium"
+            if latest.disconnect_rate >= 0.18:
+                telemetry_severity = "high"
+            elif latest.temp_stability_score <= 0.65 and temp_ticket_count_7d >= 3:
+                telemetry_severity = "high"  # genuinely bad stability + tickets confirm
+            elif latest.temp_stability_score <= 0.70 and temp_tickets_rising:
+                telemetry_severity = "high"  # bad stability + rising ticket trend
+
             telemetry_cluster = IssueCluster(
                 cluster_key=f"aws_telemetry:{telemetry_theme}",
                 title=telemetry_title,
                 source_count=1,
-                severity="high" if (latest.disconnect_rate >= 0.18 or latest.temp_stability_score <= 0.7) else "medium",
+                severity=telemetry_severity,
                 confidence=0.82,
                 owner_team="Product / Firmware",
                 status="open",

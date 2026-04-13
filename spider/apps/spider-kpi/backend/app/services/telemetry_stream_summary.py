@@ -134,7 +134,8 @@ def _derive_sessions(device_id: str, events: list[TelemetryStreamEvent], gap_min
         stabilize_ts = None
         overshoot = False
         stable_hits = 0
-        temp_deltas: list[float] = []
+        temp_deltas: list[float] = []          # ALL deltas (for diagnostics)
+        post_target_deltas: list[float] = []   # Only post-target deltas (for stability)
         probe_counts: list[int] = []
         probe_failures = 0
         pit_probe_deltas: list[float] = []
@@ -146,6 +147,9 @@ def _derive_sessions(device_id: str, events: list[TelemetryStreamEvent], gap_min
                 temp_deltas.append(abs(delta))
                 if current_temp >= target_temp - 10:
                     reached_target = True
+                # Only track deltas for stability scoring AFTER reaching target
+                if reached_target:
+                    post_target_deltas.append(abs(delta))
                 if current_temp > target_temp + 15:
                     overshoot = True
                 if abs(delta) <= 15:
@@ -177,7 +181,9 @@ def _derive_sessions(device_id: str, events: list[TelemetryStreamEvent], gap_min
         stabilized = stabilize_ts is not None
         completed = reached_target and stabilized and bool(last.engaged is False or duration_seconds >= 1800)
         session_success = reached_target and stabilized and not disconnect_proxy and errors == 0
-        stability_score = max(0.0, min(1.0, 1 - (_percentile(temp_deltas, 0.5) or 0) / 50)) if temp_deltas and target_temp else (1.0 if reached_target else 0.0)
+        # Use post-target deltas for stability scoring (excludes preheat ramp-up)
+        scoring_deltas = post_target_deltas if post_target_deltas else temp_deltas
+        stability_score = max(0.0, min(1.0, 1 - (_percentile(scoring_deltas, 0.5) or 0) / 50)) if scoring_deltas and target_temp else (1.0 if reached_target else 0.0)
         overshoot_rate = 1.0 if overshoot else 0.0
         time_to_stabilize_seconds = int((stabilize_ts - start_ts).total_seconds()) if stabilize_ts and start_ts else None
 

@@ -658,10 +658,10 @@ export function ProductEngineeringDivision() {
                     <Link to="/analysis/temp-curves" className="analysis-link">View curves &#x2197;</Link>
                   </div>
                   <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-                    These metrics measure how well the Venom maintains the target temperature. Stabilization time depends on charcoal type, ambient conditions, and how the fire was started — treat as directional, not absolute.
+                    Post-target stability: only measures temperature hold <em>after</em> reaching the target zone. Preheat ramp-up is excluded. Stabilization time depends on charcoal type, ambient conditions, and fire-start method — treat as directional, not absolute.
                   </p>
                   <div className="venom-bar-list">
-                    <div className="venom-bar-row"><span className="venom-bar-label">Stability score</span><BarIndicator value={(stabilityScore || 0) * 100} max={100} color="var(--green)" /><span className="venom-bar-value">{fmtDecimal(stabilityScore)}</span></div>
+                    <div className="venom-bar-row"><span className="venom-bar-label">Stability (post-target)</span><BarIndicator value={(stabilityScore || 0) * 100} max={100} color="var(--green)" /><span className="venom-bar-value">{fmtDecimal(stabilityScore)}</span></div>
                     <div className="venom-bar-row"><span className="venom-bar-label">Overshoot rate</span><BarIndicator value={(overshootRate || 0) * 100} max={100} color="var(--orange)" /><span className="venom-bar-value">{fmtPct(overshootRate, 0)}</span></div>
                     <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p50)</span><BarIndicator value={p50Stabilize || 0} max={p95Stabilize || 1200} color="var(--blue)" /><span className="venom-bar-value">{fmtDuration(p50Stabilize)}</span></div>
                     <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p95)</span><BarIndicator value={p95Stabilize || 0} max={p95Stabilize || 1200} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95Stabilize)}</span></div>
@@ -669,7 +669,7 @@ export function ProductEngineeringDivision() {
                     <div className="venom-bar-row"><span className="venom-bar-label">Cook p95</span><BarIndicator value={p95CookDuration || 0} max={p95CookDuration || 14400} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95CookDuration)}</span></div>
                   </div>
                   <small className="venom-panel-footer">
-                    Stability = how tightly temp stays within target band after reaching setpoint. Stabilize time = seconds from grill-lit detection (&gt;150F) to 3 consecutive readings within +/-15F of target. Varies by charcoal, ambient temp, fire-start method.
+                    Stability = how tightly temp stays within target band <strong>after reaching setpoint</strong> (preheat excluded). Stabilize time = seconds from grill-lit detection (&gt;150°F) to 3 consecutive readings within ±15°F of target. Varies by charcoal, ambient temp, fire-start method.
                   </small>
                 </section>
 

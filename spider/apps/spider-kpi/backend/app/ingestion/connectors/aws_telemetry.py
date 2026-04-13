@@ -345,6 +345,29 @@ def _stability_score(values: list[float], target_temp: float | None) -> float:
     return round(score, 4)
 
 
+def _post_target_temps(samples: list[dict[str, Any]], target_temp: float | None) -> list[float]:
+    """Return temperature values only AFTER the grill first reaches within a
+    stabilization window of the target temperature.  This excludes the preheat
+    ramp-up phase so stability scoring reflects actual holding performance,
+    not the inherent delta during warmup."""
+    if not samples or not target_temp:
+        return []
+    window = max(10.0, target_temp * 0.06)  # 6% of target or 10°F
+    reached = False
+    post_target: list[float] = []
+    for sample in samples:
+        current = sample.get('current_temp')
+        if current is None:
+            continue
+        if not reached:
+            if abs(current - target_temp) <= window:
+                reached = True
+                post_target.append(current)
+        else:
+            post_target.append(current)
+    return post_target
+
+
 def _time_to_stabilization(samples: list[dict[str, Any]], target_temp: float | None) -> int | None:
     if not samples or not target_temp:
         return None
@@ -434,7 +457,14 @@ def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str
         if (samples[idx]['sample_time'] - samples[idx - 1]['sample_time']).total_seconds() > 180:
             stale_gaps += 1
     manual_overrides = 0
-    stability = _stability_score([value for value in current_temps if value is not None], target_temp)
+    # Post-target stability: only score samples after grill reaches target zone
+    # This avoids penalising the score during normal preheat ramp-up
+    post_target = _post_target_temps(samples, target_temp)
+    if post_target:
+        stability = _stability_score(post_target, target_temp)
+    else:
+        # Never reached target — use full session (will naturally be low)
+        stability = _stability_score([value for value in current_temps if value is not None], target_temp)
     time_to_stable = _time_to_stabilization(samples, target_temp)
     firmware_health = round(max(0.0, 1.0 - min(0.8, stale_gaps * 0.1 + len(non_zero_errors) * 0.08 + max(0.0, 0.35 - stability))), 4)
     manual_override_rate = round(manual_overrides / max(len(samples), 1), 4)

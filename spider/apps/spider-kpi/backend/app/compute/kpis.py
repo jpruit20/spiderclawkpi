@@ -344,9 +344,13 @@ def recompute_diagnostics(db: Session) -> None:
         if conversion_change < -10.0:
             for cluster in issue_clusters:
                 details = cluster.get("details_json", {})
+                # Only link temperature_control_venom if ticket trend is rising AND
+                # there are meaningful ticket counts (>=3 in 7d) — avoids false attribution
                 if details.get("trend_label") == "rising" and details.get("theme") == "temperature_control_venom":
-                    issue_link = details
-                    primary_root_cause = "temperature_control_venom"
+                    recent_7d = details.get("recent_7d", 0)
+                    if recent_7d >= 3:
+                        issue_link = details
+                        primary_root_cause = "temperature_control_venom"
                     break
         if aov_change < -10.0 and issue_link is None:
             for cluster in issue_clusters:
