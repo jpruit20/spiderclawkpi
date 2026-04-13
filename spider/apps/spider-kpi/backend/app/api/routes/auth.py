@@ -125,11 +125,13 @@ def serialize_user(user: AuthUser | None) -> dict[str, Any] | None:
     if user is None:
         return None
     from app.services.ai_scoping import get_user_divisions
+    ai_divisions = get_user_divisions(user.email, bool(user.is_admin))
     return {
         "id": user.id,
         "email": user.email,
         "is_admin": bool(user.is_admin),
-        "ai_divisions": get_user_divisions(user.email, bool(user.is_admin)),
+        "ai_divisions": ai_divisions,
+        "ai_enabled": bool(getattr(settings, "ai_assistant_enabled", False) and ai_divisions),
     }
 
 

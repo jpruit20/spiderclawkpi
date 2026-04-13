@@ -3,6 +3,7 @@ export interface AuthUserSummary {
   email: string
   is_admin: boolean
   ai_divisions?: string[]
+  ai_enabled?: boolean
 }
 
 export interface AuthStatusResponse {

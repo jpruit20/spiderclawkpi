@@ -37,6 +37,9 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const aiDivisions = user?.ai_divisions ?? []
+  const aiEnabled = user?.ai_enabled ?? false
+
+  // Only render if user has AI divisions assigned
   if (aiDivisions.length === 0) return null
 
   // Auto-detect division from current route
@@ -46,7 +49,7 @@ export function ChatPanel() {
     : selectedDivision || (aiDivisions.length === 1 ? aiDivisions[0] : '')
 
   const label = activeDivision ? (DIVISION_LABELS[activeDivision] || activeDivision) : 'Select a page'
-  const canSend = activeDivision && input.trim() && !streaming
+  const canSend = aiEnabled && activeDivision && input.trim() && !streaming
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -229,7 +232,15 @@ export function ChatPanel() {
       <div className="chat-messages" ref={scrollRef}>
         {messages.length === 0 && (
           <div className="chat-empty">
-            {activeDivision ? (
+            {!aiEnabled ? (
+              <>
+                <strong>AI Assistant is not available</strong>
+                <p style={{ marginTop: '0.5rem', opacity: 0.8 }}>
+                  The AI assistant is currently disabled or not configured on the server.
+                  Contact your administrator to enable AI_ASSISTANT_ENABLED and configure ANTHROPIC_API_KEY.
+                </p>
+              </>
+            ) : activeDivision ? (
               <>
                 Ask me to make changes to your {label} dashboard page. For example:
                 <ul>
@@ -281,9 +292,9 @@ export function ChatPanel() {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={activeDivision ? `Describe a change to the ${label} page...` : 'Select a page first...'}
+          placeholder={!aiEnabled ? 'AI assistant not available...' : activeDivision ? `Describe a change to the ${label} page...` : 'Select a page first...'}
           rows={2}
-          disabled={streaming || !activeDivision}
+          disabled={streaming || !activeDivision || !aiEnabled}
         />
         <div className="chat-input-actions">
           {streaming ? (
