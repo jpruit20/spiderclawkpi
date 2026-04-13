@@ -488,6 +488,7 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
                     continue
 
     return {
+        '_derived_sessions': derived_sessions,  # internal: used by summarize_telemetry for cook analysis
         'latest': latest,
         'daily': [latest] if latest.get('business_date') else [],
         'firmware_health': firmware_health,
