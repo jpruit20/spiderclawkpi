@@ -84,7 +84,7 @@ jobs:
           from urllib.request import Request, urlopen
           pw = Path('.env').read_text().split('APP_PASSWORD=', 1)[1].splitlines()[0].strip()
           base = 'http://127.0.0.1:8000'
-          for source in ['shopify', 'triplewhale', 'freshdesk', 'amazon']:
+          for source in ['shopify', 'triplewhale', 'freshdesk', 'amazon', 'youtube']:
               req = Request(base + f'/api/admin/run-sync/{source}', method='POST')
               req.add_header('X-App-Password', pw)
               print(source, urlopen(req).read().decode())
