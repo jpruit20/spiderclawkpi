@@ -3,13 +3,19 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
-import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
 import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth, MarketIntelligence } from '../lib/types'
 import { BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts'
 
-type MentionFilter = 'all' | 'positive' | 'negative' | 'questions' | 'complaints'
+type MentionFilter = 'all' | 'positive' | 'negative' | 'questions' | 'complaints' | 'brand' | 'competitor'
+type PageSection = 'overview' | 'youtube' | 'amazon' | 'competitive'
+
+function sentimentColor(s: string) {
+  if (s === 'positive') return 'var(--green)'
+  if (s === 'negative') return 'var(--red)'
+  return 'var(--orange)'
+}
 
 function sentimentStatus(s: string) {
   if (s === 'positive') return 'good'
@@ -29,6 +35,42 @@ function formatViews(n: number): string {
   return String(n)
 }
 
+function classificationLabel(c: string): string {
+  const map: Record<string, string> = {
+    brand_mention: 'Brand Mention',
+    complaint: 'Complaint',
+    product_review: 'Product Review',
+    purchase_intent: 'Purchase Intent',
+    customer_question: 'Question',
+    product_innovation: 'Innovation Signal',
+    competitor_mention: 'Competitor',
+    competitor_complaint: 'Competitor Complaint',
+    industry_trend: 'Industry Trend',
+    product_listing: 'Product Listing',
+    competitor_product: 'Competitor Product',
+    unknown: 'General',
+  }
+  return map[c] || c.replace(/_/g, ' ')
+}
+
+function platformIcon(p: string): string {
+  if (p === 'reddit') return '🔶'
+  if (p === 'youtube') return '▶️'
+  if (p === 'amazon') return '📦'
+  return '🔗'
+}
+
+function timeAgo(dateStr: string | undefined): string {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000)
+  if (days === 0) return 'today'
+  if (days === 1) return '1d ago'
+  if (days < 7) return `${days}d ago`
+  if (days < 30) return `${Math.floor(days / 7)}w ago`
+  return `${Math.floor(days / 30)}mo ago`
+}
+
 export function SocialIntelligence() {
   const [pulse, setPulse] = useState<SocialPulse | null>(null)
   const [trends, setTrends] = useState<SocialTrendsResponse | null>(null)
@@ -39,6 +81,7 @@ export function SocialIntelligence() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<MentionFilter>('all')
+  const [section, setSection] = useState<PageSection>('overview')
 
   useEffect(() => {
     let cancelled = false
@@ -71,25 +114,15 @@ export function SocialIntelligence() {
     return () => { cancelled = true }
   }, [])
 
+  // ── Computed values ──
   const brandMentionCount = pulse?.brand_mentions ?? 0
   const totalMentions = pulse?.total_mentions ?? 0
   const avgSentiment = pulse?.avg_sentiment_score ?? 0
   const competitorTotal = trends ? Object.values(trends.competitor_mentions).reduce((s, n) => s + n, 0) : 0
-  const competitorShare = (brandMentionCount + competitorTotal) > 0 ? competitorTotal / (brandMentionCount + competitorTotal) : 0
+  const brandSOV = (brandMentionCount + competitorTotal) > 0 ? brandMentionCount / (brandMentionCount + competitorTotal) : 0
   const trendingCount = trends?.trending_topics?.length ?? 0
-
-  const kpiCards = useMemo<KpiCardDef[]>(() => [
-    { label: 'Brand Mentions', value: fmtInt(brandMentionCount), sub: '7-day count', truthState: 'proxy' },
-    {
-      label: 'Avg Sentiment',
-      value: avgSentiment > 0 ? `+${fmtDecimal(avgSentiment)}` : avgSentiment < 0 ? fmtDecimal(avgSentiment) : 'Neutral',
-      sub: '-1.0 (negative) to +1.0 (positive)',
-      truthState: 'estimated',
-      delta: avgSentiment > 0.2 ? { text: 'Positive', direction: 'up' as const } : avgSentiment < -0.2 ? { text: 'Negative', direction: 'down' as const } : { text: 'Neutral', direction: 'flat' as const },
-    },
-    { label: 'Competitor Share', value: fmtPct(competitorShare), sub: `${fmtInt(competitorTotal)} competitor vs ${fmtInt(brandMentionCount)} brand`, truthState: 'estimated' },
-    { label: 'Trending Topics', value: fmtInt(trendingCount), sub: '30-day topics detected', truthState: 'proxy' },
-  ], [brandMentionCount, avgSentiment, competitorShare, competitorTotal, trendingCount])
+  const youtubeViews = youtube?.total_views ?? 0
+  const amazonProducts = amazon?.total_products ?? 0
 
   const sentimentBreakdown = pulse?.sentiment_breakdown || {}
   const sentimentTotal = Object.values(sentimentBreakdown).reduce((s, n) => s + n, 0) || 1
@@ -98,50 +131,93 @@ export function SocialIntelligence() {
   const negPct = ((sentimentBreakdown['negative'] || 0) / sentimentTotal) * 100
   const mixPct = ((sentimentBreakdown['mixed'] || 0) / sentimentTotal) * 100
 
-  const productData = useMemo(() => {
-    if (!trends?.product_mentions) return []
-    return Object.entries(trends.product_mentions)
-      .sort(([, a], [, b]) => b - a)
-      .map(([name, count]) => ({ name, count }))
-  }, [trends])
+  const kpiCards = useMemo<KpiCardDef[]>(() => [
+    {
+      label: 'Brand Mentions',
+      value: fmtInt(brandMentionCount),
+      sub: '7-day US social signals',
+      truthState: 'proxy',
+      delta: brandMentionCount > 10 ? { text: 'Active', direction: 'up' as const } : brandMentionCount > 0 ? { text: 'Low volume', direction: 'flat' as const } : undefined,
+    },
+    {
+      label: 'Brand Sentiment',
+      value: avgSentiment > 0.1 ? `+${fmtDecimal(avgSentiment)}` : avgSentiment < -0.1 ? fmtDecimal(avgSentiment) : 'Neutral',
+      sub: '-1.0 to +1.0 scale',
+      truthState: 'estimated',
+      delta: avgSentiment > 0.2 ? { text: 'Positive', direction: 'up' as const } : avgSentiment < -0.2 ? { text: 'Negative', direction: 'down' as const } : { text: 'Neutral', direction: 'flat' as const },
+    },
+    {
+      label: 'Share of Voice',
+      value: fmtPct(brandSOV),
+      sub: `Spider vs ${fmtInt(competitorTotal)} competitor mentions`,
+      truthState: 'estimated',
+      delta: brandSOV > 0.15 ? { text: 'Visible', direction: 'up' as const } : { text: 'Low visibility', direction: 'down' as const },
+    },
+    {
+      label: 'YouTube Reach',
+      value: formatViews(youtubeViews),
+      sub: `${fmtInt(youtube?.total_videos ?? 0)} videos · 30 days`,
+      truthState: youtubeViews > 0 ? 'canonical' : 'unavailable',
+    },
+  ], [brandMentionCount, avgSentiment, brandSOV, competitorTotal, youtubeViews, youtube])
 
-  const competitorData = useMemo(() => {
-    if (!trends?.competitor_mentions) return []
-    return Object.entries(trends.competitor_mentions)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 8)
-      .map(([name, count]) => ({ name, count }))
-  }, [trends])
+  // ── Spider products vs competitor products on Amazon ──
+  const spiderProducts = useMemo(() => {
+    if (!amazon) return []
+    return amazon.products.filter(p => p.brand?.toLowerCase().includes('spider'))
+  }, [amazon])
 
+  const competitorProducts = useMemo(() => {
+    if (!amazon) return []
+    return amazon.products.filter(p => !p.brand?.toLowerCase().includes('spider'))
+  }, [amazon])
+
+  // ── Filtered mentions ──
   const filteredMentions = useMemo(() => {
     let filtered = mentions.filter((m) => m.brand_mentioned || m.relevance_score > 0.3)
     switch (filter) {
       case 'positive': filtered = filtered.filter((m) => m.sentiment === 'positive'); break
       case 'negative': filtered = filtered.filter((m) => m.sentiment === 'negative'); break
       case 'questions': filtered = filtered.filter((m) => m.classification === 'customer_question'); break
-      case 'complaints': filtered = filtered.filter((m) => m.classification === 'complaint'); break
+      case 'complaints': filtered = filtered.filter((m) => m.classification === 'complaint' || m.classification === 'competitor_complaint'); break
+      case 'brand': filtered = filtered.filter((m) => m.brand_mentioned); break
+      case 'competitor': filtered = filtered.filter((m) => m.competitor_mentioned); break
     }
-    return filtered.slice(0, 20)
+    return filtered.slice(0, 25)
   }, [mentions, filter])
 
-  const brandHealthScore = useMemo(() => {
-    if (!pulse || totalMentions === 0) return null
-    const sentimentComponent = (avgSentiment + 1) / 2 * 50
-    const volumeComponent = Math.min(brandMentionCount / 10, 1) * 30
-    const engagementComponent = Math.min((pulse.top_mentions?.[0]?.engagement_score || 0) / 100, 1) * 20
-    return Math.round(sentimentComponent + volumeComponent + engagementComponent)
-  }, [pulse, totalMentions, avgSentiment, brandMentionCount])
+  // ── Competitor chart ──
+  const competitorChartData = useMemo(() => {
+    if (!trends?.competitor_mentions) return []
+    return Object.entries(trends.competitor_mentions)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 8)
+      .map(([name, count]) => ({ name: name.replace(/_/g, ' '), count }))
+  }, [trends])
+
+  // ── Product mentions chart ──
+  const productChartData = useMemo(() => {
+    if (!trends?.product_mentions) return []
+    return Object.entries(trends.product_mentions)
+      .sort(([, a], [, b]) => b - a)
+      .map(([name, count]) => ({ name, count }))
+  }, [trends])
 
   const hasData = totalMentions > 0 || trendingCount > 0 || mentions.length > 0
 
-  // Platform breakdown for subtitle
-  const platformParts: string[] = []
+  // ── Platform breakdown ──
   const byPlatform = pulse?.by_platform || {}
+  const platformParts: string[] = []
   if (byPlatform['reddit']) platformParts.push(`${byPlatform['reddit']} Reddit`)
   if (byPlatform['youtube']) platformParts.push(`${byPlatform['youtube']} YouTube`)
   if (byPlatform['amazon']) platformParts.push(`${byPlatform['amazon']} Amazon`)
-  if (byPlatform['google_reviews']) platformParts.push(`${byPlatform['google_reviews']} Google`)
-  const platformSummary = platformParts.length > 0 ? ` (${platformParts.join(', ')})` : ''
+
+  const SECTION_TABS: [PageSection, string][] = [
+    ['overview', 'Overview'],
+    ['youtube', 'YouTube'],
+    ['amazon', 'Amazon'],
+    ['competitive', 'Competitive Intel'],
+  ]
 
   return (
     <div className="page-grid venom-page">
@@ -149,7 +225,9 @@ export function SocialIntelligence() {
         <div>
           <h2 className="venom-title">Social Intelligence</h2>
           <p className="venom-subtitle">
-            {hasData ? `${fmtInt(totalMentions)} mentions tracked across Reddit, YouTube, and Amazon${platformSummary}` : 'Monitoring Reddit, YouTube, and Amazon for brand, competitor, and industry signals'}
+            {hasData
+              ? `${fmtInt(totalMentions)} signals across ${platformParts.join(', ') || 'all platforms'} · US market priority`
+              : 'Monitoring Reddit, YouTube, and Amazon for brand and competitor signals'}
           </p>
         </div>
       </div>
@@ -159,545 +237,603 @@ export function SocialIntelligence() {
 
       {!loading && !error ? (
         <>
-          <TruthLegend />
+          {/* Section nav */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+            {SECTION_TABS.map(([key, label]) => (
+              <button key={key} className={`range-button${section === key ? ' active' : ''}`} onClick={() => setSection(key)}>{label}</button>
+            ))}
+          </div>
+
           <VenomKpiStrip cards={kpiCards} />
 
-          {/* Brand Health Score */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Brand Health Score</strong>
-              <TruthBadge state="estimated" />
-            </div>
-            {brandHealthScore != null ? (
-              <>
-                <div className="hero-metric">{brandHealthScore}<small style={{ fontSize: 16, color: 'var(--muted)', marginLeft: 6 }}>/ 100</small></div>
-                <div className="venom-sentiment-bar">
-                  <div style={{ width: `${posPct}%`, background: 'var(--green)' }} title={`Positive: ${sentimentBreakdown['positive'] || 0}`} />
-                  <div style={{ width: `${neuPct + mixPct}%`, background: 'var(--orange)' }} title={`Neutral/Mixed: ${(sentimentBreakdown['neutral'] || 0) + (sentimentBreakdown['mixed'] || 0)}`} />
-                  <div style={{ width: `${negPct}%`, background: 'var(--red)' }} title={`Negative: ${sentimentBreakdown['negative'] || 0}`} />
-                </div>
-                <div className="venom-sentiment-labels">
-                  <span>Positive: {sentimentBreakdown['positive'] || 0}</span>
-                  <span>Neutral: {sentimentBreakdown['neutral'] || 0}</span>
-                  <span>Mixed: {sentimentBreakdown['mixed'] || 0}</span>
-                  <span>Negative: {sentimentBreakdown['negative'] || 0}</span>
-                </div>
-              </>
-            ) : (
-              <div className="state-message">Brand health score will populate after first social sync.</div>
-            )}
-          </section>
-
-          {/* YouTube Content Intelligence */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>YouTube Content Intelligence</strong>
-              <span className="venom-panel-hint">30 days</span>
-            </div>
-            {youtube && youtube.total_videos > 0 ? (
-              <>
-                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtInt(youtube.total_videos)}</span>
-                    <span className="mini-stat-label">Videos</span>
+          {/* ════════════════════════════════════════════════
+              SECTION: Overview
+              ════════════════════════════════════════════════ */}
+          {section === 'overview' ? (
+            <>
+              {/* Brand Health + Sentiment */}
+              <div className="two-col two-col-equal">
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Brand Health</strong>
+                    <TruthBadge state="estimated" />
                   </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{formatViews(youtube.total_views)}</span>
-                    <span className="mini-stat-label">Total Views</span>
-                  </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{formatViews(youtube.total_likes)}</span>
-                    <span className="mini-stat-label">Total Likes</span>
-                  </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{youtube.avg_engagement_rate}%</span>
-                    <span className="mini-stat-label">Avg Engagement</span>
-                  </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtInt(youtube.total_comments)}</span>
-                    <span className="mini-stat-label">Comments</span>
-                  </div>
-                </div>
-                <div className="stack-list compact">
-                  {youtube.top_videos.slice(0, 8).map((v) => (
-                    <div key={v.video_id} className={`list-item status-${sentimentStatus(v.sentiment)}`}>
-                      <div className="item-head">
-                        <strong>{v.title || 'Untitled video'}</strong>
-                        <div className="inline-badges">
-                          <span className="badge badge-neutral">{formatViews(v.views)} views</span>
-                          <span className="badge badge-neutral">{fmtInt(v.likes)} likes</span>
-                          {v.engagement_rate > 0 ? <span className="badge badge-muted">{v.engagement_rate}% eng</span> : null}
-                          <span className={`badge ${sentimentBadgeClass(v.sentiment)}`}>{v.sentiment}</span>
-                        </div>
+                  {totalMentions > 0 ? (
+                    <>
+                      <div className="venom-sentiment-bar" style={{ marginBottom: 8 }}>
+                        <div style={{ width: `${posPct}%`, background: 'var(--green)' }} title={`Positive: ${sentimentBreakdown['positive'] || 0}`} />
+                        <div style={{ width: `${neuPct + mixPct}%`, background: 'var(--orange)' }} title={`Neutral/Mixed: ${(sentimentBreakdown['neutral'] || 0) + (sentimentBreakdown['mixed'] || 0)}`} />
+                        <div style={{ width: `${negPct}%`, background: 'var(--red)' }} title={`Negative: ${sentimentBreakdown['negative'] || 0}`} />
                       </div>
-                      <div className="venom-mention-meta">
-                        <span className="badge badge-muted">{v.author}</span>
-                        {v.comments > 0 ? <span className="badge badge-neutral">{fmtInt(v.comments)} comments</span> : null}
-                        {v.product_mentioned ? <span className="badge badge-good">{v.product_mentioned}</span> : null}
-                        {v.competitor_mentioned ? <span className="badge badge-warn">{v.competitor_mentioned}</span> : null}
-                        <a href={v.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">Watch</a>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                        <span style={{ color: 'var(--green)' }}>Positive: {sentimentBreakdown['positive'] || 0}</span>
+                        <span style={{ color: 'var(--orange)' }}>Neutral: {(sentimentBreakdown['neutral'] || 0) + (sentimentBreakdown['mixed'] || 0)}</span>
+                        <span style={{ color: 'var(--red)' }}>Negative: {sentimentBreakdown['negative'] || 0}</span>
                       </div>
-                      {v.top_comments && v.top_comments.length > 0 ? (
-                        <div style={{ marginTop: 8, paddingLeft: 12, borderLeft: '2px solid rgba(255,255,255,0.1)' }}>
-                          {v.top_comments.slice(0, 2).map((c, i) => (
-                            <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
-                              <strong>{c.author}</strong>: {c.text.slice(0, 150)}{c.text.length > 150 ? '...' : ''}
-                              {c.likes > 0 ? <span style={{ marginLeft: 6, opacity: 0.7 }}>({c.likes} likes)</span> : null}
+                      {/* Platform breakdown */}
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        <strong style={{ color: '#e2e8f0' }}>By Platform</strong>
+                        <div style={{ display: 'flex', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+                          {Object.entries(byPlatform).map(([p, count]) => (
+                            <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <span>{platformIcon(p)}</span>
+                              <span>{p}: <strong style={{ color: '#e2e8f0' }}>{count}</strong></span>
                             </div>
                           ))}
                         </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Comment highlights */}
-                {youtube.comment_highlights.length > 0 ? (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>Top Comments Across All Videos</div>
-                    {youtube.comment_highlights.slice(0, 4).map((c, i) => (
-                      <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary, #b0b8c9)', marginBottom: 6, paddingLeft: 8, borderLeft: '2px solid var(--orange)' }}>
-                        <strong>{c.author}</strong>: {c.text.slice(0, 200)}{c.text.length > 200 ? '...' : ''}
-                        {c.likes > 0 ? <span style={{ marginLeft: 6, opacity: 0.7 }}>({c.likes} likes)</span> : null}
                       </div>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div className="state-message">YouTube data will populate after first YouTube sync. Requires YOUTUBE_API_KEY.</div>
-            )}
-          </section>
-
-          {/* Amazon Marketplace Health */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Amazon Marketplace Health</strong>
-              <TruthBadge state="proxy" />
-            </div>
-            {amazon && amazon.total_products > 0 ? (
-              <>
-                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtInt(amazon.total_products)}</span>
-                    <span className="mini-stat-label">Products Tracked</span>
-                  </div>
-                  {amazon.best_bsr != null ? (
-                    <div className="mini-stat">
-                      <span className="mini-stat-value">#{fmtInt(amazon.best_bsr)}</span>
-                      <span className="mini-stat-label">Best BSR</span>
-                    </div>
-                  ) : null}
-                  {amazon.avg_bsr != null ? (
-                    <div className="mini-stat">
-                      <span className="mini-stat-value">#{fmtInt(amazon.avg_bsr)}</span>
-                      <span className="mini-stat-label">Avg BSR</span>
-                    </div>
-                  ) : null}
-                  {amazon.avg_price != null ? (
-                    <div className="mini-stat">
-                      <span className="mini-stat-value">${amazon.avg_price.toFixed(2)}</span>
-                      <span className="mini-stat-label">Avg Price</span>
-                    </div>
-                  ) : null}
-                  {amazon.price_range ? (
-                    <div className="mini-stat">
-                      <span className="mini-stat-value">${amazon.price_range.min.toFixed(0)}-${amazon.price_range.max.toFixed(0)}</span>
-                      <span className="mini-stat-label">Price Range</span>
-                    </div>
-                  ) : null}
-                </div>
-                <div className="stack-list compact">
-                  {amazon.products.map((p) => (
-                    <div key={p.asin} className="list-item status-muted">
-                      <div className="item-head">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          {p.image_url ? <img src={p.image_url} alt="" style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 4, background: 'rgba(255,255,255,0.05)' }} /> : null}
-                          <strong>{p.title || p.asin}</strong>
-                        </div>
-                        <div className="inline-badges">
-                          {p.bsr != null ? <span className="badge badge-neutral">BSR #{fmtInt(p.bsr)}</span> : null}
-                          {p.competitive_price != null ? <span className="badge badge-good">${p.competitive_price.toFixed(2)}</span> : null}
-                          <span className="badge badge-muted">{p.asin}</span>
-                        </div>
-                      </div>
-                      <div className="venom-mention-meta">
-                        {p.bsr_category ? <span className="badge badge-muted">{p.bsr_category}</span> : null}
-                        {p.brand ? <span className="badge badge-neutral">{p.brand}</span> : null}
-                        {p.listed_price != null && p.competitive_price != null && p.listed_price !== p.competitive_price ? (
-                          <span className="badge badge-warn">List: ${p.listed_price.toFixed(2)}</span>
-                        ) : null}
-                        <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View on Amazon</a>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="state-message">Amazon product data will populate after first Amazon sync. Requires SP-API credentials.</div>
-            )}
-          </section>
-
-          {/* Product Mentions + Competitor Radar */}
-          <div className="two-col two-col-equal">
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Product Mentions</strong>
-                <span className="venom-panel-hint">30 days</span>
-              </div>
-              {productData.length > 0 ? (
-                <div className="chart-wrap-short">
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={productData}>
-                      <CartesianGrid stroke="rgba(255,255,255,0.06)" />
-                      <XAxis dataKey="name" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
-                      <YAxis stroke="#9fb0d4" />
-                      <Tooltip />
-                      <Bar dataKey="count" name="Mentions" fill="var(--green)" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : <div className="state-message">Product mention data will populate after first sync.</div>}
-            </section>
-
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Competitor Radar</strong>
-                <span className="venom-panel-hint">Share of voice</span>
-              </div>
-              {competitorData.length > 0 ? (
-                <div className="chart-wrap-short">
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={competitorData} layout="vertical">
-                      <CartesianGrid stroke="rgba(255,255,255,0.06)" />
-                      <XAxis type="number" stroke="#9fb0d4" />
-                      <YAxis type="category" dataKey="name" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={100} />
-                      <Tooltip />
-                      <Bar dataKey="count" name="Mentions" fill="var(--orange)" radius={[0, 4, 4, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : <div className="state-message">Competitor data will populate after first sync.</div>}
-            </section>
-          </div>
-
-          {/* Brand Mentions Feed */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Brand Mentions Feed</strong>
-              <span className="venom-panel-hint">Last 7 days</span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-              {(['all', 'positive', 'negative', 'questions', 'complaints'] as MentionFilter[]).map((tab) => (
-                <button key={tab} className={`range-button${filter === tab ? ' active' : ''}`} onClick={() => setFilter(tab)}>{tab}</button>
-              ))}
-            </div>
-            {filteredMentions.length > 0 ? (
-              <div className="stack-list compact">
-                {filteredMentions.map((m) => (
-                  <div key={m.external_id} className={`list-item status-${sentimentStatus(m.sentiment)}`}>
-                    <div className="item-head">
-                      <strong>{m.title || 'Untitled post'}</strong>
-                      <div className="inline-badges">
-                        <span className="badge badge-neutral">{m.platform}</span>
-                        {m.subreddit ? <span className="badge badge-muted">r/{m.subreddit}</span> : null}
-                        <span className={`badge ${sentimentBadgeClass(m.sentiment)}`}>{m.sentiment}</span>
-                      </div>
-                    </div>
-                    {m.body ? <p className="venom-mention-body">{m.body.slice(0, 200)}{m.body.length > 200 ? '...' : ''}</p> : null}
-                    <div className="venom-mention-meta">
-                      {m.platform === 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{formatViews(m.engagement_score)} views</span> : null}
-                      {m.platform !== 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{m.engagement_score} upvotes</span> : null}
-                      {m.comment_count > 0 ? <span className="badge badge-neutral">{m.comment_count} comments</span> : null}
-                      {m.product_mentioned ? <span className="badge badge-good">{m.product_mentioned}</span> : null}
-                      {m.competitor_mentioned ? <span className="badge badge-warn">{m.competitor_mentioned}</span> : null}
-                      {m.source_url ? <a href={m.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View source</a> : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="state-message">{hasData ? 'No mentions match this filter.' : 'Social listening will populate after first sync. Configure Reddit, YouTube, or Amazon credentials to start.'}</div>
-            )}
-          </section>
-
-          {/* Industry Trends */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Industry Trends — Charcoal Grilling</strong>
-              <span className="venom-panel-hint">30-day trending topics from r/smoking, r/grilling, r/BBQ</span>
-            </div>
-            {(trends?.trending_topics?.length || 0) > 0 ? (
-              <div className="stack-list compact">
-                {trends!.trending_topics.slice(0, 8).map((t) => (
-                  <div key={t.topic} className="list-item status-muted">
-                    <div className="item-head">
-                      <strong>{t.topic}</strong>
-                      <div className="inline-badges">
-                        <span className="badge badge-neutral">{fmtInt(t.mention_count)} mentions</span>
-                        <span className="badge badge-muted">{fmtInt(t.total_engagement)} engagement</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="state-message">Industry trends will populate after first Reddit sync.</div>
-            )}
-          </section>
-
-          {/* ── Market Intelligence ── */}
-          {market && market.total_mentions > 0 ? (
-            <>
-              {/* Competitive Landscape */}
-              <section className="card">
-                <div className="venom-panel-head">
-                  <strong>Competitive Landscape</strong>
-                  <span className="venom-panel-hint">30-day share of voice across all platforms</span>
-                </div>
-                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtPct(market.competitive_landscape.brand_share_of_voice)}</span>
-                    <span className="mini-stat-label">Spider Grills SOV</span>
-                  </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtInt(market.competitive_landscape.brand_mentions)}</span>
-                    <span className="mini-stat-label">Brand Mentions</span>
-                  </div>
-                  <div className="mini-stat">
-                    <span className="mini-stat-value">{fmtInt(market.competitive_landscape.competitors.length)}</span>
-                    <span className="mini-stat-label">Competitors Tracked</span>
-                  </div>
-                </div>
-                {market.competitive_landscape.competitors.length > 0 ? (
-                  <div className="chart-wrap-short">
-                    <ResponsiveContainer width="100%" height={Math.max(200, market.competitive_landscape.competitors.slice(0, 10).length * 30)}>
-                      <BarChart data={market.competitive_landscape.competitors.slice(0, 10)} layout="vertical">
-                        <CartesianGrid stroke="rgba(255,255,255,0.06)" />
-                        <XAxis type="number" stroke="#9fb0d4" />
-                        <YAxis type="category" dataKey="competitor" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={110} />
-                        <Tooltip formatter={(value: number) => [fmtInt(value), 'Mentions']} />
-                        <Bar dataKey="mentions" name="Mentions" fill="var(--orange)" radius={[0, 4, 4, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : null}
-                {market.competitive_landscape.competitors.length > 0 ? (
-                  <div style={{ marginTop: 12 }}>
-                    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
-                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>Competitor</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Mentions</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>SOV</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Sentiment</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Engagement</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {market.competitive_landscape.competitors.slice(0, 10).map((c) => (
-                          <tr key={c.competitor} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                            <td style={{ padding: '6px 8px', fontWeight: 500 }}>{c.competitor.replace(/_/g, ' ')}</td>
-                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.mentions)}</td>
-                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtPct(c.share_of_voice)}</td>
-                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>
-                              <span className={`badge ${sentimentBadgeClass(c.sentiment_label)}`} style={{ fontSize: 11 }}>
-                                {c.avg_sentiment > 0 ? '+' : ''}{c.avg_sentiment.toFixed(2)}
-                              </span>
-                            </td>
-                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.total_engagement)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
-              </section>
-
-              {/* Amazon Market Position */}
-              {market.amazon_positioning.price || market.amazon_positioning.bsr ? (
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Amazon Market Position</strong>
-                    <TruthBadge state="proxy" />
-                  </div>
-                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
-                    {market.amazon_positioning.price ? (
-                      <>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value">${market.amazon_positioning.price.our_avg_price}</span>
-                          <span className="mini-stat-label">Our Avg Price</span>
-                        </div>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value">${market.amazon_positioning.price.competitor_avg_price}</span>
-                          <span className="mini-stat-label">Competitor Avg</span>
-                        </div>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value" style={{ color: market.amazon_positioning.price.position === 'premium' ? 'var(--orange)' : market.amazon_positioning.price.position === 'value' ? 'var(--green)' : 'var(--text)' }}>
-                            {market.amazon_positioning.price.position}
-                          </span>
-                          <span className="mini-stat-label">Price Position</span>
-                        </div>
-                      </>
-                    ) : null}
-                    {market.amazon_positioning.bsr ? (
-                      <>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value">#{fmtInt(market.amazon_positioning.bsr.our_best_bsr)}</span>
-                          <span className="mini-stat-label">Our Best BSR</span>
-                        </div>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value">#{fmtInt(market.amazon_positioning.bsr.competitor_best_bsr)}</span>
-                          <span className="mini-stat-label">Competitor Best</span>
-                        </div>
-                        <div className="mini-stat">
-                          <span className="mini-stat-value" style={{ color: market.amazon_positioning.bsr.outranking_competitors ? 'var(--green)' : 'var(--orange)' }}>
-                            {market.amazon_positioning.bsr.outranking_competitors ? 'Outranking' : 'Behind'}
-                          </span>
-                          <span className="mini-stat-label">BSR Position</span>
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Tracking {market.amazon_positioning.our_products} Spider Grills products vs {market.amazon_positioning.competitor_products} competitor products on Amazon
-                  </div>
+                    </>
+                  ) : <div className="state-message">Waiting for social data...</div>}
                 </section>
-              ) : null}
 
-              {/* Trend Momentum + Purchase Intent — 2-col */}
-              <div className="two-col two-col-equal">
-                {/* Trend Momentum */}
                 <section className="card">
                   <div className="venom-panel-head">
-                    <strong>Trend Momentum</strong>
-                    <span className="venom-panel-hint">Cross-platform topic tracking</span>
+                    <strong>Product Mentions</strong>
+                    <span className="venom-panel-hint">30 days</span>
                   </div>
-                  {market.trend_momentum.length > 0 ? (
+                  {productChartData.length > 0 ? (
+                    <div className="chart-wrap-short">
+                      <ResponsiveContainer width="100%" height={180}>
+                        <BarChart data={productChartData}>
+                          <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                          <XAxis dataKey="name" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
+                          <YAxis stroke="#9fb0d4" />
+                          <Tooltip />
+                          <Bar dataKey="count" name="Mentions" fill="var(--green)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : <div className="state-message">Product mention data will populate after sync.</div>}
+                </section>
+              </div>
+
+              {/* Competitor Share of Voice */}
+              <div className="two-col two-col-equal">
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Competitor Share of Voice</strong>
+                    <span className="venom-panel-hint">30-day mentions</span>
+                  </div>
+                  {competitorChartData.length > 0 ? (
+                    <div className="chart-wrap-short">
+                      <ResponsiveContainer width="100%" height={Math.max(180, competitorChartData.length * 28)}>
+                        <BarChart data={competitorChartData} layout="vertical">
+                          <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                          <XAxis type="number" stroke="#9fb0d4" />
+                          <YAxis type="category" dataKey="name" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={100} />
+                          <Tooltip />
+                          <Bar dataKey="count" name="Mentions" fill="var(--orange)" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : <div className="state-message">Competitor data populating...</div>}
+                </section>
+
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Trending Topics</strong>
+                    <span className="venom-panel-hint">30 days · r/smoking, r/grilling, r/BBQ</span>
+                  </div>
+                  {(trends?.trending_topics?.length || 0) > 0 ? (
                     <div className="stack-list compact">
-                      {market.trend_momentum.slice(0, 10).map((t) => (
+                      {trends!.trending_topics.slice(0, 8).map((t) => (
                         <div key={t.topic} className="list-item status-muted">
                           <div className="item-head">
                             <strong>{t.topic}</strong>
                             <div className="inline-badges">
-                              <span className={`badge ${t.momentum === 'strong' ? 'badge-good' : t.momentum === 'growing' ? 'badge-warn' : 'badge-muted'}`}>
-                                {t.momentum}
-                              </span>
-                              <span className="badge badge-neutral">{fmtInt(t.mentions)} mentions</span>
-                              {t.cross_platform ? <span className="badge badge-good">cross-platform</span> : null}
+                              <span className="badge badge-neutral">{fmtInt(t.mention_count)}</span>
+                              <span className="badge badge-muted">{fmtInt(t.total_engagement)} eng</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="state-message">Trends populate after Reddit sync.</div>}
+                </section>
+              </div>
+
+              {/* Brand Mentions Feed */}
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Social Feed</strong>
+                  <span className="venom-panel-hint">{fmtInt(filteredMentions.length)} of {fmtInt(mentions.length)} · 7 days</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                  {(['all', 'brand', 'positive', 'negative', 'questions', 'complaints', 'competitor'] as MentionFilter[]).map((tab) => (
+                    <button key={tab} className={`range-button${filter === tab ? ' active' : ''}`} onClick={() => setFilter(tab)} style={{ fontSize: 11, padding: '4px 10px', textTransform: 'capitalize' }}>{tab}</button>
+                  ))}
+                </div>
+                {filteredMentions.length > 0 ? (
+                  <div className="stack-list compact">
+                    {filteredMentions.map((m) => (
+                      <div key={m.external_id} className={`list-item status-${sentimentStatus(m.sentiment)}`}>
+                        <div className="item-head">
+                          <strong style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 14 }}>{platformIcon(m.platform)}</span>
+                            {m.title || 'Untitled'}
+                          </strong>
+                          <div className="inline-badges">
+                            <span className={`badge ${sentimentBadgeClass(m.sentiment)}`}>{m.sentiment}</span>
+                            <span className="badge badge-muted">{classificationLabel(m.classification)}</span>
+                            {m.published_at ? <span className="badge badge-muted">{timeAgo(m.published_at)}</span> : null}
+                          </div>
+                        </div>
+                        {m.body ? <p className="venom-mention-body" style={{ maxHeight: 60, overflow: 'hidden' }}>{m.body.slice(0, 200)}{m.body.length > 200 ? '...' : ''}</p> : null}
+                        <div className="venom-mention-meta">
+                          {m.subreddit ? <span className="badge badge-muted">r/{m.subreddit}</span> : null}
+                          {m.platform === 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{formatViews(m.engagement_score)} views</span> : null}
+                          {m.platform !== 'youtube' && m.engagement_score > 0 ? <span className="badge badge-neutral">{m.engagement_score} pts</span> : null}
+                          {m.comment_count > 0 ? <span className="badge badge-neutral">{m.comment_count} comments</span> : null}
+                          {m.product_mentioned ? <span className="badge badge-good">{m.product_mentioned}</span> : null}
+                          {m.competitor_mentioned ? <span className="badge badge-warn">{m.competitor_mentioned.replace(/_/g, ' ')}</span> : null}
+                          {m.source_url ? <a href={m.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>View &rarr;</a> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : <div className="state-message">{hasData ? 'No mentions match this filter.' : 'Social feed populates after first sync.'}</div>}
+              </section>
+            </>
+          ) : null}
+
+          {/* ════════════════════════════════════════════════
+              SECTION: YouTube
+              ════════════════════════════════════════════════ */}
+          {section === 'youtube' ? (
+            <>
+              {youtube && youtube.total_videos > 0 ? (
+                <>
+                  {/* YouTube KPIs */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>YouTube Performance</strong>
+                      <span className="venom-panel-hint">30-day US-prioritized content</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(youtube.total_videos)}</span>
+                        <span className="mini-stat-label">Videos Tracked</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{formatViews(youtube.total_views)}</span>
+                        <span className="mini-stat-label">Total Views</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{formatViews(youtube.total_likes)}</span>
+                        <span className="mini-stat-label">Total Likes</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{youtube.avg_engagement_rate}%</span>
+                        <span className="mini-stat-label">Engagement Rate</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(youtube.total_comments)}</span>
+                        <span className="mini-stat-label">Comments</span>
+                      </div>
+                    </div>
+                    {/* Sentiment bar */}
+                    {youtube.sentiment_breakdown ? (
+                      <div style={{ display: 'flex', gap: 12, fontSize: 12, color: 'var(--muted)' }}>
+                        {Object.entries(youtube.sentiment_breakdown).map(([s, count]) => (
+                          <span key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: sentimentColor(s) }} />
+                            {s}: {count}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  {/* Top Videos */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>Top Videos</strong>
+                      <span className="venom-panel-hint">Sorted by views</span>
+                    </div>
+                    <div className="stack-list compact">
+                      {youtube.top_videos.slice(0, 10).map((v) => (
+                        <div key={v.video_id} className={`list-item status-${sentimentStatus(v.sentiment)}`}>
+                          <div className="item-head">
+                            <strong>{v.title || 'Untitled'}</strong>
+                            <div className="inline-badges">
+                              <span className="badge badge-neutral">{formatViews(v.views)} views</span>
+                              <span className="badge badge-neutral">{fmtInt(v.likes)} likes</span>
+                              {v.engagement_rate > 0 ? <span className="badge badge-muted">{v.engagement_rate}% eng</span> : null}
+                              <span className={`badge ${sentimentBadgeClass(v.sentiment)}`}>{v.sentiment}</span>
                             </div>
                           </div>
                           <div className="venom-mention-meta">
-                            {t.platforms.map((p) => (
-                              <span key={p} className="badge badge-muted">{p}</span>
+                            <span className="badge badge-muted">{v.author}</span>
+                            {v.comments > 0 ? <span className="badge badge-neutral">{fmtInt(v.comments)} comments</span> : null}
+                            {v.product_mentioned ? <span className="badge badge-good">{v.product_mentioned}</span> : null}
+                            {v.competitor_mentioned ? <span className="badge badge-warn">{v.competitor_mentioned.replace(/_/g, ' ')}</span> : null}
+                            {v.published_at ? <span className="badge badge-muted">{timeAgo(v.published_at)}</span> : null}
+                            <a href={v.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>Watch &rarr;</a>
+                          </div>
+                          {/* Top comments — English only */}
+                          {v.top_comments && v.top_comments.length > 0 ? (
+                            <div style={{ marginTop: 8, paddingLeft: 12, borderLeft: '2px solid rgba(255,255,255,0.1)' }}>
+                              {v.top_comments.slice(0, 2).map((c, i) => (
+                                <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
+                                  <strong>{c.author}</strong>: {c.text.slice(0, 180)}{c.text.length > 180 ? '...' : ''}
+                                  {c.likes > 0 ? <span style={{ marginLeft: 6, color: 'var(--blue)', fontSize: 11 }}>({c.likes} likes)</span> : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  {/* Comment Highlights */}
+                  {youtube.comment_highlights.length > 0 ? (
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Top Comments Across All Videos</strong>
+                        <span className="venom-panel-hint">Sorted by likes</span>
+                      </div>
+                      <div className="stack-list compact">
+                        {youtube.comment_highlights.slice(0, 6).map((c, i) => (
+                          <div key={i} className="list-item status-muted">
+                            <div style={{ fontSize: 13 }}>
+                              <strong style={{ color: '#e2e8f0' }}>{c.author}</strong>
+                              <span style={{ marginLeft: 8, color: 'var(--muted)' }}>{c.text.slice(0, 250)}{c.text.length > 250 ? '...' : ''}</span>
+                            </div>
+                            <div className="venom-mention-meta" style={{ marginTop: 4 }}>
+                              {c.likes > 0 ? <span className="badge badge-neutral">{c.likes} likes</span> : null}
+                              {c.published_at ? <span className="badge badge-muted">{timeAgo(c.published_at)}</span> : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              ) : (
+                <section className="card">
+                  <div className="state-message">YouTube data is syncing. Results will appear within 1-2 sync cycles (every 6 hours).</div>
+                </section>
+              )}
+            </>
+          ) : null}
+
+          {/* ════════════════════════════════════════════════
+              SECTION: Amazon
+              ════════════════════════════════════════════════ */}
+          {section === 'amazon' ? (
+            <>
+              {amazon && amazon.total_products > 0 ? (
+                <>
+                  {/* Amazon KPIs */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>Amazon Marketplace Overview</strong>
+                      <TruthBadge state="proxy" />
+                    </div>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(spiderProducts.length)}</span>
+                        <span className="mini-stat-label">Our Products</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(competitorProducts.length)}</span>
+                        <span className="mini-stat-label">Competitors Tracked</span>
+                      </div>
+                      {amazon.best_bsr != null ? (
+                        <div className="mini-stat">
+                          <span className="mini-stat-value" style={{ color: 'var(--green)' }}>#{fmtInt(amazon.best_bsr)}</span>
+                          <span className="mini-stat-label">Best BSR</span>
+                        </div>
+                      ) : null}
+                      {amazon.avg_bsr != null ? (
+                        <div className="mini-stat">
+                          <span className="mini-stat-value">#{fmtInt(amazon.avg_bsr)}</span>
+                          <span className="mini-stat-label">Avg BSR</span>
+                        </div>
+                      ) : null}
+                      {market?.amazon_positioning?.price ? (
+                        <>
+                          <div className="mini-stat">
+                            <span className="mini-stat-value">${market.amazon_positioning.price.our_avg_price}</span>
+                            <span className="mini-stat-label">Our Avg Price</span>
+                          </div>
+                          <div className="mini-stat">
+                            <span className="mini-stat-value">${market.amazon_positioning.price.competitor_avg_price}</span>
+                            <span className="mini-stat-label">Competitor Avg</span>
+                          </div>
+                          <div className="mini-stat">
+                            <span className="mini-stat-value" style={{ color: market.amazon_positioning.price.position === 'premium' ? 'var(--orange)' : 'var(--green)' }}>
+                              {market.amazon_positioning.price.position}
+                            </span>
+                            <span className="mini-stat-label">Price Position</span>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  </section>
+
+                  {/* Spider Grills Products */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>Spider Grills Products</strong>
+                      <span className="venom-panel-hint">{spiderProducts.length} listings</span>
+                    </div>
+                    {spiderProducts.length > 0 ? (
+                      <div className="stack-list compact">
+                        {spiderProducts.map((p) => (
+                          <div key={p.asin} className="list-item status-good">
+                            <div className="item-head">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                {p.image_url ? <img src={p.image_url} alt="" style={{ width: 44, height: 44, objectFit: 'contain', borderRadius: 4, background: 'rgba(255,255,255,0.05)' }} /> : null}
+                                <div>
+                                  <strong>{p.title || p.asin}</strong>
+                                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{p.asin}</div>
+                                </div>
+                              </div>
+                              <div className="inline-badges">
+                                {p.bsr != null ? <span className="badge badge-good">BSR #{fmtInt(p.bsr)}</span> : <span className="badge badge-muted">No BSR</span>}
+                                {p.bsr_category ? <span className="badge badge-muted">{p.bsr_category}</span> : null}
+                              </div>
+                            </div>
+                            <div className="venom-mention-meta">
+                              {p.competitive_price != null ? <span className="badge badge-neutral">${p.competitive_price.toFixed(2)}</span> : null}
+                              <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>Amazon &rarr;</a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No Spider Grills products found in catalog.</div>}
+                  </section>
+
+                  {/* Competitor Products */}
+                  {competitorProducts.length > 0 ? (
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Competitor Products</strong>
+                        <span className="venom-panel-hint">{competitorProducts.length} tracked</span>
+                      </div>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 600 }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                              <th style={{ textAlign: 'left', padding: '8px' }}>Product</th>
+                              <th style={{ textAlign: 'left', padding: '8px' }}>Brand</th>
+                              <th style={{ textAlign: 'center', padding: '8px' }}>BSR</th>
+                              <th style={{ textAlign: 'center', padding: '8px' }}>Category</th>
+                              <th style={{ textAlign: 'center', padding: '8px' }}>Link</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {competitorProducts.map((p) => (
+                              <tr key={p.asin} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                <td style={{ padding: '8px', maxWidth: 300 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    {p.image_url ? <img src={p.image_url} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 3, background: 'rgba(255,255,255,0.05)' }} /> : null}
+                                    <span style={{ fontWeight: 500 }}>{(p.title || p.asin).slice(0, 80)}{(p.title || '').length > 80 ? '...' : ''}</span>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '8px', color: 'var(--orange)', fontWeight: 500 }}>{p.brand || '—'}</td>
+                                <td style={{ textAlign: 'center', padding: '8px' }}>
+                                  {p.bsr != null ? <span style={{ color: 'var(--green)', fontWeight: 600 }}>#{fmtInt(p.bsr)}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}
+                                </td>
+                                <td style={{ textAlign: 'center', padding: '8px', fontSize: 11, color: 'var(--muted)' }}>{p.bsr_category || '—'}</td>
+                                <td style={{ textAlign: 'center', padding: '8px' }}>
+                                  <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none', fontSize: 11 }}>View</a>
+                                </td>
+                              </tr>
                             ))}
-                            <span className="badge badge-neutral">{fmtInt(t.total_engagement)} engagement</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <div className="state-message">Trend data will populate after social syncs run.</div>}
-                </section>
-
-                {/* Purchase Intent Monitor */}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              ) : (
                 <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Purchase Intent Monitor</strong>
-                    <span className="venom-panel-hint">{fmtInt(market.purchase_intent.total)} signals detected</span>
-                  </div>
-                  {market.purchase_intent.posts.length > 0 ? (
-                    <div className="stack-list compact">
-                      {market.purchase_intent.posts.slice(0, 6).map((p, i) => (
-                        <div key={i} className="list-item status-muted">
-                          <div className="item-head">
-                            <strong>{p.title || 'Untitled'}</strong>
-                            <div className="inline-badges">
-                              <span className="badge badge-neutral">{p.platform}</span>
-                              {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
-                            </div>
-                          </div>
-                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 120)}{p.body.length > 120 ? '...' : ''}</p> : null}
-                          <div className="venom-mention-meta">
-                            {p.competitor_mentioned ? <span className="badge badge-warn">{p.competitor_mentioned}</span> : null}
-                            {p.product_mentioned ? <span className="badge badge-good">{p.product_mentioned}</span> : null}
-                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <div className="state-message">Purchase intent signals will appear as people discuss buying grills.</div>}
+                  <div className="state-message">Amazon product data syncing. Data appears after SP-API connector runs.</div>
                 </section>
-              </div>
+              )}
+            </>
+          ) : null}
 
-              {/* Product Innovation + Competitor Pain Points — 2-col */}
-              <div className="two-col two-col-equal">
-                {/* Product Innovation Ideas */}
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Product Innovation Signals</strong>
-                    <span className="venom-panel-hint">R&D opportunities from real users</span>
-                  </div>
-                  {market.product_innovation.posts.length > 0 ? (
-                    <div className="stack-list compact">
-                      {market.product_innovation.posts.slice(0, 6).map((p, i) => (
-                        <div key={i} className="list-item status-good">
-                          <div className="item-head">
-                            <strong>{p.title || 'Untitled'}</strong>
-                            <div className="inline-badges">
-                              <span className="badge badge-neutral">{p.platform}</span>
-                              {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
-                            </div>
-                          </div>
-                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 150)}{p.body.length > 150 ? '...' : ''}</p> : null}
-                          <div className="venom-mention-meta">
-                            {p.trend_topic ? <span className="badge badge-good">{p.trend_topic}</span> : null}
-                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
-                          </div>
-                        </div>
-                      ))}
+          {/* ════════════════════════════════════════════════
+              SECTION: Competitive Intel
+              ════════════════════════════════════════════════ */}
+          {section === 'competitive' ? (
+            <>
+              {market && market.total_mentions > 0 ? (
+                <>
+                  {/* Competitive Landscape */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>Competitive Landscape</strong>
+                      <span className="venom-panel-hint">30-day cross-platform analysis</span>
                     </div>
-                  ) : <div className="state-message">Innovation signals appear when users describe features they wish existed.</div>}
-                </section>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtPct(market.competitive_landscape.brand_share_of_voice)}</span>
+                        <span className="mini-stat-label">Spider Grills SOV</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(market.competitive_landscape.brand_mentions)}</span>
+                        <span className="mini-stat-label">Brand Mentions</span>
+                      </div>
+                      <div className="mini-stat">
+                        <span className="mini-stat-value">{fmtInt(market.competitive_landscape.competitors.length)}</span>
+                        <span className="mini-stat-label">Competitors</span>
+                      </div>
+                    </div>
+                    {market.competitive_landscape.competitors.length > 0 ? (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                              <th style={{ textAlign: 'left', padding: '6px 8px' }}>Competitor</th>
+                              <th style={{ textAlign: 'right', padding: '6px 8px' }}>Mentions</th>
+                              <th style={{ textAlign: 'right', padding: '6px 8px' }}>SOV</th>
+                              <th style={{ textAlign: 'right', padding: '6px 8px' }}>Sentiment</th>
+                              <th style={{ textAlign: 'right', padding: '6px 8px' }}>Engagement</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {market.competitive_landscape.competitors.slice(0, 12).map((c) => (
+                              <tr key={c.competitor} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                <td style={{ padding: '6px 8px', fontWeight: 500 }}>{c.competitor.replace(/_/g, ' ')}</td>
+                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.mentions)}</td>
+                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtPct(c.share_of_voice)}</td>
+                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>
+                                  <span className={`badge ${sentimentBadgeClass(c.sentiment_label)}`} style={{ fontSize: 11 }}>
+                                    {c.avg_sentiment > 0 ? '+' : ''}{c.avg_sentiment.toFixed(2)}
+                                  </span>
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.total_engagement)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                  </section>
 
-                {/* Competitor Pain Points */}
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Competitor Pain Points</strong>
-                    <span className="venom-panel-hint">Their weaknesses = your opportunity</span>
-                  </div>
-                  {market.competitor_pain_points.posts.length > 0 ? (
-                    <div className="stack-list compact">
-                      {market.competitor_pain_points.posts.slice(0, 6).map((p, i) => (
-                        <div key={i} className="list-item status-bad">
-                          <div className="item-head">
-                            <strong>{p.title || 'Untitled'}</strong>
-                            <div className="inline-badges">
-                              <span className="badge badge-neutral">{p.platform}</span>
-                              {p.competitor ? <span className="badge badge-warn">{p.competitor.replace(/_/g, ' ')}</span> : null}
+                  {/* Trend Momentum + Purchase Intent */}
+                  <div className="two-col two-col-equal">
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Trend Momentum</strong>
+                        <span className="venom-panel-hint">Cross-platform topics</span>
+                      </div>
+                      {market.trend_momentum.length > 0 ? (
+                        <div className="stack-list compact">
+                          {market.trend_momentum.slice(0, 8).map((t) => (
+                            <div key={t.topic} className="list-item status-muted">
+                              <div className="item-head">
+                                <strong>{t.topic}</strong>
+                                <div className="inline-badges">
+                                  <span className={`badge ${t.momentum === 'strong' ? 'badge-good' : t.momentum === 'growing' ? 'badge-warn' : 'badge-muted'}`}>{t.momentum}</span>
+                                  <span className="badge badge-neutral">{fmtInt(t.mentions)}</span>
+                                  {t.cross_platform ? <span className="badge badge-good">multi-platform</span> : null}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 150)}{p.body.length > 150 ? '...' : ''}</p> : null}
-                          <div className="venom-mention-meta">
-                            {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
-                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
-                          </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ) : <div className="state-message">Competitor complaints and weaknesses will surface as social data flows in.</div>}
+                      ) : <div className="state-message">Trend data populating...</div>}
+                    </section>
+
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Purchase Intent</strong>
+                        <span className="venom-panel-hint">{fmtInt(market.purchase_intent.total)} signals</span>
+                      </div>
+                      {market.purchase_intent.posts.length > 0 ? (
+                        <div className="stack-list compact">
+                          {market.purchase_intent.posts.slice(0, 6).map((p, i) => (
+                            <div key={i} className="list-item status-muted">
+                              <div className="item-head">
+                                <strong>{p.title || 'Untitled'}</strong>
+                                <div className="inline-badges">
+                                  <span className="badge badge-neutral">{platformIcon(p.platform)} {p.platform}</span>
+                                </div>
+                              </div>
+                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
+                              <div className="venom-mention-meta">
+                                {p.competitor_mentioned ? <span className="badge badge-warn">{p.competitor_mentioned.replace(/_/g, ' ')}</span> : null}
+                                {p.product_mentioned ? <span className="badge badge-good">{p.product_mentioned}</span> : null}
+                                {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>View &rarr;</a> : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="state-message">Purchase intent signals appear as people discuss buying grills.</div>}
+                    </section>
+                  </div>
+
+                  {/* Innovation + Pain Points */}
+                  <div className="two-col two-col-equal">
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Innovation Signals</strong>
+                        <span className="venom-panel-hint">R&D opportunities</span>
+                      </div>
+                      {market.product_innovation.posts.length > 0 ? (
+                        <div className="stack-list compact">
+                          {market.product_innovation.posts.slice(0, 5).map((p, i) => (
+                            <div key={i} className="list-item status-good">
+                              <div className="item-head">
+                                <strong>{p.title || 'Untitled'}</strong>
+                                <div className="inline-badges">
+                                  <span className="badge badge-neutral">{platformIcon(p.platform)}</span>
+                                  {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
+                                </div>
+                              </div>
+                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
+                              {p.trend_topic ? <span className="badge badge-good" style={{ marginTop: 4, display: 'inline-block' }}>{p.trend_topic}</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="state-message">Innovation signals populate from user feature requests.</div>}
+                    </section>
+
+                    <section className="card">
+                      <div className="venom-panel-head">
+                        <strong>Competitor Pain Points</strong>
+                        <span className="venom-panel-hint">Their weakness = your opportunity</span>
+                      </div>
+                      {market.competitor_pain_points.posts.length > 0 ? (
+                        <div className="stack-list compact">
+                          {market.competitor_pain_points.posts.slice(0, 5).map((p, i) => (
+                            <div key={i} className="list-item status-bad">
+                              <div className="item-head">
+                                <strong>{p.title || 'Untitled'}</strong>
+                                <div className="inline-badges">
+                                  {p.competitor ? <span className="badge badge-warn">{p.competitor.replace(/_/g, ' ')}</span> : null}
+                                </div>
+                              </div>
+                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="state-message">Competitor complaints surface as social data flows in.</div>}
+                    </section>
+                  </div>
+                </>
+              ) : (
+                <section className="card">
+                  <div className="state-message">Competitive intelligence populates after social connectors sync. Tracking Reddit, YouTube, and Amazon.</div>
                 </section>
-              </div>
+              )}
             </>
           ) : null}
 
           {/* Navigation */}
           <section className="card">
-            <div className="venom-panel-head"><strong>Related Pages</strong></div>
+            <div className="venom-panel-head"><strong>Related</strong></div>
             <div className="venom-drill-grid">
-              <Link to="/division/customer-experience" className="venom-drill-tile"><div><strong>Customer Experience</strong><small>Support queue + brand pulse</small></div></Link>
-              <Link to="/division/marketing" className="venom-drill-tile"><div><strong>Marketing</strong><small>Industry trends + campaigns</small></div></Link>
-              <Link to="/issues" className="venom-drill-tile"><div><strong>Issue Radar</strong><small>Social early warning + escalation</small></div></Link>
-              <Link to="/division/product-engineering" className="venom-drill-tile"><div><strong>Product Engineering</strong><small>Fleet telemetry + device health</small></div></Link>
+              <Link to="/division/customer-experience" className="venom-drill-tile"><div><strong>Customer Experience</strong><small>Support + brand pulse</small></div></Link>
+              <Link to="/division/marketing" className="venom-drill-tile"><div><strong>Marketing</strong><small>Campaigns + funnel</small></div></Link>
+              <Link to="/issues" className="venom-drill-tile"><div><strong>Issue Radar</strong><small>Social early warning</small></div></Link>
+              <Link to="/division/product-engineering" className="venom-drill-tile"><div><strong>Product Engineering</strong><small>Fleet telemetry</small></div></Link>
             </div>
           </section>
         </>

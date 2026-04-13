@@ -53,6 +53,18 @@ def _configured() -> bool:
     return bool(settings.youtube_api_key)
 
 
+def _is_latin_text(text: str) -> bool:
+    """Return True if the majority of the text uses Latin-script characters.
+
+    This is a lightweight heuristic to filter out non-English comments
+    (Russian, Arabic, CJK, etc.) without requiring a heavy NLP library.
+    """
+    if not text:
+        return True
+    latin_count = sum(1 for ch in text if ch.isascii() or '\u00C0' <= ch <= '\u024F')
+    return latin_count / len(text) > 0.6
+
+
 def _search_youtube(query: str, published_after: str, max_results: int = 25) -> list[dict[str, Any]]:
     """Search YouTube Data API v3 for videos matching *query*."""
     url = "https://www.googleapis.com/youtube/v3/search"
@@ -63,6 +75,8 @@ def _search_youtube(query: str, published_after: str, max_results: int = 25) -> 
         "order": "date",
         "maxResults": max_results,
         "publishedAfter": published_after,
+        "relevanceLanguage": "en",
+        "regionCode": "US",
         "key": settings.youtube_api_key,
     }
     try:
@@ -125,9 +139,13 @@ def _get_video_comments(video_id: str, max_results: int = 5) -> list[dict[str, A
         comments = []
         for item in resp.json().get("items", []):
             snippet = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+            text = (snippet.get("textDisplay", "") or "")[:300]
+            # Skip non-Latin comments (Russian, Arabic, CJK, etc.)
+            if not _is_latin_text(text):
+                continue
             comments.append({
                 "author": snippet.get("authorDisplayName", ""),
-                "text": (snippet.get("textDisplay", "") or "")[:300],
+                "text": text,
                 "likes": int(snippet.get("likeCount", 0)),
                 "published_at": snippet.get("publishedAt"),
             })
@@ -188,9 +206,13 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
                         published_at = datetime.fromisoformat(published_at_str.replace("Z", "+00:00"))
                     except ValueError:
                         pass
+                title = snippet.get("title", "")
+                # Skip non-English videos (Cyrillic, CJK, Arabic, etc.)
+                if not _is_latin_text(title):
+                    continue
                 all_videos[video_id] = {
                     "external_id": video_id,
-                    "title": snippet.get("title", ""),
+                    "title": title,
                     "body": snippet.get("description", ""),
                     "author": snippet.get("channelTitle", ""),
                     "source_url": f"https://www.youtube.com/watch?v={video_id}",

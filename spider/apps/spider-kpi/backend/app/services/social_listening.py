@@ -17,6 +17,14 @@ from app.models import SocialMention
 logger = logging.getLogger(__name__)
 
 
+def _is_latin_text(text: str | None) -> bool:
+    """Return True if the majority of text uses Latin-script characters."""
+    if not text:
+        return True
+    latin = sum(1 for ch in text if ch.isascii() or '\u00C0' <= ch <= '\u024F')
+    return latin / len(text) > 0.6
+
+
 def get_social_mentions(
     db: Session,
     platform: str | None = None,
@@ -38,8 +46,12 @@ def get_social_mentions(
         query = query.where(SocialMention.classification == classification)
 
     rows = db.execute(query).scalars().all()
-    return [
-        {
+    result = []
+    for row in rows:
+        # Filter non-English content (Cyrillic, CJK, Arabic titles/bodies)
+        if not _is_latin_text(row.title) and not _is_latin_text(row.body):
+            continue
+        result.append({
             "id": row.id,
             "platform": row.platform,
             "external_id": row.external_id,
@@ -60,9 +72,8 @@ def get_social_mentions(
             "relevance_score": row.relevance_score,
             "published_at": row.published_at.isoformat() if row.published_at else None,
             "discovered_at": row.discovered_at.isoformat() if row.discovered_at else None,
-        }
-        for row in rows
-    ]
+        })
+    return result
 
 
 def get_social_trends(db: Session, days: int = 30) -> dict[str, Any]:
@@ -198,11 +209,12 @@ def get_youtube_performance(db: Session, days: int = 30) -> dict[str, Any]:
             "published_at": row.published_at.isoformat() if row.published_at else None,
         }
 
-        # Include top comments if available
+        # Include top comments if available — filter non-English
         top_comments = meta.get("top_comments", [])
         if top_comments:
-            video_data["top_comments"] = top_comments[:3]
-            all_comments.extend(top_comments)
+            english_comments = [c for c in top_comments if _is_latin_text(c.get("text", ""))]
+            video_data["top_comments"] = english_comments[:3]
+            all_comments.extend(english_comments)
 
         top_videos.append(video_data)
 
@@ -210,8 +222,9 @@ def get_youtube_performance(db: Session, days: int = 30) -> dict[str, Any]:
         round(total_likes / total_views * 100, 2) if total_views > 0 else 0.0
     )
 
-    # Find most-discussed comment themes
-    comment_highlights = sorted(all_comments, key=lambda c: c.get("likes", 0), reverse=True)[:5]
+    # Find most-discussed comment themes (English only)
+    english_all = [c for c in all_comments if _is_latin_text(c.get("text", ""))]
+    comment_highlights = sorted(english_all, key=lambda c: c.get("likes", 0), reverse=True)[:5]
 
     return {
         "period_days": days,
