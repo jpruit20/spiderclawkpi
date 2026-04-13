@@ -175,6 +175,7 @@ class Settings(BaseSettings):
     # AI assistant
     ai_assistant_enabled: bool = False
     ai_assistant_model: str = "sonnet"
+    anthropic_api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices('ANTHROPIC_API_KEY'))
     workspace_root: str = Field(
         default="",
         validation_alias=AliasChoices('WORKSPACE_ROOT', 'KPI_WORKSPACE_ROOT'),
