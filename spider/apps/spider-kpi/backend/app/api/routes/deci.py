@@ -403,34 +403,239 @@ def update_domain(domain_id: int, body: DomainUpdate, db: Session = Depends(db_s
     }
 
 
-@router.post("/domains/seed", status_code=201)
-def seed_domains(db: Session = Depends(db_session)):
-    """Seed the 12 initial decision domains if they don't exist."""
-    INITIAL_DOMAINS = [
-        {"name": "New Product Concept Direction", "category": "product", "description": "Go/no-go decisions on new product ideas, market fit analysis, and concept validation", "sort_order": 1},
-        {"name": "Product Improvements & Iterations", "category": "product", "description": "Feature enhancements, design refinements, and iterative improvements to existing products", "sort_order": 2},
-        {"name": "Production Readiness & Launch", "category": "manufacturing", "description": "Manufacturing readiness, tooling decisions, supplier selection, and launch timing", "sort_order": 3},
-        {"name": "Quality & Warranty Standards", "category": "manufacturing", "description": "Quality control thresholds, warranty policy changes, and defect resolution protocols", "sort_order": 4},
-        {"name": "Pricing & Revenue Strategy", "category": "commercial", "description": "Pricing changes, discount structures, bundle strategies, and revenue optimization", "sort_order": 5},
-        {"name": "Marketing & Brand Positioning", "category": "commercial", "description": "Campaign decisions, channel strategy, brand messaging, and market positioning", "sort_order": 6},
-        {"name": "Customer Experience & Support", "category": "cx", "description": "Support process changes, SLA adjustments, customer journey improvements", "sort_order": 7},
-        {"name": "Technology & Infrastructure", "category": "engineering", "description": "Tech stack decisions, infrastructure investments, firmware architecture", "sort_order": 8},
-        {"name": "Supply Chain & Logistics", "category": "operations", "description": "Supplier changes, inventory strategy, shipping and fulfillment decisions", "sort_order": 9},
-        {"name": "Partnership & Channel Strategy", "category": "commercial", "description": "Retail partnerships, distribution agreements, co-marketing deals", "sort_order": 10},
-        {"name": "Regulatory & Compliance", "category": "operations", "description": "Safety certifications, regulatory compliance, legal requirements", "sort_order": 11},
-        {"name": "Team & Organizational", "category": "operations", "description": "Hiring decisions, role changes, organizational structure, vendor relationships", "sort_order": 12},
-    ]
+# ---------------------------------------------------------------------------
+# Leadership Matrix bootstrap data
+# ---------------------------------------------------------------------------
 
-    existing = {d.name for d in db.execute(select(DeciDomain)).scalars().all()}
-    created = []
-    for domain_data in INITIAL_DOMAINS:
-        if domain_data["name"] not in existing:
-            domain = DeciDomain(**domain_data)
+LEADERSHIP_TEAM = [
+    {"name": "Joseph", "role": "CEO / Founder", "department": "Executive"},
+    {"name": "Kyle", "role": "Product Lead", "department": "Product"},
+    {"name": "Conor", "role": "Operations Lead", "department": "Ops"},
+    {"name": "Bailey", "role": "Marketing Lead", "department": "Marketing"},
+    {"name": "Jeremiah", "role": "CX Lead", "department": "CX"},
+    {"name": "David", "role": "Manufacturing Lead", "department": "Manufacturing"},
+]
+
+MATRIX_DATA = [
+    # PRODUCT & ENGINEERING
+    {"name": "New Product Direction", "category": "product", "description": "Go/no-go on new product ideas, market fit, concept validation", "sort_order": 1,
+     "assignments": {"Joseph": "D", "Kyle": "E", "Conor": "C", "Bailey": "C", "Jeremiah": "I", "David": "C"}},
+    {"name": "Feature Prioritization", "category": "product", "description": "Feature backlog ranking, sprint priorities, roadmap sequencing", "sort_order": 2,
+     "assignments": {"Joseph": "D", "Kyle": "E", "Conor": "C", "Bailey": "C", "Jeremiah": "C", "David": "C"}},
+    {"name": "Product Improvements", "category": "product", "description": "Design refinements, iterative enhancements to existing products", "sort_order": 3,
+     "assignments": {"Joseph": "I", "Kyle": "D", "Conor": "C", "Bailey": "C", "Jeremiah": "C", "David": "E"}},
+    # MANUFACTURING
+    {"name": "Production Readiness", "category": "manufacturing", "description": "Manufacturing readiness, tooling, supplier selection, launch timing", "sort_order": 4,
+     "assignments": {"Joseph": "I", "Kyle": "C", "Conor": "C", "Bailey": "I", "Jeremiah": "I", "David": "D"}},
+    {"name": "Manufacturing Process", "category": "manufacturing", "description": "Production line decisions, QC thresholds, process optimization", "sort_order": 5,
+     "assignments": {"Joseph": "I", "Kyle": "C", "Conor": "C", "Bailey": "I", "Jeremiah": "I", "David": "D"}},
+    {"name": "DFM Decisions", "category": "manufacturing", "description": "Design for manufacturability, material selection, cost engineering", "sort_order": 6,
+     "assignments": {"Joseph": "C", "Kyle": "D", "Conor": "C", "Bailey": "I", "Jeremiah": "I", "David": "E"}},
+    # OPERATIONS
+    {"name": "Inventory Planning", "category": "operations", "description": "Stock levels, reorder points, demand forecasting", "sort_order": 7,
+     "assignments": {"Joseph": "C", "Kyle": "I", "Conor": "D", "Bailey": "C", "Jeremiah": "I", "David": "E"}},
+    {"name": "Supply Chain", "category": "operations", "description": "Supplier changes, logistics, fulfillment, shipping decisions", "sort_order": 8,
+     "assignments": {"Joseph": "I", "Kyle": "C", "Conor": "D", "Bailey": "I", "Jeremiah": "I", "David": "E"}},
+    {"name": "Launch Readiness", "category": "operations", "description": "Cross-functional launch coordination, go-live checklists", "sort_order": 9,
+     "assignments": {"Joseph": "C", "Kyle": "C", "Conor": "D", "Bailey": "C", "Jeremiah": "C", "David": "C"}},
+    # MARKETING
+    {"name": "Marketing Strategy", "category": "commercial", "description": "Channel strategy, market positioning, growth planning", "sort_order": 10,
+     "assignments": {"Joseph": "D", "Kyle": "I", "Conor": "C", "Bailey": "E", "Jeremiah": "C", "David": "I"}},
+    {"name": "Campaign Execution", "category": "commercial", "description": "Ad campaigns, content calendar, performance marketing", "sort_order": 11,
+     "assignments": {"Joseph": "I", "Kyle": "I", "Conor": "C", "Bailey": "D", "Jeremiah": "C", "David": "I"}},
+    {"name": "Brand Messaging", "category": "commercial", "description": "Brand voice, messaging framework, creative direction", "sort_order": 12,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "I", "Bailey": "E", "Jeremiah": "C", "David": "I"}},
+    # CUSTOMER EXPERIENCE
+    {"name": "Support Process", "category": "cx", "description": "Ticket workflow, SLA rules, escalation paths, tooling", "sort_order": 13,
+     "assignments": {"Joseph": "I", "Kyle": "C", "Conor": "C", "Bailey": "I", "Jeremiah": "D", "David": "I"}},
+    {"name": "Customer Recovery", "category": "cx", "description": "Warranty claims, refund policy, customer save plays", "sort_order": 14,
+     "assignments": {"Joseph": "C", "Kyle": "C", "Conor": "C", "Bailey": "I", "Jeremiah": "D", "David": "I"}},
+    {"name": "VOC Escalation", "category": "cx", "description": "Voice of customer routing, critical feedback escalation", "sort_order": 15,
+     "assignments": {"Joseph": "I", "Kyle": "C", "Conor": "C", "Bailey": "C", "Jeremiah": "D", "David": "I"}},
+    # PRICING & COMMERCIAL
+    {"name": "Pricing Strategy", "category": "commercial", "description": "Price points, discount structures, margin targets", "sort_order": 16,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "C", "Bailey": "C", "Jeremiah": "I", "David": "I"}},
+    {"name": "Promotions", "category": "commercial", "description": "Sale events, bundle offers, seasonal pricing", "sort_order": 17,
+     "assignments": {"Joseph": "C", "Kyle": "I", "Conor": "C", "Bailey": "D", "Jeremiah": "C", "David": "I"}},
+    {"name": "Channel Strategy", "category": "commercial", "description": "Retail partnerships, marketplace strategy, D2C vs wholesale", "sort_order": 18,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "C", "Bailey": "E", "Jeremiah": "I", "David": "I"}},
+    # EXECUTIVE
+    {"name": "Capital Allocation", "category": "executive", "description": "Budget decisions, investment priorities, resource allocation", "sort_order": 19,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "C", "Bailey": "C", "Jeremiah": "I", "David": "C"}},
+    {"name": "Strategic Partnerships", "category": "executive", "description": "Joint ventures, licensing deals, co-development agreements", "sort_order": 20,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "C", "Bailey": "C", "Jeremiah": "I", "David": "I"}},
+    {"name": "Org Structure", "category": "executive", "description": "Hiring, role changes, team structure, vendor relationships", "sort_order": 21,
+     "assignments": {"Joseph": "D", "Kyle": "C", "Conor": "C", "Bailey": "C", "Jeremiah": "I", "David": "I"}},
+]
+
+
+@router.post("/bootstrap", status_code=201)
+def bootstrap_leadership_matrix(db: Session = Depends(db_session)):
+    """Bootstrap the leadership team and DECI ownership matrix."""
+
+    # 1. Create team members (skip existing by name match)
+    existing_members = {
+        m.name: m
+        for m in db.execute(select(DeciTeamMember)).scalars().all()
+    }
+    created_members: list[str] = []
+    for member_data in LEADERSHIP_TEAM:
+        if member_data["name"] not in existing_members:
+            member = DeciTeamMember(
+                name=member_data["name"],
+                role=member_data["role"],
+                department=member_data["department"],
+                active=True,
+            )
+            db.add(member)
+            created_members.append(member_data["name"])
+    db.flush()
+
+    # 2. Build name -> id map
+    name_to_id: dict[str, int] = {
+        m.name: m.id
+        for m in db.execute(select(DeciTeamMember)).scalars().all()
+    }
+
+    # Joseph is always the escalation owner (CEO)
+    joseph_id = name_to_id.get("Joseph")
+
+    # 3. Create / update domains with DECI defaults
+    existing_domains = {
+        d.name: d
+        for d in db.execute(select(DeciDomain)).scalars().all()
+    }
+    created_domains: list[str] = []
+    updated_domains: list[str] = []
+
+    for entry in MATRIX_DATA:
+        assignments = entry["assignments"]
+
+        # Resolve DECI role lists from the assignment map
+        driver_id = None
+        executor_ids: list[int] = []
+        contributor_ids: list[int] = []
+        informed_ids: list[int] = []
+
+        for person_name, role_letter in assignments.items():
+            mid = name_to_id.get(person_name)
+            if mid is None:
+                continue
+            if role_letter == "D":
+                driver_id = mid
+            elif role_letter == "E":
+                executor_ids.append(mid)
+            elif role_letter == "C":
+                contributor_ids.append(mid)
+            elif role_letter == "I":
+                informed_ids.append(mid)
+
+        if entry["name"] in existing_domains:
+            # Update existing domain with matrix defaults
+            domain = existing_domains[entry["name"]]
+            domain.description = entry["description"]
+            domain.category = entry["category"]
+            domain.sort_order = entry["sort_order"]
+            domain.default_driver_id = driver_id
+            domain.default_executor_ids = executor_ids
+            domain.default_contributor_ids = contributor_ids
+            domain.default_informed_ids = informed_ids
+            domain.escalation_owner_id = joseph_id
+            updated_domains.append(entry["name"])
+        else:
+            domain = DeciDomain(
+                name=entry["name"],
+                description=entry["description"],
+                category=entry["category"],
+                sort_order=entry["sort_order"],
+                default_driver_id=driver_id,
+                default_executor_ids=executor_ids,
+                default_contributor_ids=contributor_ids,
+                default_informed_ids=informed_ids,
+                escalation_owner_id=joseph_id,
+            )
             db.add(domain)
-            created.append(domain_data["name"])
+            created_domains.append(entry["name"])
 
     db.commit()
-    return {"seeded": len(created), "domains": created}
+
+    return {
+        "members_created": len(created_members),
+        "members": created_members,
+        "domains_created": len(created_domains),
+        "domains_updated": len(updated_domains),
+        "domains": created_domains + updated_domains,
+    }
+
+
+@router.get("/matrix")
+def get_leadership_matrix(db: Session = Depends(db_session)):
+    """Return the leadership DECI matrix derived from domain defaults."""
+    members = (
+        db.execute(
+            select(DeciTeamMember)
+            .where(DeciTeamMember.active.is_(True))
+            .order_by(DeciTeamMember.id)
+        )
+        .scalars()
+        .all()
+    )
+
+    domains = (
+        db.execute(
+            select(DeciDomain)
+            .where(DeciDomain.active.is_(True))
+            .order_by(DeciDomain.sort_order)
+        )
+        .scalars()
+        .all()
+    )
+
+    member_list = [
+        {"id": m.id, "name": m.name, "role": m.role, "department": m.department}
+        for m in members
+    ]
+
+    categories: dict[str, list] = {}
+    for domain in domains:
+        cat = domain.category or "operations"
+        if cat not in categories:
+            categories[cat] = []
+
+        # Build DECI assignment map for this domain
+        assignments: dict[str, Optional[str]] = {}
+        for m in members:
+            role = None
+            if domain.default_driver_id == m.id:
+                role = "D"
+            elif m.id in (domain.default_executor_ids or []):
+                role = "E"
+            elif m.id in (domain.default_contributor_ids or []):
+                role = "C"
+            elif m.id in (domain.default_informed_ids or []):
+                role = "I"
+            assignments[str(m.id)] = role
+
+        # Count active decisions in this domain
+        decision_count = db.execute(
+            select(func.count()).select_from(DeciDecision).where(
+                DeciDecision.domain_id == domain.id,
+                DeciDecision.status != "complete",
+            )
+        ).scalar_one()
+
+        categories[cat].append({
+            "domain_id": domain.id,
+            "name": domain.name,
+            "description": domain.description,
+            "assignments": assignments,
+            "active_decisions": decision_count,
+        })
+
+    return {
+        "members": member_list,
+        "categories": categories,
+    }
 
 
 # ---------------------------------------------------------------------------

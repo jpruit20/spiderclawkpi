@@ -6,11 +6,12 @@ import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct } from '../lib/format'
 import type {
   DeciDecision, DeciOverview, DeciTeamMember, DeciDomain,
+  DeciMatrixResponse,
   DeciStatus, DeciPriority, DeciDecisionType,
   DeciDomainStat, DeciEscalationWarning,
 } from '../lib/types'
 
-type DeciView = 'overview' | 'map' | 'decisions' | 'detail' | 'roleload'
+type DeciView = 'overview' | 'map' | 'decisions' | 'detail' | 'roleload' | 'matrix'
 
 const STATUS_LABELS: Record<DeciStatus, string> = { not_started: 'Not Started', in_progress: 'In Progress', blocked: 'Blocked', complete: 'Complete' }
 const PRIORITY_LABELS: Record<DeciPriority, string> = { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' }
@@ -114,6 +115,7 @@ export function Deci() {
     ['map', 'Decision Map'],
     ['decisions', 'Active Decisions'],
     ['roleload', 'Role Load'],
+    ['matrix', 'Leadership Matrix'],
   ]
 
   return (
@@ -145,6 +147,7 @@ export function Deci() {
           {view === 'detail' && selectedId ? <DetailView decisionId={selectedId} team={team} domains={domains} onBack={() => setView('decisions')} onReload={loadAll} /> : null}
           {view === 'detail' && !selectedId ? <div className="state-message">Select a decision from the Active Decisions view.</div> : null}
           {view === 'roleload' ? <RoleLoadView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} /> : null}
+          {view === 'matrix' ? <LeadershipMatrixView team={team} domains={domains} decisions={decisions} onOpenDetail={openDetail} onReload={loadAll} /> : null}
         </>
       ) : null}
     </div>
@@ -672,8 +675,8 @@ function DecisionMapView({ decisions, team, domains, onOpenDetail, onReload }: {
                         <div style={{ fontWeight: 500 }}>{dom.name}</div>
                         {dom.description ? <div style={{ fontSize: 11, color: 'var(--muted)', maxWidth: 400 }}>{dom.description}</div> : null}
                       </td>
-                      <td style={{ padding: '6px 8px', color: dom.default_driver_name ? undefined : 'var(--orange)' }}>
-                        {dom.default_driver_name || 'Unassigned'}
+                      <td style={{ padding: '6px 8px', color: dom.default_driver_name ? undefined : 'var(--red)' }}>
+                        {dom.default_driver_name || 'Not configured in matrix'}
                       </td>
                       <td style={{ padding: '6px 8px', color: dom.escalation_owner_name ? undefined : 'var(--muted)' }}>
                         {dom.escalation_owner_name || '—'}
@@ -1590,6 +1593,434 @@ function RoleLoadView({ decisions, team, domains, onOpenDetail }: {
           </div>
         </section>
       ) : null}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// VIEW 6: Leadership DECI Matrix
+// ═══════════════════════════════════════════════════════
+const MATRIX_ROLE_COLORS: Record<string, { bg: string; fg: string; border: string }> = {
+  D: { bg: 'rgba(59,130,246,0.2)', fg: '#60a5fa', border: 'rgba(59,130,246,0.4)' },
+  E: { bg: 'rgba(16,185,129,0.2)', fg: '#34d399', border: 'rgba(16,185,129,0.4)' },
+  C: { bg: 'rgba(245,158,11,0.2)', fg: '#fbbf24', border: 'rgba(245,158,11,0.4)' },
+  I: { bg: 'rgba(107,114,128,0.15)', fg: '#9ca3af', border: 'rgba(107,114,128,0.3)' },
+}
+
+const MATRIX_ROLE_TOOLTIPS: Record<string, string> = {
+  D: 'DRIVER — Owns the decision. Single point of accountability.',
+  E: 'EXECUTOR — Implements and delivers the decision.',
+  C: 'CONTRIBUTOR — Provides input before the decision is made.',
+  I: 'INFORMED — Notified of the outcome. No input required.',
+}
+
+const MATRIX_CATEGORY_LABELS: Record<string, string> = {
+  product: 'Product & Engineering',
+  manufacturing: 'Manufacturing',
+  operations: 'Operations',
+  marketing: 'Marketing',
+  cx: 'Customer Experience',
+  commercial: 'Pricing & Commercial',
+  executive: 'Executive',
+}
+
+const MATRIX_CATEGORY_ORDER = ['product', 'manufacturing', 'operations', 'marketing', 'cx', 'commercial', 'executive']
+
+function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload }: {
+  team: DeciTeamMember[]
+  domains: DeciDomain[]
+  decisions: DeciDecision[]
+  onOpenDetail: (id: string) => void
+  onReload: () => void
+}) {
+  const [matrix, setMatrix] = useState<DeciMatrixResponse | null>(null)
+  const [matrixLoading, setMatrixLoading] = useState(true)
+  const [bootstrapping, setBootstrapping] = useState(false)
+  const [createFromRow, setCreateFromRow] = useState<{ domainId: number; name: string } | null>(null)
+  const [newTitle, setNewTitle] = useState('')
+  const [newPriority, setNewPriority] = useState<DeciPriority>('medium')
+  const [creating, setCreating] = useState(false)
+  const [hoveredCell, setHoveredCell] = useState<{ row: string; memberId: string; role: string } | null>(null)
+
+  const loadMatrix = useCallback(async () => {
+    setMatrixLoading(true)
+    try {
+      const m = await api.deciMatrix()
+      setMatrix(m)
+    } catch { /* ignore */ }
+    finally { setMatrixLoading(false) }
+  }, [])
+
+  useEffect(() => { void loadMatrix() }, [loadMatrix])
+
+  // Ownership conflict detector: decisions where driver deviates from matrix default
+  const conflicts = useMemo(() => {
+    if (!matrix) return []
+    const result: { decision: DeciDecision; domain: string; expectedDriver: string; actualDriver: string }[] = []
+    for (const d of decisions) {
+      if (!d.domain_id || !d.driver_id || d.status === 'complete') continue
+      for (const rows of Object.values(matrix.categories)) {
+        const row = rows.find(r => r.domain_id === d.domain_id)
+        if (row) {
+          const expectedEntry = Object.entries(row.assignments).find(([, role]) => role === 'D')
+          if (expectedEntry && d.driver_id !== Number(expectedEntry[0])) {
+            const expectedName = matrix.members.find(m => m.id === Number(expectedEntry[0]))?.name ?? 'Unknown'
+            result.push({ decision: d, domain: row.name, expectedDriver: expectedName, actualDriver: d.driver_name || 'Unknown' })
+          }
+          break
+        }
+      }
+    }
+    return result
+  }, [decisions, matrix])
+
+  async function handleBootstrap() {
+    setBootstrapping(true)
+    try {
+      await api.deciBootstrap()
+      onReload()
+      await loadMatrix()
+    } finally { setBootstrapping(false) }
+  }
+
+  async function handleCreateFromDomain() {
+    if (!createFromRow || !newTitle.trim()) return
+    setCreating(true)
+    try {
+      await api.deciCreateDecision({
+        title: newTitle.trim(),
+        domain_id: createFromRow.domainId,
+        type: 'Project',
+        priority: newPriority,
+      })
+      setNewTitle('')
+      setNewPriority('medium')
+      setCreateFromRow(null)
+      onReload()
+      await loadMatrix()
+    } finally { setCreating(false) }
+  }
+
+  if (matrixLoading) return <Card title="Loading"><div className="state-message">Loading leadership matrix...</div></Card>
+
+  if (!matrix || matrix.members.length === 0) {
+    return (
+      <section className="card">
+        <div className="venom-panel-head"><strong>Leadership DECI Matrix</strong></div>
+        <div style={{ padding: '24px 0', textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>&#9878;</div>
+          <p style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
+            DECI is a power structure, not a tracking tool.
+          </p>
+          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 20, maxWidth: 500, margin: '0 auto 20px' }}>
+            Bootstrap the full leadership DECI matrix with 6 team members and 21 decision domains across 7 categories.
+            Every decision at Spider Grills will flow through this matrix.
+          </p>
+          <button className="range-button active" onClick={handleBootstrap} disabled={bootstrapping} style={{ fontSize: 14, padding: '10px 28px' }}>
+            {bootstrapping ? 'Bootstrapping Leadership Matrix...' : 'Bootstrap Leadership Matrix'}
+          </button>
+          <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <span>Joseph (CEO)</span><span>&middot;</span>
+            <span>Kyle (Product)</span><span>&middot;</span>
+            <span>Conor (Ops)</span><span>&middot;</span>
+            <span>Bailey (Marketing)</span><span>&middot;</span>
+            <span>Jeremiah (CX)</span><span>&middot;</span>
+            <span>David (Mfg)</span>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  const members = matrix.members
+  const sortedCategories = MATRIX_CATEGORY_ORDER
+    .filter(cat => matrix.categories[cat]?.length)
+    .map(cat => ({ key: cat, label: MATRIX_CATEGORY_LABELS[cat] || cat, rows: matrix.categories[cat] }))
+  // Include any categories not in our order list
+  for (const [cat, rows] of Object.entries(matrix.categories)) {
+    if (!MATRIX_CATEGORY_ORDER.includes(cat) && rows.length > 0) {
+      sortedCategories.push({ key: cat, label: MATRIX_CATEGORY_LABELS[cat] || cat, rows })
+    }
+  }
+
+  const totalDomains = Object.values(matrix.categories).reduce((s, rows) => s + rows.length, 0)
+  const totalActiveDecisions = Object.values(matrix.categories).reduce((s, rows) => s + rows.reduce((ss, r) => ss + r.active_decisions, 0), 0)
+
+  return (
+    <>
+      {/* Matrix Header */}
+      <section className="card">
+        <div className="venom-panel-head">
+          <strong style={{ fontSize: 15 }}>Leadership DECI Matrix</strong>
+          <div className="inline-badges">
+            <span className="badge badge-neutral">{totalDomains} domains</span>
+            <span className="badge badge-good">{totalActiveDecisions} active decisions</span>
+            <span className="badge badge-neutral">{members.length} leaders</span>
+          </div>
+        </div>
+        <p style={{ color: 'var(--muted)', fontSize: 12, margin: '4px 0 12px' }}>
+          Person-first ownership matrix. Every row defines who Drives, Executes, Contributes, and is Informed for each decision area. Click any row to create a decision with auto-filled DECI assignments.
+        </p>
+        {/* Legend */}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {Object.entries(MATRIX_ROLE_COLORS).map(([role, colors]) => (
+            <div key={role} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span style={{
+                width: 28, height: 22, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                background: colors.bg, color: colors.fg, border: `1px solid ${colors.border}`, fontWeight: 800, fontSize: 11,
+              }}>{role}</span>
+              <span style={{ color: 'var(--muted)' }}>{MATRIX_ROLE_TOOLTIPS[role].split('—')[1]?.trim()}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Ownership Conflict Detector */}
+      {conflicts.length > 0 ? (
+        <section className="card">
+          <div className="venom-panel-head">
+            <strong>Ownership Conflicts</strong>
+            <span className="badge badge-bad">{conflicts.length} deviation{conflicts.length !== 1 ? 's' : ''} from matrix</span>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 8px' }}>
+            These active decisions have a Driver that differs from the matrix default. This may indicate an intentional override or an assignment error.
+          </p>
+          <div className="stack-list compact">
+            {conflicts.map((c, i) => (
+              <div key={`${c.decision.id}-${i}`} className="list-item status-bad" style={{ cursor: 'pointer' }} onClick={() => onOpenDetail(c.decision.id)}>
+                <div className="item-head">
+                  <strong>{c.decision.title}</strong>
+                  <div className="inline-badges">
+                    <span className="badge badge-muted">{c.domain}</span>
+                    <span className={`badge ${priorityBadge(c.decision.priority)}`}>{c.decision.priority}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+                  Matrix says <strong style={{ color: '#60a5fa' }}>{c.expectedDriver}</strong> should drive &rarr; currently assigned to <strong style={{ color: 'var(--orange)' }}>{c.actualDriver}</strong>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Create from domain row */}
+      {createFromRow ? (
+        <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
+          <div className="venom-panel-head">
+            <strong>Create Decision: {createFromRow.name}</strong>
+            <button className="range-button" onClick={() => { setCreateFromRow(null); setNewTitle('') }}>Cancel</button>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px' }}>
+            DECI assignments will be auto-filled from the leadership matrix for this domain.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 300px' }}>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Decision Title</label>
+              <input type="text" value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="What needs to be decided?" className="deci-input" style={{ width: '100%' }} autoFocus />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Priority</label>
+              <select value={newPriority} onChange={e => setNewPriority(e.target.value as DeciPriority)} className="deci-input">
+                {Object.entries(PRIORITY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            <button className="range-button active" onClick={handleCreateFromDomain} disabled={creating || !newTitle.trim()}>
+              {creating ? 'Creating...' : 'Create with Matrix Defaults'}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {/* Matrix Tables by Category */}
+      {sortedCategories.map(({ key: cat, label, rows }) => (
+        <section key={cat} className="card">
+          <div className="venom-panel-head">
+            <strong style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                width: 10, height: 10, borderRadius: '50%', display: 'inline-block',
+                background: DOMAIN_CATEGORY_COLORS[cat] || '#6b7280',
+              }} />
+              {label}
+            </strong>
+            <span className="venom-panel-hint">{rows.length} decision area{rows.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 600 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 10px', minWidth: 180 }}>Decision Area</th>
+                  {members.map(m => (
+                    <th key={m.id} style={{ textAlign: 'center', padding: '8px 6px', minWidth: 80, fontSize: 11 }}>
+                      <div style={{ fontWeight: 700, color: '#e2e8f0' }}>{m.name.split(' ')[0]}</div>
+                      <div style={{ fontWeight: 400, fontSize: 10, color: 'var(--muted)' }}>{m.role || m.department || ''}</div>
+                    </th>
+                  ))}
+                  <th style={{ textAlign: 'center', padding: '8px 6px', minWidth: 60 }}>Active</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr
+                    key={row.domain_id}
+                    style={{
+                      borderBottom: '1px solid rgba(255,255,255,0.06)',
+                      cursor: 'pointer',
+                      transition: 'background 0.15s',
+                    }}
+                    onClick={() => setCreateFromRow({ domainId: row.domain_id, name: row.name })}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(59,130,246,0.06)' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
+                  >
+                    <td style={{ padding: '8px 10px' }}>
+                      <div style={{ fontWeight: 500 }}>{row.name}</div>
+                      {row.description ? <div style={{ fontSize: 11, color: 'var(--muted)', maxWidth: 250, lineHeight: 1.3 }}>{row.description}</div> : null}
+                    </td>
+                    {members.map(m => {
+                      const role = row.assignments[String(m.id)]
+                      const colors = role ? MATRIX_ROLE_COLORS[role] : null
+                      const isHovered = hoveredCell?.row === row.name && hoveredCell?.memberId === String(m.id)
+                      return (
+                        <td
+                          key={m.id}
+                          style={{ textAlign: 'center', padding: '6px' }}
+                          onMouseEnter={() => role ? setHoveredCell({ row: row.name, memberId: String(m.id), role }) : undefined}
+                          onMouseLeave={() => setHoveredCell(null)}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {role ? (
+                            <div
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                width: 32, height: 26, borderRadius: 5,
+                                background: colors!.bg, color: colors!.fg, border: `1px solid ${colors!.border}`,
+                                fontWeight: 800, fontSize: 12, letterSpacing: 0.5,
+                                position: 'relative',
+                              }}
+                              title={`${m.name}: ${MATRIX_ROLE_TOOLTIPS[role]}`}
+                            >
+                              {role}
+                              {isHovered ? (
+                                <div style={{
+                                  position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)',
+                                  background: '#1e293b', color: '#e2e8f0', padding: '6px 10px', borderRadius: 6,
+                                  fontSize: 11, whiteSpace: 'nowrap', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                  border: '1px solid rgba(255,255,255,0.1)', pointerEvents: 'none',
+                                }}>
+                                  <strong>{m.name}</strong>: {MATRIX_ROLE_TOOLTIPS[role]}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span style={{ color: 'rgba(255,255,255,0.08)', fontSize: 16 }}>&middot;</span>
+                          )}
+                        </td>
+                      )
+                    })}
+                    <td style={{ textAlign: 'center', padding: '6px' }}>
+                      {row.active_decisions > 0 ? (
+                        <span style={{ color: 'var(--green)', fontWeight: 600 }}>{row.active_decisions}</span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)' }}>0</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
+
+      {/* Matrix Coverage Summary */}
+      <section className="card">
+        <div className="venom-panel-head">
+          <strong>Coverage Summary</strong>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                <th style={{ textAlign: 'left', padding: '8px 10px' }}>Leader</th>
+                <th style={{ textAlign: 'center', padding: '8px 6px' }}>
+                  <span style={{ color: MATRIX_ROLE_COLORS.D.fg }}>Driving</span>
+                </th>
+                <th style={{ textAlign: 'center', padding: '8px 6px' }}>
+                  <span style={{ color: MATRIX_ROLE_COLORS.E.fg }}>Executing</span>
+                </th>
+                <th style={{ textAlign: 'center', padding: '8px 6px' }}>
+                  <span style={{ color: MATRIX_ROLE_COLORS.C.fg }}>Contributing</span>
+                </th>
+                <th style={{ textAlign: 'center', padding: '8px 6px' }}>
+                  <span style={{ color: MATRIX_ROLE_COLORS.I.fg }}>Informed</span>
+                </th>
+                <th style={{ textAlign: 'center', padding: '8px 6px' }}>Total Involved</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map(m => {
+                let dCount = 0, eCount = 0, cCount = 0, iCount = 0
+                for (const rows of Object.values(matrix.categories)) {
+                  for (const row of rows) {
+                    const role = row.assignments[String(m.id)]
+                    if (role === 'D') dCount++
+                    else if (role === 'E') eCount++
+                    else if (role === 'C') cCount++
+                    else if (role === 'I') iCount++
+                  }
+                }
+                return (
+                  <tr key={m.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    <td style={{ padding: '8px 10px' }}>
+                      <div style={{ fontWeight: 600 }}>{m.name}</div>
+                      <div style={{ fontSize: 10, color: 'var(--muted)' }}>{[m.role, m.department].filter(Boolean).join(' · ')}</div>
+                    </td>
+                    <td style={{ textAlign: 'center', padding: '8px 6px' }}>
+                      <span style={{ color: MATRIX_ROLE_COLORS.D.fg, fontWeight: 700 }}>{dCount}</span>
+                    </td>
+                    <td style={{ textAlign: 'center', padding: '8px 6px' }}>
+                      <span style={{ color: MATRIX_ROLE_COLORS.E.fg, fontWeight: 600 }}>{eCount}</span>
+                    </td>
+                    <td style={{ textAlign: 'center', padding: '8px 6px' }}>
+                      <span style={{ color: MATRIX_ROLE_COLORS.C.fg }}>{cCount}</span>
+                    </td>
+                    <td style={{ textAlign: 'center', padding: '8px 6px' }}>
+                      <span style={{ color: MATRIX_ROLE_COLORS.I.fg }}>{iCount}</span>
+                    </td>
+                    <td style={{ textAlign: 'center', padding: '8px 6px' }}>
+                      <span style={{ fontWeight: 600 }}>{dCount + eCount + cCount + iCount}</span>
+                      <span style={{ color: 'var(--muted)' }}> / {totalDomains}</span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* How It Works */}
+      <section className="card">
+        <div className="venom-panel-head"><strong>How the Matrix Works</strong></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.D.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.D.fg, marginBottom: 4 }}>1. Select Domain</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Click any row in the matrix to start a new decision in that domain.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.E.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.E.fg, marginBottom: 4 }}>2. Auto-Apply Matrix</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>DECI assignments are pre-filled from the matrix row. Driver, Executors, Contributors, Informed.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${MATRIX_ROLE_COLORS.C.fg}` }}>
+            <div style={{ fontWeight: 700, color: MATRIX_ROLE_COLORS.C.fg, marginBottom: 4 }}>3. Assign DECI</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Verify or override defaults. The conflict detector will flag deviations.</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--green)' }}>
+            <div style={{ fontWeight: 700, color: 'var(--green)', marginBottom: 4 }}>4. Execute & Track</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Decisions flow through the system with escalation, timeline, and KPI links.</div>
+          </div>
+        </div>
+      </section>
     </>
   )
 }

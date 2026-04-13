@@ -8,6 +8,7 @@ import type {
   DataQualityResponse,
   DeciDecision,
   DeciDomain,
+  DeciMatrixResponse,
   DeciOverview,
   DeciTeamMember,
   DiagnosticItem,
@@ -275,6 +276,12 @@ export const api = {
     fetch(`${API_BASE}/api/deci/domains/seed`, {
       method: 'POST', credentials: 'include',
     }).then(r => r.json() as Promise<{ seeded: number; domains: string[] }>),
+  deciMatrix: (signal?: AbortSignal) =>
+    request<DeciMatrixResponse>('/api/deci/matrix', { signal }),
+  deciBootstrap: () =>
+    fetch(`${API_BASE}/api/deci/bootstrap`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<{ team_created: number; domains_created: number; domains_updated: number }>),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),

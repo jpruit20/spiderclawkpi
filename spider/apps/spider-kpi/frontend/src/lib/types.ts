@@ -809,6 +809,26 @@ export interface DeciEscalationWarning {
   escalation_owner?: string
 }
 
+export interface DeciMatrixMember {
+  id: number
+  name: string
+  role?: string
+  department?: string
+}
+
+export interface DeciMatrixRow {
+  domain_id: number
+  name: string
+  description?: string
+  assignments: Record<string, string | null>  // member_id -> D/E/C/I/null
+  active_decisions: number
+}
+
+export interface DeciMatrixResponse {
+  members: DeciMatrixMember[]
+  categories: Record<string, DeciMatrixRow[]>
+}
+
 export interface DeciTeamMember {
   id: number
   name: string
