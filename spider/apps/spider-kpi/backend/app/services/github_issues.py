@@ -129,17 +129,23 @@ def _extract_priority(labels: list[dict]) -> Optional[str]:
 
 
 def get_p0_p1_issues() -> dict:
-    """Get only P0 and P1 priority issues (bugs and critical issues)."""
-    # Try fetching with priority labels first
-    result = fetch_engineering_issues(labels=["bug"], state="open", per_page=50)
+    """Get open engineering issues, prioritized by severity.
+
+    Fetches all open issues (not just bugs), assigns priority from labels,
+    and returns them sorted: P0 first, then P1, then bugs, then the rest.
+    """
+    result = fetch_engineering_issues(labels=None, state="open", per_page=50)
 
     if result.get("issues"):
-        # Filter to only P0/P1 issues
-        p0_p1_issues = [
-            issue for issue in result["issues"]
-            if issue.get("priority") in ("P0", "P1") or issue.get("is_bug")
-        ]
-        result["issues"] = p0_p1_issues[:10]  # Limit to top 10
-        result["total_count"] = len(p0_p1_issues)
+        PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+        issues = result["issues"]
+        # Sort: P0/P1 first, then bugs, then by updated_at
+        issues.sort(key=lambda i: (
+            PRIORITY_ORDER.get(i.get("priority") or "", 99),
+            0 if i.get("is_bug") else 1,
+            i.get("updated_at", ""),
+        ))
+        result["issues"] = issues[:15]
+        result["total_count"] = len(issues)
 
     return result

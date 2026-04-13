@@ -810,26 +810,39 @@ export function ProductEngineeringDivision() {
               <div className="two-col two-col-equal">
                 <section className="card">
                   <div className="venom-panel-head">
-                    <strong>P0/P1 Engineering Issues</strong>
-                    {githubIssues?.repo && <a href={`https://github.com/${githubIssues.repo}/issues`} target="_blank" rel="noopener noreferrer" className="analysis-link">GitHub &#x2197;</a>}
+                    <strong>Engineering Issues</strong>
+                    <span className="venom-panel-hint">
+                      {githubIssues?.total_count ? `${githubIssues.total_count} open` : ''}
+                      {githubIssues?.repo && <>{' · '}<a href={`https://github.com/${githubIssues.repo}/issues`} target="_blank" rel="noopener noreferrer" className="analysis-link">GitHub &#x2197;</a></>}
+                    </span>
                   </div>
                   {githubIssues?.error ? (
                     <div className="state-message warn">{githubIssues.error}</div>
                   ) : githubIssues?.issues && githubIssues.issues.length > 0 ? (
                     <div className="stack-list compact">
-                      {githubIssues.issues.map(issue => (
-                        <a key={issue.id} href={issue.html_url} target="_blank" rel="noopener noreferrer" className={`list-item status-${issue.priority === 'P0' ? 'bad' : 'warn'}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                          <div className="item-head">
-                            <strong>#{issue.number} {issue.title}</strong>
-                            <div className="inline-badges">
-                              {issue.priority && <span className={`badge ${issue.priority === 'P0' ? 'badge-bad' : 'badge-warn'}`}>{issue.priority}</span>}
+                      {githubIssues.issues.map(issue => {
+                        const severity = issue.priority === 'P0' ? 'bad' : issue.priority === 'P1' ? 'warn' : issue.is_bug ? 'muted' : 'muted'
+                        return (
+                          <a key={issue.id} href={issue.html_url} target="_blank" rel="noopener noreferrer" className={`list-item status-${severity}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                            <div className="item-head">
+                              <strong style={{ fontSize: 12 }}>#{issue.number} {issue.title}</strong>
+                              <div className="inline-badges">
+                                {issue.priority && <span className={`badge ${issue.priority === 'P0' ? 'badge-bad' : issue.priority === 'P1' ? 'badge-warn' : 'badge-neutral'}`}>{issue.priority}</span>}
+                                {issue.is_bug && <span className="badge badge-bad" style={{ fontSize: 10 }}>bug</span>}
+                              </div>
                             </div>
-                          </div>
-                          <p>{issue.assignees.length > 0 ? `Assigned: ${issue.assignees.join(', ')}` : 'Unassigned'} · Updated {formatFreshness(issue.updated_at)}</p>
-                        </a>
-                      ))}
+                            <p style={{ fontSize: 11 }}>
+                              {issue.assignees.length > 0 ? issue.assignees.join(', ') : 'Unassigned'}
+                              {' · '}{formatFreshness(issue.updated_at)}
+                              {issue.labels.filter(l => !['bug', 'p0', 'p1', 'p2', 'p3', 'critical', 'high', 'medium', 'low'].includes(l.toLowerCase())).slice(0, 2).map(l => (
+                                <span key={l} className="badge badge-neutral" style={{ marginLeft: 4, fontSize: 10 }}>{l}</span>
+                              ))}
+                            </p>
+                          </a>
+                        )
+                      })}
                     </div>
-                  ) : <div className="state-message">{githubIssues?.configured === false ? 'GitHub not configured.' : 'No P0/P1 issues'}</div>}
+                  ) : <div className="state-message">{githubIssues?.configured === false ? 'GitHub not configured. Set GITHUB_TOKEN in the backend.' : 'No open issues'}</div>}
                 </section>
                 <section className="card">
                   <div className="venom-panel-head">

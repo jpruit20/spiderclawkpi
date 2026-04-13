@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession, TelemetryStreamEvent
 from app.services.telemetry_history import get_telemetry_history_monthly
-from app.services.telemetry_stream_summary import summarize_stream_telemetry
+from app.services.telemetry_stream_summary import summarize_stream_telemetry, _derive_sessions
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -113,6 +113,95 @@ def _build_cook_analysis(db: Session, lookback_days: int = 30) -> dict[str, Any]
     }
 
 
+def _build_cook_analysis_from_derived(derived_sessions: list) -> dict[str, Any]:
+    """Build cook_analysis from DerivedSession objects produced by stream summary.
+
+    This replaces the TelemetrySession-based version when stream data is the
+    primary source (which is the normal case — the telemetry_sessions table
+    is only populated by the legacy materializer).
+    """
+    if not derived_sessions:
+        return {"total_sessions": 0, "cook_styles": {}, "temp_ranges": {}, "duration_ranges": {}, "style_details": {}}
+
+    cook_styles: dict[str, int] = {"startup_only": 0, "hot_and_fast": 0, "low_and_slow": 0, "medium_heat": 0, "unclassified": 0}
+    temp_ranges: dict[str, int] = {"under_250": 0, "250_to_300": 0, "300_to_400": 0, "over_400": 0}
+    duration_ranges: dict[str, int] = {"under_30m": 0, "30m_to_2h": 0, "2h_to_4h": 0, "over_4h": 0}
+    style_durations: dict[str, list[int]] = defaultdict(list)
+    style_stability: dict[str, list[float]] = defaultdict(list)
+    style_success: dict[str, list[bool]] = defaultdict(list)
+
+    for s in derived_sessions:
+        start = s.start_ts
+        end = s.end_ts
+        dur = int((end - start).total_seconds()) if start and end else 0
+        temp = s.target_temp or 0
+
+        # Duration buckets
+        if dur < 1800:
+            duration_ranges["under_30m"] += 1
+        elif dur < 7200:
+            duration_ranges["30m_to_2h"] += 1
+        elif dur < 14400:
+            duration_ranges["2h_to_4h"] += 1
+        else:
+            duration_ranges["over_4h"] += 1
+
+        # Temperature buckets
+        if temp <= 0:
+            pass
+        elif temp < 250:
+            temp_ranges["under_250"] += 1
+        elif temp <= 300:
+            temp_ranges["250_to_300"] += 1
+        elif temp <= 400:
+            temp_ranges["300_to_400"] += 1
+        else:
+            temp_ranges["over_400"] += 1
+
+        # Cook style classification
+        if dur < 900:
+            style = "startup_only"
+        elif temp >= 400:
+            style = "hot_and_fast"
+        elif temp <= 275 and dur >= 1800:
+            style = "low_and_slow"
+        elif temp > 0:
+            style = "medium_heat"
+        else:
+            style = "unclassified"
+
+        cook_styles[style] += 1
+        style_durations[style].append(dur)
+        if s.stability_score is not None:
+            style_stability[style].append(s.stability_score)
+        style_success[style].append(bool(s.session_success))
+
+    style_details: dict[str, dict[str, Any]] = {}
+    total = len(derived_sessions)
+    for style_name, count in cook_styles.items():
+        if count == 0:
+            continue
+        durations = style_durations.get(style_name, [])
+        stabilities = style_stability.get(style_name, [])
+        successes = style_success.get(style_name, [])
+        style_details[style_name] = {
+            "count": count,
+            "pct": round(count / total, 4),
+            "avg_duration_seconds": round(sum(durations) / max(len(durations), 1)),
+            "median_duration_seconds": round(median(durations)) if durations else 0,
+            "avg_stability_score": round(sum(stabilities) / max(len(stabilities), 1), 3) if stabilities else None,
+            "success_rate": round(sum(1 for s in successes if s) / max(len(successes), 1), 4) if successes else None,
+        }
+
+    return {
+        "total_sessions": total,
+        "cook_styles": cook_styles,
+        "temp_ranges": temp_ranges,
+        "duration_ranges": duration_ranges,
+        "style_details": style_details,
+    }
+
+
 def _severity_from_rate(rate: float, high: float, medium: float) -> str:
     if rate >= high:
         return "high"
@@ -157,7 +246,15 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
             payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
             payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
-            payload['cook_analysis'] = _build_cook_analysis(db, lookback_days)
+            # Build cook_analysis from stream-derived sessions (the TelemetrySession
+            # table is often empty when stream is the primary data path).
+            device_buckets: dict[str, list[TelemetryStreamEvent]] = defaultdict(list)
+            for evt in fresh_stream_events:
+                device_buckets[evt.device_id].append(evt)
+            derived = []
+            for device_id, events in device_buckets.items():
+                derived.extend(_derive_sessions(device_id, events))
+            payload['cook_analysis'] = _build_cook_analysis_from_derived(derived)
             return payload
 
     if not telemetry_tables_available(db):
