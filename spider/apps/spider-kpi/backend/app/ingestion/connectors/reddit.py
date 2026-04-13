@@ -77,10 +77,21 @@ COMPETITOR_MAP = [
     (re.compile(r"\btraeger", re.IGNORECASE), "traeger"),
     (re.compile(r"\bweber\b", re.IGNORECASE), "weber"),
     (re.compile(r"\bkamado\s*joe", re.IGNORECASE), "kamado_joe"),
-    (re.compile(r"\bbig\s*green\s*egg", re.IGNORECASE), "big_green_egg"),
+    (re.compile(r"\bbig\s*green\s*egg|\bbge\b", re.IGNORECASE), "big_green_egg"),
     (re.compile(r"\brec\s*tec", re.IGNORECASE), "rec_tec"),
     (re.compile(r"\bcamp\s*chef", re.IGNORECASE), "camp_chef"),
     (re.compile(r"\bpit\s*boss", re.IGNORECASE), "pit_boss"),
+    (re.compile(r"\boklahoma\s*joe", re.IGNORECASE), "oklahoma_joe"),
+    (re.compile(r"\bchar-?griller", re.IGNORECASE), "char_griller"),
+    (re.compile(r"\bmasterbuilt", re.IGNORECASE), "masterbuilt"),
+    (re.compile(r"\bgravity\s*series", re.IGNORECASE), "masterbuilt"),
+    (re.compile(r"\blouisiana\s*grills?", re.IGNORECASE), "louisiana_grills"),
+    (re.compile(r"\bdyna-?glo", re.IGNORECASE), "dyna_glo"),
+    (re.compile(r"\byoder\b", re.IGNORECASE), "yoder"),
+    (re.compile(r"\bblaze\s*grill", re.IGNORECASE), "blaze"),
+    (re.compile(r"\bflameboss", re.IGNORECASE), "flameboss"),
+    (re.compile(r"\bfireboard", re.IGNORECASE), "fireboard"),
+    (re.compile(r"\bbbq\s*guru", re.IGNORECASE), "bbq_guru"),
 ]
 
 POSITIVE_WORDS = {"love", "amazing", "best", "great", "perfect", "recommend", "awesome", "excellent", "fantastic", "impressed"}
@@ -110,6 +121,30 @@ REVIEW_PATTERNS = [
     re.compile(r"\bfirst\s+impression", re.IGNORECASE),
     re.compile(r"\bmonths?\s+(in|later|with)\b", re.IGNORECASE),
     re.compile(r"\bupdate\b.*\b(after|month|week)", re.IGNORECASE),
+]
+
+PURCHASE_INTENT_PATTERNS = [
+    re.compile(r"\b(thinking\s+(about|of)\s+(buying|getting|purchasing))\b", re.IGNORECASE),
+    re.compile(r"\b(looking\s+(for|to\s+buy|at\s+buying))\b", re.IGNORECASE),
+    re.compile(r"\b(deciding\s+between)\b", re.IGNORECASE),
+    re.compile(r"\bwhich\s+(should\s+i|one|grill|smoker)\b", re.IGNORECASE),
+    re.compile(r"\b(help\s+me\s+(choose|decide|pick))\b", re.IGNORECASE),
+    re.compile(r"\b(vs\.?|versus)\b", re.IGNORECASE),
+    re.compile(r"\bbest\s+(charcoal\s+)?(grill|smoker|controller)\s+(for|under)\b", re.IGNORECASE),
+    re.compile(r"\b(worth\s+(it|the\s+(money|price|investment)))\b", re.IGNORECASE),
+    re.compile(r"\b(upgrade|upgrading)\s+(from|to|my)\b", re.IGNORECASE),
+    re.compile(r"\bfirst\s+(grill|smoker|charcoal)\b", re.IGNORECASE),
+]
+
+PRODUCT_INNOVATION_PATTERNS = [
+    re.compile(r"\bi\s+wish\s+(my|the|a)\b", re.IGNORECASE),
+    re.compile(r"\bwould\s+be\s+(nice|great|awesome|cool)\s+(if|to)\b", re.IGNORECASE),
+    re.compile(r"\bwhy\s+(doesn.t|don.t|can.t|isn.t)\b.*\bgrill", re.IGNORECASE),
+    re.compile(r"\b(need|want)\s+a\s+(grill|smoker|controller)\s+(that|with|which)\b", re.IGNORECASE),
+    re.compile(r"\bmissing\s+feature", re.IGNORECASE),
+    re.compile(r"\bif\s+only\b", re.IGNORECASE),
+    re.compile(r"\b(dream|ideal|perfect)\s+(grill|smoker|setup|controller)\b", re.IGNORECASE),
+    re.compile(r"\bfeature\s+request", re.IGNORECASE),
 ]
 
 
@@ -152,10 +187,10 @@ def _is_brand_mention(text: str) -> bool:
 
 
 def classify_mention(title: str, body: str) -> dict[str, Any]:
-    """Classify a Reddit post/comment.
+    """Classify a social mention (Reddit post, YouTube video, etc.).
 
     Returns a dict with classification, sentiment, relevance_score, brand_mentioned,
-    product_mentioned, competitor_mentioned, and trend_topic.
+    product_mentioned, competitor_mentioned, trend_topic, and market_signals.
     """
     combined = f"{title} {body}"
 
@@ -164,24 +199,39 @@ def classify_mention(title: str, body: str) -> dict[str, Any]:
     competitor = _detect_competitor(combined)
     sentiment_label, sentiment_score = _score_sentiment(combined)
 
+    is_purchase_intent = any(p.search(combined) for p in PURCHASE_INTENT_PATTERNS)
+    is_product_innovation = any(p.search(combined) for p in PRODUCT_INNOVATION_PATTERNS)
+    is_question = any(p.search(combined) for p in QUESTION_PATTERNS)
+    is_complaint = any(p.search(combined) for p in COMPLAINT_PATTERNS) and sentiment_score < 0
+    is_review = any(p.search(combined) for p in REVIEW_PATTERNS)
+
     # Classification priority
     classification = "industry_trend"  # default for subreddit monitoring
     if brand:
-        # Check for complaint first
-        if any(p.search(combined) for p in COMPLAINT_PATTERNS) and sentiment_score < 0:
+        if is_complaint:
             classification = "complaint"
-        elif any(p.search(combined) for p in REVIEW_PATTERNS):
+        elif is_review:
             classification = "product_review"
-        elif any(p.search(combined) for p in QUESTION_PATTERNS):
+        elif is_purchase_intent:
+            classification = "purchase_intent"
+        elif is_question:
             classification = "customer_question"
         else:
             classification = "brand_mention"
+    elif is_purchase_intent:
+        classification = "purchase_intent"
+    elif is_product_innovation:
+        classification = "product_innovation"
     elif competitor:
-        if any(p.search(combined) for p in QUESTION_PATTERNS):
+        if is_complaint:
+            classification = "competitor_complaint"
+        elif is_review:
+            classification = "competitor_review"
+        elif is_question:
             classification = "customer_question"
         else:
             classification = "competitor_mention"
-    elif any(p.search(combined) for p in QUESTION_PATTERNS):
+    elif is_question:
         classification = "customer_question"
 
     # Relevance score: 0-1 based on how directly the post relates to Spider Grills
@@ -190,27 +240,58 @@ def classify_mention(title: str, body: str) -> dict[str, Any]:
         relevance = 0.9
         if product:
             relevance = 1.0
+    elif is_purchase_intent:
+        relevance = 0.6
+    elif is_product_innovation:
+        relevance = 0.5
     elif competitor:
         relevance = 0.4
-    elif any(p.search(combined) for p in QUESTION_PATTERNS):
+        if is_complaint:
+            relevance = 0.5  # competitor pain points are valuable
+    elif is_question:
         relevance = 0.3
 
-    # Trend topic extraction (simple keyword)
+    # Trend topic extraction — broad industry coverage
     trend_topic = None
     trend_keywords = [
-        ("temperature control", r"\btemp(erature)?\s*(control|management|regulation)\b"),
+        ("temperature control", r"\btemp(erature)?\s*(control|management|regulation|controller)\b"),
         ("pellet vs charcoal", r"\bpellet\b.*\bcharcoal\b|\bcharcoal\b.*\bpellet\b"),
-        ("wifi connectivity", r"\bwi-?fi\b|\bbluetooth\b|\bapp\b.*\b(connect|grill)\b"),
+        ("wifi connectivity", r"\bwi-?fi\b|\bbluetooth\b|\bapp\b.*\b(connect|grill|control)\b"),
+        ("smart grilling", r"\bsmart\s*(grill|smoker|cook)\b|\b(iot|connected)\s*grill\b"),
         ("smoking", r"\bsmoking\b|\bsmoke\b.*\b(ring|flavor|wood)\b"),
         ("low and slow", r"\blow\s*and\s*slow\b"),
         ("reverse sear", r"\breverse\s*sear\b"),
         ("brisket", r"\bbrisket\b"),
         ("ribs", r"\bribs\b"),
+        ("pulled pork", r"\bpulled\s*pork\b|\bpork\s*(butt|shoulder)\b"),
+        ("kamado cooking", r"\bkamado\b.*\b(cook|bake|smoke|grill)\b"),
+        ("charcoal types", r"\b(lump|briquette|binchotan)\s*(charcoal|coal)\b|\bcharcoal\s*(type|brand|quality)\b"),
+        ("fire management", r"\b(fire|airflow|vent|damper)\s*(management|control|adjust)\b"),
+        ("grill accessories", r"\b(accessori|gadget|attachment|upgrade)\b.*\b(grill|smoker)\b"),
+        ("competition bbq", r"\bcompetition\s*(bbq|barbecue|cook)\b|\b(kcbs|ibca)\b"),
+        ("outdoor kitchen", r"\boutdoor\s*kitchen\b|\bbuilt-?in\s*grill\b"),
+        ("fuel efficiency", r"\b(fuel|charcoal)\s*(usage|efficiency|consumption|cost)\b"),
+        ("grill maintenance", r"\b(clean|maint|rust|season)\b.*\b(grill|grate|smoker)\b"),
+        ("ceramic grills", r"\bceramic\s*(grill|smoker|cooker)\b"),
+        ("portable grilling", r"\bportable\s*(grill|smoker)\b|\b(travel|camping)\s*grill\b"),
     ]
     for topic_name, topic_pattern in trend_keywords:
         if re.search(topic_pattern, combined, re.IGNORECASE):
             trend_topic = topic_name
             break
+
+    # Market signal tags for intelligence layer
+    market_signals = []
+    if is_purchase_intent:
+        market_signals.append("purchase_intent")
+    if is_product_innovation:
+        market_signals.append("product_innovation")
+    if competitor and is_complaint:
+        market_signals.append("competitor_pain_point")
+    if competitor and is_review and sentiment_score < -0.2:
+        market_signals.append("competitor_weakness")
+    if competitor and is_review and sentiment_score > 0.2:
+        market_signals.append("competitor_strength")
 
     return {
         "classification": classification,
@@ -221,6 +302,7 @@ def classify_mention(title: str, body: str) -> dict[str, Any]:
         "competitor_mentioned": competitor,
         "relevance_score": round(relevance, 2),
         "trend_topic": trend_topic,
+        "market_signals": market_signals,
     }
 
 
@@ -418,6 +500,11 @@ def sync_reddit(db: Session, lookback_hours: int = 48) -> dict[str, Any]:
                 )
             ).scalars().first()
 
+            metadata = {
+                "source_query": "brand_search" if classification["brand_mentioned"] else "subreddit_monitor",
+                "market_signals": classification.get("market_signals", []),
+            }
+
             if existing is None:
                 mention = SocialMention(
                     platform="reddit",
@@ -438,9 +525,7 @@ def sync_reddit(db: Session, lookback_hours: int = 48) -> dict[str, Any]:
                     trend_topic=classification["trend_topic"],
                     relevance_score=classification["relevance_score"],
                     published_at=post["published_at"],
-                    metadata_json={
-                        "source_query": "brand_search" if classification["brand_mentioned"] else "subreddit_monitor",
-                    },
+                    metadata_json=metadata,
                 )
                 db.add(mention)
                 stats["inserted"] += 1
@@ -456,6 +541,7 @@ def sync_reddit(db: Session, lookback_hours: int = 48) -> dict[str, Any]:
                 existing.competitor_mentioned = classification["competitor_mentioned"]
                 existing.trend_topic = classification["trend_topic"]
                 existing.relevance_score = classification["relevance_score"]
+                existing.metadata_json = {**(existing.metadata_json or {}), **metadata}
                 stats["updated"] += 1
 
         duration_ms = int((time.monotonic() - started) * 1000)

@@ -18,6 +18,7 @@ import type {
   SocialTrendsResponse,
   YouTubePerformance,
   AmazonProductHealth,
+  MarketIntelligence,
   TelemetrySummary,
   RecommendationItem,
   SourceHealthItem,
@@ -204,6 +205,8 @@ export const api = {
     request<YouTubePerformance>(`/api/social/youtube-performance${days ? `?days=${days}` : ''}`, { signal }),
   amazonProducts: (signal?: AbortSignal) =>
     request<AmazonProductHealth>('/api/social/amazon-products', { signal }),
+  marketIntelligence: (days?: number, signal?: AbortSignal) =>
+    request<MarketIntelligence>(`/api/social/market-intelligence${days ? `?days=${days}` : ''}`, { signal }),
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),

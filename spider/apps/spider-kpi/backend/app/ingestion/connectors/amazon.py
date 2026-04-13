@@ -168,6 +168,43 @@ def _get_my_listings() -> list[dict[str, Any]]:
         return []
 
 
+COMPETITOR_SEARCHES = [
+    "charcoal grill temperature controller",
+    "kamado grill fan controller",
+    "charcoal smoker fan controller",
+    "wifi grill thermometer controller",
+]
+
+
+def _get_competitor_products() -> list[dict[str, Any]]:
+    """Search Amazon catalog for competitor products in our categories."""
+    marketplace = settings.amazon_marketplace_id
+    all_items: list[dict[str, Any]] = []
+    for query in COMPETITOR_SEARCHES:
+        try:
+            data = _sp_api_get(
+                "/catalog/2022-04-01/items",
+                params={
+                    "marketplaceIds": marketplace,
+                    "keywords": query,
+                    "includedData": "summaries,salesRanks",
+                    "pageSize": "10",
+                },
+            )
+            all_items.extend(data.get("items", []))
+        except Exception as exc:
+            logger.warning("amazon: competitor search '%s' failed: %s", query, exc)
+    # Deduplicate by ASIN
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in all_items:
+        asin = item.get("asin", "")
+        if asin and asin not in seen:
+            seen.add(asin)
+            unique.append(item)
+    return unique
+
+
 def _get_competitive_pricing(asin: str) -> dict[str, Any] | None:
     """Get competitive pricing for an ASIN."""
     marketplace = settings.amazon_marketplace_id
@@ -363,6 +400,87 @@ def sync_amazon(db: Session) -> dict[str, Any]:
                 existing.body = body
                 existing.engagement_score = parsed["bsr"] or 0
                 existing.metadata_json = {**(existing.metadata_json or {}), **metadata}
+                stats["updated"] += 1
+
+        # Step 2: Discover competitor products in our categories
+        competitor_items = _get_competitor_products()
+        stats["competitor_products_fetched"] = len(competitor_items)
+        logger.info("amazon: discovered %d competitor catalog items", len(competitor_items))
+
+        our_asins = {p["asin"] for p in stats["products"]}
+        for item in competitor_items:
+            parsed = _parse_catalog_item(item)
+            if not parsed:
+                continue
+            asin = parsed["asin"]
+            if asin in our_asins:
+                continue  # Skip our own products
+
+            external_id = f"competitor:{asin}"
+            brand = parsed["brand"] or "Unknown"
+            body_parts = []
+            if parsed["bsr"]:
+                body_parts.append(f"BSR #{parsed['bsr']} in {parsed['bsr_category'] or 'N/A'}")
+            if brand:
+                body_parts.append(f"Brand: {brand}")
+            body = " | ".join(body_parts) if body_parts else ""
+
+            # Determine if this is a known competitor brand
+            brand_lower = brand.lower()
+            competitor_name = None
+            for name in ["traeger", "weber", "kamado joe", "big green egg", "pit boss",
+                         "camp chef", "rec tec", "masterbuilt", "flameboss", "fireboard",
+                         "bbq guru", "oklahoma joe", "char-griller", "dyna-glo"]:
+                if name.replace(" ", "") in brand_lower.replace(" ", "").replace("-", ""):
+                    competitor_name = name.replace(" ", "_").replace("-", "_")
+                    break
+
+            existing = db.execute(
+                select(SocialMention).where(
+                    SocialMention.platform == "amazon",
+                    SocialMention.external_id == external_id,
+                )
+            ).scalars().first()
+
+            comp_metadata = {
+                "asin": asin,
+                "bsr": parsed["bsr"],
+                "bsr_category": parsed["bsr_category"],
+                "brand": brand,
+                "image_url": parsed["image_url"],
+                "marketplace": parsed["marketplace"],
+                "data_type": "competitor_product",
+            }
+
+            if existing is None:
+                mention = SocialMention(
+                    platform="amazon",
+                    external_id=external_id,
+                    source_url=f"https://www.amazon.com/dp/{asin}",
+                    title=parsed["title"],
+                    body=body,
+                    author=brand,
+                    engagement_score=parsed["bsr"] or 0,
+                    comment_count=0,
+                    sentiment="neutral",
+                    sentiment_score=0.0,
+                    classification="competitor_product",
+                    brand_mentioned=False,
+                    product_mentioned=None,
+                    competitor_mentioned=competitor_name,
+                    trend_topic=None,
+                    relevance_score=0.3,
+                    published_at=datetime.now(timezone.utc),
+                    metadata_json=comp_metadata,
+                )
+                db.add(mention)
+                stats["inserted"] += 1
+            else:
+                existing.title = parsed["title"]
+                existing.body = body
+                existing.engagement_score = parsed["bsr"] or 0
+                existing.competitor_mentioned = competitor_name
+                existing.metadata_json = {**(existing.metadata_json or {}), **comp_metadata}
                 stats["updated"] += 1
 
         duration_ms = int((time.monotonic() - started) * 1000)

@@ -6,7 +6,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
-import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth } from '../lib/types'
+import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth, MarketIntelligence } from '../lib/types'
 import { BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts'
 
 type MentionFilter = 'all' | 'positive' | 'negative' | 'questions' | 'complaints'
@@ -35,6 +35,7 @@ export function SocialIntelligence() {
   const [mentions, setMentions] = useState<SocialMention[]>([])
   const [youtube, setYoutube] = useState<YouTubePerformance | null>(null)
   const [amazon, setAmazon] = useState<AmazonProductHealth | null>(null)
+  const [market, setMarket] = useState<MarketIntelligence | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<MentionFilter>('all')
@@ -45,12 +46,13 @@ export function SocialIntelligence() {
       setLoading(true)
       setError(null)
       try {
-        const [p, t, m, yt, amz] = await Promise.all([
+        const [p, t, m, yt, amz, mkt] = await Promise.all([
           api.socialPulse(7).catch(() => null),
           api.socialTrends(30).catch(() => null),
           api.socialMentions({ days: 7 }).catch(() => []),
           api.youtubePerformance(30).catch(() => null),
           api.amazonProducts().catch(() => null),
+          api.marketIntelligence(30).catch(() => null),
         ])
         if (cancelled) return
         setPulse(p)
@@ -58,6 +60,7 @@ export function SocialIntelligence() {
         setMentions(m)
         setYoutube(yt)
         setAmazon(amz)
+        setMarket(mkt)
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load social data')
       } finally {
@@ -442,6 +445,250 @@ export function SocialIntelligence() {
               <div className="state-message">Industry trends will populate after first Reddit sync.</div>
             )}
           </section>
+
+          {/* ── Market Intelligence ── */}
+          {market && market.total_mentions > 0 ? (
+            <>
+              {/* Competitive Landscape */}
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Competitive Landscape</strong>
+                  <span className="venom-panel-hint">30-day share of voice across all platforms</span>
+                </div>
+                <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtPct(market.competitive_landscape.brand_share_of_voice)}</span>
+                    <span className="mini-stat-label">Spider Grills SOV</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtInt(market.competitive_landscape.brand_mentions)}</span>
+                    <span className="mini-stat-label">Brand Mentions</span>
+                  </div>
+                  <div className="mini-stat">
+                    <span className="mini-stat-value">{fmtInt(market.competitive_landscape.competitors.length)}</span>
+                    <span className="mini-stat-label">Competitors Tracked</span>
+                  </div>
+                </div>
+                {market.competitive_landscape.competitors.length > 0 ? (
+                  <div className="chart-wrap-short">
+                    <ResponsiveContainer width="100%" height={Math.max(200, market.competitive_landscape.competitors.slice(0, 10).length * 30)}>
+                      <BarChart data={market.competitive_landscape.competitors.slice(0, 10)} layout="vertical">
+                        <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                        <XAxis type="number" stroke="#9fb0d4" />
+                        <YAxis type="category" dataKey="competitor" stroke="#9fb0d4" tick={{ fontSize: 11 }} width={110} />
+                        <Tooltip formatter={(value: number) => [fmtInt(value), 'Mentions']} />
+                        <Bar dataKey="mentions" name="Mentions" fill="var(--orange)" radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : null}
+                {market.competitive_landscape.competitors.length > 0 ? (
+                  <div style={{ marginTop: 12 }}>
+                    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
+                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>Competitor</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Mentions</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>SOV</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Sentiment</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Engagement</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {market.competitive_landscape.competitors.slice(0, 10).map((c) => (
+                          <tr key={c.competitor} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '6px 8px', fontWeight: 500 }}>{c.competitor.replace(/_/g, ' ')}</td>
+                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.mentions)}</td>
+                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtPct(c.share_of_voice)}</td>
+                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>
+                              <span className={`badge ${sentimentBadgeClass(c.sentiment_label)}`} style={{ fontSize: 11 }}>
+                                {c.avg_sentiment > 0 ? '+' : ''}{c.avg_sentiment.toFixed(2)}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtInt(c.total_engagement)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </section>
+
+              {/* Amazon Market Position */}
+              {market.amazon_positioning.price || market.amazon_positioning.bsr ? (
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Amazon Market Position</strong>
+                    <TruthBadge state="proxy" />
+                  </div>
+                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
+                    {market.amazon_positioning.price ? (
+                      <>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value">${market.amazon_positioning.price.our_avg_price}</span>
+                          <span className="mini-stat-label">Our Avg Price</span>
+                        </div>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value">${market.amazon_positioning.price.competitor_avg_price}</span>
+                          <span className="mini-stat-label">Competitor Avg</span>
+                        </div>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value" style={{ color: market.amazon_positioning.price.position === 'premium' ? 'var(--orange)' : market.amazon_positioning.price.position === 'value' ? 'var(--green)' : 'var(--text)' }}>
+                            {market.amazon_positioning.price.position}
+                          </span>
+                          <span className="mini-stat-label">Price Position</span>
+                        </div>
+                      </>
+                    ) : null}
+                    {market.amazon_positioning.bsr ? (
+                      <>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value">#{fmtInt(market.amazon_positioning.bsr.our_best_bsr)}</span>
+                          <span className="mini-stat-label">Our Best BSR</span>
+                        </div>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value">#{fmtInt(market.amazon_positioning.bsr.competitor_best_bsr)}</span>
+                          <span className="mini-stat-label">Competitor Best</span>
+                        </div>
+                        <div className="mini-stat">
+                          <span className="mini-stat-value" style={{ color: market.amazon_positioning.bsr.outranking_competitors ? 'var(--green)' : 'var(--orange)' }}>
+                            {market.amazon_positioning.bsr.outranking_competitors ? 'Outranking' : 'Behind'}
+                          </span>
+                          <span className="mini-stat-label">BSR Position</span>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Tracking {market.amazon_positioning.our_products} Spider Grills products vs {market.amazon_positioning.competitor_products} competitor products on Amazon
+                  </div>
+                </section>
+              ) : null}
+
+              {/* Trend Momentum + Purchase Intent — 2-col */}
+              <div className="two-col two-col-equal">
+                {/* Trend Momentum */}
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Trend Momentum</strong>
+                    <span className="venom-panel-hint">Cross-platform topic tracking</span>
+                  </div>
+                  {market.trend_momentum.length > 0 ? (
+                    <div className="stack-list compact">
+                      {market.trend_momentum.slice(0, 10).map((t) => (
+                        <div key={t.topic} className="list-item status-muted">
+                          <div className="item-head">
+                            <strong>{t.topic}</strong>
+                            <div className="inline-badges">
+                              <span className={`badge ${t.momentum === 'strong' ? 'badge-good' : t.momentum === 'growing' ? 'badge-warn' : 'badge-muted'}`}>
+                                {t.momentum}
+                              </span>
+                              <span className="badge badge-neutral">{fmtInt(t.mentions)} mentions</span>
+                              {t.cross_platform ? <span className="badge badge-good">cross-platform</span> : null}
+                            </div>
+                          </div>
+                          <div className="venom-mention-meta">
+                            {t.platforms.map((p) => (
+                              <span key={p} className="badge badge-muted">{p}</span>
+                            ))}
+                            <span className="badge badge-neutral">{fmtInt(t.total_engagement)} engagement</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="state-message">Trend data will populate after social syncs run.</div>}
+                </section>
+
+                {/* Purchase Intent Monitor */}
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Purchase Intent Monitor</strong>
+                    <span className="venom-panel-hint">{fmtInt(market.purchase_intent.total)} signals detected</span>
+                  </div>
+                  {market.purchase_intent.posts.length > 0 ? (
+                    <div className="stack-list compact">
+                      {market.purchase_intent.posts.slice(0, 6).map((p, i) => (
+                        <div key={i} className="list-item status-muted">
+                          <div className="item-head">
+                            <strong>{p.title || 'Untitled'}</strong>
+                            <div className="inline-badges">
+                              <span className="badge badge-neutral">{p.platform}</span>
+                              {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
+                            </div>
+                          </div>
+                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 120)}{p.body.length > 120 ? '...' : ''}</p> : null}
+                          <div className="venom-mention-meta">
+                            {p.competitor_mentioned ? <span className="badge badge-warn">{p.competitor_mentioned}</span> : null}
+                            {p.product_mentioned ? <span className="badge badge-good">{p.product_mentioned}</span> : null}
+                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="state-message">Purchase intent signals will appear as people discuss buying grills.</div>}
+                </section>
+              </div>
+
+              {/* Product Innovation + Competitor Pain Points — 2-col */}
+              <div className="two-col two-col-equal">
+                {/* Product Innovation Ideas */}
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Product Innovation Signals</strong>
+                    <span className="venom-panel-hint">R&D opportunities from real users</span>
+                  </div>
+                  {market.product_innovation.posts.length > 0 ? (
+                    <div className="stack-list compact">
+                      {market.product_innovation.posts.slice(0, 6).map((p, i) => (
+                        <div key={i} className="list-item status-good">
+                          <div className="item-head">
+                            <strong>{p.title || 'Untitled'}</strong>
+                            <div className="inline-badges">
+                              <span className="badge badge-neutral">{p.platform}</span>
+                              {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
+                            </div>
+                          </div>
+                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 150)}{p.body.length > 150 ? '...' : ''}</p> : null}
+                          <div className="venom-mention-meta">
+                            {p.trend_topic ? <span className="badge badge-good">{p.trend_topic}</span> : null}
+                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="state-message">Innovation signals appear when users describe features they wish existed.</div>}
+                </section>
+
+                {/* Competitor Pain Points */}
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <strong>Competitor Pain Points</strong>
+                    <span className="venom-panel-hint">Their weaknesses = your opportunity</span>
+                  </div>
+                  {market.competitor_pain_points.posts.length > 0 ? (
+                    <div className="stack-list compact">
+                      {market.competitor_pain_points.posts.slice(0, 6).map((p, i) => (
+                        <div key={i} className="list-item status-bad">
+                          <div className="item-head">
+                            <strong>{p.title || 'Untitled'}</strong>
+                            <div className="inline-badges">
+                              <span className="badge badge-neutral">{p.platform}</span>
+                              {p.competitor ? <span className="badge badge-warn">{p.competitor.replace(/_/g, ' ')}</span> : null}
+                            </div>
+                          </div>
+                          {p.body ? <p className="venom-mention-body">{p.body.slice(0, 150)}{p.body.length > 150 ? '...' : ''}</p> : null}
+                          <div className="venom-mention-meta">
+                            {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
+                            {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral">View</a> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="state-message">Competitor complaints and weaknesses will surface as social data flows in.</div>}
+                </section>
+              </div>
+            </>
+          ) : null}
 
           {/* Navigation */}
           <section className="card">

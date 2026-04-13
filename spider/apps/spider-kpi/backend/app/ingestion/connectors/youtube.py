@@ -30,11 +30,23 @@ if not logger.handlers:
 
 TIMEOUT_SECONDS = 15
 
-SEARCH_QUERIES = [
+BRAND_QUERIES = [
     "spider grills",
     "venom grill controller",
     "huntsman grill",
 ]
+
+INDUSTRY_QUERIES = [
+    "charcoal grill review",
+    "best charcoal grill 2026",
+    "kamado grill review",
+    "grill temperature controller",
+    "charcoal vs pellet grill",
+    "smart grill technology",
+    "charcoal smoker review",
+]
+
+SEARCH_QUERIES = BRAND_QUERIES + INDUSTRY_QUERIES
 
 
 def _configured() -> bool:
@@ -161,7 +173,8 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
         all_videos: dict[str, dict[str, Any]] = {}
 
         for query in SEARCH_QUERIES:
-            items = _search_youtube(query, published_after, max_results=25)
+            is_brand_query = query in BRAND_QUERIES
+            items = _search_youtube(query, published_after, max_results=25 if is_brand_query else 15)
             stats["records_fetched"] += len(items)
             for item in items:
                 video_id = item.get("id", {}).get("videoId")
@@ -182,6 +195,8 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
                     "author": snippet.get("channelTitle", ""),
                     "source_url": f"https://www.youtube.com/watch?v={video_id}",
                     "published_at": published_at,
+                    "search_query": query,
+                    "search_type": "brand" if is_brand_query else "industry",
                 }
 
         # Fetch stats in batch
@@ -213,6 +228,9 @@ def sync_youtube(db: Session, lookback_hours: int = 168) -> dict[str, Any]:
             metadata = {
                 "like_count": video["like_count"],
                 "engagement_rate": engagement_rate,
+                "search_query": video.get("search_query", ""),
+                "search_type": video.get("search_type", "brand"),
+                "market_signals": classification.get("market_signals", []),
             }
             if video_id in video_comments:
                 metadata["top_comments"] = video_comments[video_id]

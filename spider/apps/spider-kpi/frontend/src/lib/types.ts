@@ -654,6 +654,71 @@ export interface AmazonProductHealth {
   price_range: { min: number; max: number } | null
 }
 
+export interface MarketCompetitor {
+  competitor: string
+  mentions: number
+  share_of_voice: number
+  avg_sentiment: number
+  total_engagement: number
+  sentiment_label: 'positive' | 'negative' | 'neutral'
+}
+
+export interface MarketPost {
+  title: string
+  body: string
+  platform: string
+  source_url: string
+  engagement_score: number
+  comment_count: number
+  competitor_mentioned?: string
+  product_mentioned?: string
+  competitor?: string
+  sentiment_score?: number
+  trend_topic?: string
+  published_at?: string
+}
+
+export interface TrendMomentum {
+  topic: string
+  mentions: number
+  total_engagement: number
+  platforms: string[]
+  cross_platform: boolean
+  momentum: 'strong' | 'growing' | 'emerging'
+}
+
+export interface MarketIntelligence {
+  period_days: number
+  total_mentions: number
+  by_platform: Record<string, number>
+  by_classification: Record<string, number>
+  competitive_landscape: {
+    brand_mentions: number
+    brand_engagement: number
+    brand_share_of_voice: number
+    competitors: MarketCompetitor[]
+  }
+  purchase_intent: {
+    total: number
+    posts: MarketPost[]
+  }
+  product_innovation: {
+    total: number
+    posts: MarketPost[]
+  }
+  competitor_pain_points: {
+    total: number
+    posts: MarketPost[]
+  }
+  trend_momentum: TrendMomentum[]
+  amazon_positioning: {
+    price: { our_avg_price: number; competitor_avg_price: number; price_delta_pct: number; position: string } | null
+    bsr: { our_best_bsr: number; competitor_best_bsr: number; our_product_count: number; competitor_product_count: number; outranking_competitors: boolean } | null
+    our_products: number
+    competitor_products: number
+  }
+}
+
 export interface GithubIssue {
   id: number
   number: number
