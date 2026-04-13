@@ -246,12 +246,9 @@ def summarize_telemetry(db: Session, lookback_days: int = 30, include_cook_analy
             payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
             payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
             payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
-            # Build cook_analysis from the sessions that summarize_stream_telemetry
-            # already derived — no extra DB query needed.
-            derived = payload.pop('_derived_sessions', [])
-            if include_cook_analysis and derived:
-                payload['cook_analysis'] = _build_cook_analysis_from_derived(derived)
-            else:
+            # cook_analysis is now built inside summarize_stream_telemetry
+            # directly from the derived sessions — no extra query needed.
+            if not include_cook_analysis:
                 payload['cook_analysis'] = None
             return payload
 

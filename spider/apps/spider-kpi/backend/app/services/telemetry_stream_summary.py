@@ -487,8 +487,75 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
                 except (TypeError, ValueError):
                     continue
 
+    # Build cook analysis inline from derived sessions
+    cook_styles: dict[str, int] = {"startup_only": 0, "hot_and_fast": 0, "low_and_slow": 0, "medium_heat": 0, "unclassified": 0}
+    cook_temp_ranges: dict[str, int] = {"under_250": 0, "250_to_300": 0, "300_to_400": 0, "over_400": 0}
+    cook_duration_ranges: dict[str, int] = {"under_30m": 0, "30m_to_2h": 0, "2h_to_4h": 0, "over_4h": 0}
+    cook_style_durations: dict[str, list[int]] = defaultdict(list)
+    cook_style_stability: dict[str, list[float]] = defaultdict(list)
+    cook_style_success: dict[str, list[bool]] = defaultdict(list)
+
+    for ds in derived_sessions:
+        ds_dur = int((ds.end_ts - ds.start_ts).total_seconds()) if ds.start_ts and ds.end_ts else 0
+        ds_temp = ds.target_temp or 0
+        if ds_dur < 1800:
+            cook_duration_ranges["under_30m"] += 1
+        elif ds_dur < 7200:
+            cook_duration_ranges["30m_to_2h"] += 1
+        elif ds_dur < 14400:
+            cook_duration_ranges["2h_to_4h"] += 1
+        else:
+            cook_duration_ranges["over_4h"] += 1
+        if ds_temp > 0:
+            if ds_temp < 250:
+                cook_temp_ranges["under_250"] += 1
+            elif ds_temp <= 300:
+                cook_temp_ranges["250_to_300"] += 1
+            elif ds_temp <= 400:
+                cook_temp_ranges["300_to_400"] += 1
+            else:
+                cook_temp_ranges["over_400"] += 1
+        if ds_dur < 900:
+            cs = "startup_only"
+        elif ds_temp >= 400:
+            cs = "hot_and_fast"
+        elif ds_temp <= 275 and ds_dur >= 1800:
+            cs = "low_and_slow"
+        elif ds_temp > 0:
+            cs = "medium_heat"
+        else:
+            cs = "unclassified"
+        cook_styles[cs] += 1
+        cook_style_durations[cs].append(ds_dur)
+        if ds.stability_score is not None:
+            cook_style_stability[cs].append(ds.stability_score)
+        cook_style_success[cs].append(bool(ds.session_success))
+
+    cook_style_details: dict[str, dict] = {}
+    cook_total = len(derived_sessions)
+    for sn, sc in cook_styles.items():
+        if sc == 0:
+            continue
+        sd = cook_style_durations.get(sn, [])
+        ss = cook_style_stability.get(sn, [])
+        sx = cook_style_success.get(sn, [])
+        cook_style_details[sn] = {
+            "count": sc,
+            "pct": round(sc / max(cook_total, 1), 4),
+            "avg_duration_seconds": round(sum(sd) / max(len(sd), 1)),
+            "median_duration_seconds": round(median(sd)) if sd else 0,
+            "avg_stability_score": round(sum(ss) / max(len(ss), 1), 3) if ss else None,
+            "success_rate": round(sum(1 for v in sx if v) / max(len(sx), 1), 4) if sx else None,
+        }
+
     return {
-        '_derived_sessions': derived_sessions,  # internal: used by summarize_telemetry for cook analysis
+        'cook_analysis': {
+            "total_sessions": cook_total,
+            "cook_styles": cook_styles,
+            "temp_ranges": cook_temp_ranges,
+            "duration_ranges": cook_duration_ranges,
+            "style_details": cook_style_details,
+        },
         'latest': latest,
         'daily': [latest] if latest.get('business_date') else [],
         'firmware_health': firmware_health,
