@@ -246,10 +246,17 @@ def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             payload.setdefault('analytics', {})['historical_monthly'] = historical_monthly
             payload.setdefault('collection_metadata', {})['historical_backfill_loaded'] = bool(historical_monthly)
             payload['collection_metadata']['historical_months_loaded'] = len(historical_monthly)
-            # Build cook_analysis from stream-derived sessions (the TelemetrySession
-            # table is often empty when stream is the primary data path).
+            # Build cook_analysis from a wider event window so we get complete
+            # sessions.  The main stream query (5 000 rows) covers ~30 min which
+            # isn't enough — we need at least 24 h of data to see full cooks.
+            cook_events = db.execute(
+                select(TelemetryStreamEvent)
+                .where(TelemetryStreamEvent.sample_timestamp >= datetime.now(timezone.utc) - timedelta(hours=24))
+                .order_by(desc(TelemetryStreamEvent.sample_timestamp))
+                .limit(50_000)
+            ).scalars().all()
             device_buckets: dict[str, list[TelemetryStreamEvent]] = defaultdict(list)
-            for evt in fresh_stream_events:
+            for evt in cook_events:
                 device_buckets[evt.device_id].append(evt)
             derived = []
             for device_id, events in device_buckets.items():
