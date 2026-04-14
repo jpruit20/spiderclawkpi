@@ -3,7 +3,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -98,12 +98,12 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://spider:spider@db:5432/spider_kpi",
         validation_alias=AliasChoices('DATABASE_URL', 'KPI_DATABASE_URL'),
     )
-    cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: Union[str, List[str]] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     app_password: str = "change-me"
     auth_disabled: bool = False
     jwt_secret: str = "change-me"
-    allowed_signup_domains: List[str] = Field(default_factory=lambda: ["spidergrills.com", "alignmachineworks.com"])
+    allowed_signup_domains: Union[str, List[str]] = Field(default_factory=lambda: ["spidergrills.com", "alignmachineworks.com"])
     auth_email_from: str = Field(default='no-reply@spidergrills.app')
     auth_email_region: Optional[str] = Field(default='us-east-2')
 
