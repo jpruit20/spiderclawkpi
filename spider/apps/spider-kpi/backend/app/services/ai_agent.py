@@ -134,6 +134,7 @@ async def run_cli_turn(
     cmd = base_cmd + [
         "-p", prompt,
         "--output-format", "stream-json",
+        "--verbose",
         "--model", "sonnet",
         "--bare",
         "--append-system-prompt", system_prompt,
