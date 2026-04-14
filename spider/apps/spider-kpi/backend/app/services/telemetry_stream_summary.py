@@ -6,7 +6,7 @@ from datetime import timedelta
 from statistics import median
 from typing import Any
 
-from sqlalchemy import and_, desc, distinct, func, select
+from sqlalchemy import and_, case, desc, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.models import SourceSyncRun, TelemetryStreamEvent
@@ -273,22 +273,24 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
     active_counts = {'5m': 0, '15m': 0, '60m': 0, '24h': 0}
     latest_rows: list[TelemetryStreamEvent] = []
     if now and horizon_start:
-        active_counts['5m'] = int(db.execute(
-            select(func.count(distinct(TelemetryStreamEvent.device_id)))
-            .where(TelemetryStreamEvent.sample_timestamp >= now - timedelta(minutes=5))
-        ).scalar() or 0)
-        active_counts['15m'] = int(db.execute(
-            select(func.count(distinct(TelemetryStreamEvent.device_id)))
-            .where(TelemetryStreamEvent.sample_timestamp >= now - timedelta(minutes=15))
-        ).scalar() or 0)
-        active_counts['60m'] = int(db.execute(
-            select(func.count(distinct(TelemetryStreamEvent.device_id)))
-            .where(TelemetryStreamEvent.sample_timestamp >= now - timedelta(minutes=60))
-        ).scalar() or 0)
-        active_counts['24h'] = int(db.execute(
-            select(func.count(distinct(TelemetryStreamEvent.device_id)))
-            .where(TelemetryStreamEvent.sample_timestamp >= horizon_start)
-        ).scalar() or 0)
+        # Fold the 4 per-window COUNT(DISTINCT device_id) queries into a
+        # single scan of the 24h slice with conditional aggregation. One
+        # index scan, one round trip, one dedup hash per bucket.
+        cutoff_5m = now - timedelta(minutes=5)
+        cutoff_15m = now - timedelta(minutes=15)
+        cutoff_60m = now - timedelta(minutes=60)
+        counts_row = db.execute(
+            select(
+                func.count(distinct(case((TelemetryStreamEvent.sample_timestamp >= cutoff_5m, TelemetryStreamEvent.device_id)))).label('c5m'),
+                func.count(distinct(case((TelemetryStreamEvent.sample_timestamp >= cutoff_15m, TelemetryStreamEvent.device_id)))).label('c15m'),
+                func.count(distinct(case((TelemetryStreamEvent.sample_timestamp >= cutoff_60m, TelemetryStreamEvent.device_id)))).label('c60m'),
+                func.count(distinct(TelemetryStreamEvent.device_id)).label('c24h'),
+            ).where(TelemetryStreamEvent.sample_timestamp >= horizon_start)
+        ).one()
+        active_counts['5m'] = int(counts_row.c5m or 0)
+        active_counts['15m'] = int(counts_row.c15m or 0)
+        active_counts['60m'] = int(counts_row.c60m or 0)
+        active_counts['24h'] = int(counts_row.c24h or 0)
 
         latest_ts_subquery = (
             select(

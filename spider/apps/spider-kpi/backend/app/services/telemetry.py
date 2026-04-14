@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 from statistics import median
@@ -11,6 +12,15 @@ from sqlalchemy.orm import Session
 from app.models import SourceSyncRun, TelemetryDaily, TelemetrySession, TelemetryStreamEvent
 from app.services.telemetry_history import get_telemetry_history_monthly
 from app.services.telemetry_stream_summary import summarize_stream_telemetry
+
+# Cache summarize_telemetry for a short window. The underlying data is
+# continuously updated by the DynamoDB-Streams -> Lambda pipeline, but
+# dashboard freshness doesn't need second-level resolution. A 60-second
+# TTL flattens bursts of parallel requests (page load fires many at once)
+# and insulates us from any future slow-query regression on the 2M+ row
+# telemetry_stream_events table.
+_SUMMARY_TTL_SECONDS = 60
+_summary_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -48,6 +58,16 @@ def _empty_telemetry_payload() -> dict[str, Any]:
 
 
 def summarize_telemetry(db: Session, lookback_days: int = 30) -> dict[str, Any]:
+    now_ts = time.monotonic()
+    cached = _summary_cache.get(lookback_days)
+    if cached is not None and (now_ts - cached[0]) < _SUMMARY_TTL_SECONDS:
+        return cached[1]
+    result = _compute_summary(db, lookback_days)
+    _summary_cache[lookback_days] = (now_ts, result)
+    return result
+
+
+def _compute_summary(db: Session, lookback_days: int) -> dict[str, Any]:
     historical_monthly = get_telemetry_history_monthly(db)
     if telemetry_stream_table_available(db):
         fresh_stream_events = db.execute(
