@@ -32,6 +32,21 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+# Singleton guard: refuse to start if another copy of this wrapper is running.
+# Running multiple copies on a 4 GB droplet drives swap + contention and can
+# OOM-kill the uvicorn backend. Each import holds ~1 GB of EventRows in RAM.
+LOCK_FILE="$LOG_DIR/.backfill.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "error: another backfill is already running (lock: $LOCK_FILE)" >&2
+  echo "If you are sure nothing is running:" >&2
+  echo "  pkill -f backfill_all_quarters.sh && pkill -f import_s3_history.py" >&2
+  echo "  rm -f $LOCK_FILE" >&2
+  exit 3
+fi
+# Best-effort lock cleanup on normal exit
+trap 'rm -f "$LOCK_FILE" 2>/dev/null' EXIT
+
 # Each line: <start-date> <end-date> <label>
 RANGES=(
   "2024-01-01 2024-03-31 2024_Q1"
