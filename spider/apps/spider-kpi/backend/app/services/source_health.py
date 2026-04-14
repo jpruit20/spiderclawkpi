@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -5,6 +6,12 @@ from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Alert, SourceConfig, SourceSyncRun, TelemetryStreamEvent
+
+# Stream health details run six aggregates over the 2M+ row
+# telemetry_stream_events table. Safety-net TTL cache keeps a burst of
+# page-load requests from each re-running them.
+_STREAM_HEALTH_TTL_SECONDS = 60
+_stream_health_cache: dict[str, Any] = {"at": 0.0, "value": None}
 
 
 STALE_MINUTES_BY_SOURCE = {
@@ -230,6 +237,17 @@ def refresh_source_health_alerts(db: Session) -> None:
 
 
 def _stream_health_details(db: Session) -> dict[str, Any]:
+    now_ts = time.monotonic()
+    cached_value = _stream_health_cache["value"]
+    if cached_value is not None and (now_ts - _stream_health_cache["at"]) < _STREAM_HEALTH_TTL_SECONDS:
+        return cached_value
+    value = _compute_stream_health_details(db)
+    _stream_health_cache["at"] = now_ts
+    _stream_health_cache["value"] = value
+    return value
+
+
+def _compute_stream_health_details(db: Session) -> dict[str, Any]:
     latest_sample = db.execute(
         select(TelemetryStreamEvent.sample_timestamp)
         .where(TelemetryStreamEvent.sample_timestamp.is_not(None))
