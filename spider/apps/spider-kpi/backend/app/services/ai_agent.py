@@ -222,7 +222,7 @@ async def run_cli_turn(
                 })
                 continue
 
-            # ── System events (retries, errors) ──
+            # ── System events (init, retries, errors) ──
             if top_type == "system":
                 subtype = obj.get("subtype", "")
                 if subtype == "api_retry":
@@ -231,72 +231,38 @@ async def run_cli_turn(
                     })
                 continue
 
-            # ── Stream events ──
-            if top_type != "stream_event":
+            # ── Assistant message with content blocks ──
+            if top_type == "assistant":
+                message = obj.get("message", {})
+                content = message.get("content", [])
+                for block in content:
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text = block.get("text", "")
+                        if text:
+                            yield SSEEvent(event="text", data={"content": text})
+                    elif btype == "tool_use":
+                        tool_name = block.get("name", "unknown")
+                        tool_input = block.get("input", {}) or {}
+                        file_path = tool_input.get("file_path") or tool_input.get("path") or ""
+                        if tool_name == "Edit" and file_path:
+                            files_modified.append(file_path)
+                            yield SSEEvent(event="file_modified", data={
+                                "tool": tool_name,
+                                "file": file_path,
+                            })
+                        else:
+                            yield SSEEvent(event="tool_use", data={
+                                "tool": tool_name,
+                                "file": file_path or None,
+                            })
+                    # "thinking" blocks are ignored (internal reasoning)
                 continue
 
-            event = obj.get("event", {})
-            event_type = event.get("type", "")
-
-            # Text delta
-            if event_type == "content_block_delta":
-                delta = event.get("delta", {})
-                delta_type = delta.get("type", "")
-
-                if delta_type == "text_delta":
-                    text = delta.get("text", "")
-                    if text:
-                        text_buffer.append(text)
-                        yield SSEEvent(event="text", data={"content": text})
-
-                elif delta_type == "input_json_delta":
-                    # Accumulate tool input JSON
-                    idx = event.get("index", -1)
-                    if idx in active_tools:
-                        active_tools[idx]["input_parts"].append(delta.get("partial_json", ""))
-
-            # Tool use start
-            elif event_type == "content_block_start":
-                cb = event.get("content_block", {})
-                if cb.get("type") == "tool_use":
-                    idx = event.get("index", -1)
-                    tool_name = cb.get("name", "unknown")
-                    active_tools[idx] = {
-                        "name": tool_name,
-                        "id": cb.get("id", ""),
-                        "input_parts": [],
-                    }
-                    yield SSEEvent(event="tool_start", data={
-                        "tool": tool_name,
-                        "index": idx,
-                    })
-
-            # Content block stop (tool input complete)
-            elif event_type == "content_block_stop":
-                idx = event.get("index", -1)
-                if idx in active_tools:
-                    tool_info = active_tools.pop(idx)
-                    tool_name = tool_info["name"]
-                    # Try to parse the accumulated tool input
-                    raw_input = "".join(tool_info["input_parts"])
-                    try:
-                        tool_input = json.loads(raw_input) if raw_input else {}
-                    except json.JSONDecodeError:
-                        tool_input = {"raw": raw_input}
-
-                    file_path = tool_input.get("file_path", tool_input.get("path", ""))
-
-                    if tool_name == "Edit" and file_path:
-                        files_modified.append(file_path)
-                        yield SSEEvent(event="file_modified", data={
-                            "tool": tool_name,
-                            "file": file_path,
-                        })
-                    else:
-                        yield SSEEvent(event="tool_use", data={
-                            "tool": tool_name,
-                            "file": file_path or None,
-                        })
+            # ── User messages (tool results being fed back) ──
+            if top_type == "user":
+                # Could surface tool_result events here if desired
+                continue
 
             # Message stop — a single turn completed
             elif event_type == "message_stop":
