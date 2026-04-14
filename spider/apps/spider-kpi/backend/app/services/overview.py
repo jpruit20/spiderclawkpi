@@ -1,9 +1,16 @@
+from datetime import date, timedelta
+
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models import Alert, DriverDiagnostic, KPIDaily, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
 from app.services.source_health import get_source_health
 from app.services.telemetry import summarize_telemetry
+
+# Cap unbounded historical lookups to 2 years. The daily tables grow 1 row/day,
+# so this bounds per-request cost even as history accumulates, while still
+# giving every chart in the dashboard plenty of range.
+OVERVIEW_LOOKBACK_DAYS = 730
 
 
 def is_incomplete_kpi_day(row: KPIDaily | None) -> bool:
@@ -68,10 +75,22 @@ def build_kpi_payload(
 
 
 def build_overview(db: Session) -> dict:
-    kpis = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    shopify_map = {row.business_date: row for row in db.execute(select(ShopifyOrderDaily)).scalars().all()}
-    shopify_analytics_map = {row.business_date: row for row in db.execute(select(ShopifyAnalyticsDaily)).scalars().all()}
-    tw_map = {row.business_date: row for row in db.execute(select(TWSummaryDaily)).scalars().all()}
+    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    kpis = db.execute(
+        select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
+    ).scalars().all()
+    shopify_map = {
+        row.business_date: row
+        for row in db.execute(select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date >= cutoff)).scalars().all()
+    }
+    shopify_analytics_map = {
+        row.business_date: row
+        for row in db.execute(select(ShopifyAnalyticsDaily).where(ShopifyAnalyticsDaily.business_date >= cutoff)).scalars().all()
+    }
+    tw_map = {
+        row.business_date: row
+        for row in db.execute(select(TWSummaryDaily).where(TWSummaryDaily.business_date >= cutoff)).scalars().all()
+    }
     alerts = db.execute(select(Alert).where(Alert.status == "open").order_by(desc(Alert.created_at)).limit(10)).scalars().all()
     diagnostics = db.execute(select(DriverDiagnostic).order_by(desc(DriverDiagnostic.business_date)).limit(10)).scalars().all()
     recommendations = db.execute(select(Recommendation).order_by(desc(Recommendation.created_at)).limit(10)).scalars().all()

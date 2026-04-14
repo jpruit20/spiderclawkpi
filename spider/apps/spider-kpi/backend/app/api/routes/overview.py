@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +15,7 @@ from app.services.issue_radar import build_issue_radar, get_cluster_ticket_detai
 from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_cook_analysis_for_range, get_telemetry_history_daily
 from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
-from app.services.overview import build_kpi_payload, build_overview
+from app.services.overview import OVERVIEW_LOOKBACK_DAYS, build_kpi_payload, build_overview
 from app.services.social_listening import get_amazon_product_health, get_brand_pulse, get_market_intelligence, get_social_mentions, get_social_trends, get_youtube_performance
 from app.services.source_health import get_source_health
 
@@ -30,10 +30,13 @@ def get_overview(db: Session = Depends(db_session)) -> OverviewResponse:
 
 @router.get("/kpis/daily", response_model=list[KPIDailyOut])
 def get_kpis_daily(db: Session = Depends(db_session)):
-    rows = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    shopify_map = {row.business_date: row for row in db.execute(select(ShopifyOrderDaily)).scalars().all()}
-    shopify_analytics_map = {row.business_date: row for row in db.execute(select(ShopifyAnalyticsDaily)).scalars().all()}
-    tw_map = {row.business_date: row for row in db.execute(select(TWSummaryDaily)).scalars().all()}
+    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    rows = db.execute(
+        select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
+    ).scalars().all()
+    shopify_map = {row.business_date: row for row in db.execute(select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date >= cutoff)).scalars().all()}
+    shopify_analytics_map = {row.business_date: row for row in db.execute(select(ShopifyAnalyticsDaily).where(ShopifyAnalyticsDaily.business_date >= cutoff)).scalars().all()}
+    tw_map = {row.business_date: row for row in db.execute(select(TWSummaryDaily).where(TWSummaryDaily.business_date >= cutoff)).scalars().all()}
     return [build_kpi_payload(row, shopify_map, shopify_analytics_map, tw_map) for row in rows] if rows else []
 
 
@@ -101,7 +104,10 @@ def get_cluster_detail(theme: str, db: Session = Depends(db_session)):
 
 @router.get("/support/overview")
 def get_support_overview(db: Session = Depends(db_session)):
-    kpis = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
+    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    kpis = db.execute(
+        select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
+    ).scalars().all()
     return {"rows": kpis}
 
 
