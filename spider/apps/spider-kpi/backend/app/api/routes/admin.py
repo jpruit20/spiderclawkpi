@@ -14,7 +14,7 @@ from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
-from app.models import SourceSyncRun, TelemetrySession, TelemetryStreamEvent
+from app.models import SourceSyncRun, TelemetryHistoryDaily, TelemetrySession, TelemetryStreamEvent
 from app.schemas.overview import TelemetryHistoryIngestIn, TelemetryStreamIngestIn
 from app.services.seed import seed_from_prototype_files
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
@@ -335,6 +335,21 @@ def debug_telemetry_audit(days: int = 180, db: Session = Depends(db_session)):
         select(func.count(distinct(TelemetryStreamEvent.device_id))).where(TelemetryStreamEvent.sample_timestamp >= cutoff, TelemetryStreamEvent.engaged.is_(True))
     ).scalar() or 0)
 
+    # telemetry_history_daily stats (backfill + materializer status)
+    hd_total = int(db.execute(select(func.count()).select_from(TelemetryHistoryDaily)).scalar() or 0)
+    hd_min = db.execute(select(func.min(TelemetryHistoryDaily.business_date))).scalar()
+    hd_max = db.execute(select(func.max(TelemetryHistoryDaily.business_date))).scalar()
+    hd_with_sessions = int(db.execute(
+        select(func.count()).select_from(TelemetryHistoryDaily).where(TelemetryHistoryDaily.session_count > 0)
+    ).scalar() or 0)
+    hd_total_sessions = int(db.execute(
+        select(func.sum(TelemetryHistoryDaily.session_count)).select_from(TelemetryHistoryDaily)
+    ).scalar() or 0)
+    hd_sources = db.execute(
+        select(TelemetryHistoryDaily.source, func.count(), func.min(TelemetryHistoryDaily.business_date), func.max(TelemetryHistoryDaily.business_date))
+        .group_by(TelemetryHistoryDaily.source)
+    ).all()
+
     return {
         'window_days': days,
         'cutoff': cutoff.isoformat(),
@@ -348,5 +363,16 @@ def debug_telemetry_audit(days: int = 180, db: Session = Depends(db_session)):
             'rows': stream_rows,
             'distinct_devices': stream_devices,
             'distinct_engaged_devices': engaged_stream_devices,
+        },
+        'telemetry_history_daily': {
+            'total_days': hd_total,
+            'earliest_date': hd_min.isoformat() if hd_min else None,
+            'latest_date': hd_max.isoformat() if hd_max else None,
+            'days_with_cook_analysis': hd_with_sessions,
+            'total_sessions_derived': hd_total_sessions,
+            'by_source': [
+                {'source': src, 'days': int(cnt), 'earliest': mn.isoformat() if mn else None, 'latest': mx.isoformat() if mx else None}
+                for src, cnt, mn, mx in hd_sources
+            ],
         },
     }
