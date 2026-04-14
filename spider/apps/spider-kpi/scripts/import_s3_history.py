@@ -37,7 +37,7 @@ S3_BUCKET = "spider-kpi-telemetry-export"
 S3_PREFIX = "spider-kpi/sg_device_shadows-export-2026-04-09/"
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 BATCH_SIZE = 500  # rows per DB commit
-PROGRESS_INTERVAL = 10  # print progress every N files
+PROGRESS_INTERVAL = 1  # print progress every N files
 DEFAULT_START_DATE = date(2024, 1, 1)
 
 logger = logging.getLogger("import_s3_history")
