@@ -264,10 +264,6 @@ async def run_cli_turn(
                 # Could surface tool_result events here if desired
                 continue
 
-            # Message stop — a single turn completed
-            elif event_type == "message_stop":
-                pass  # The CLI may do multiple turns; wait for "result"
-
     except asyncio.TimeoutError:
         logger.warning("AI agent timed out for user=%s", scope.email)
         yield SSEEvent(event="error", data={"message": "AI assistant timed out."})
