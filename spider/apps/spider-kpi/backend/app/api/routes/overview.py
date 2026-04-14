@@ -11,7 +11,7 @@ from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, F
 from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, CXSnapshotOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
 from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
 from app.services.cx_snapshot import build_customer_experience_snapshot
-from app.services.issue_radar import build_issue_radar, get_cluster_ticket_detail
+from app.services.issue_radar import build_issue_radar, get_cluster_ticket_detail, read_cached_issue_radar
 from app.services.telemetry import summarize_telemetry
 from app.services.telemetry_history_daily import get_cook_analysis_for_range, get_telemetry_history_daily
 from app.services.clarity_analytics import get_product_page_health, get_ux_friction_report
@@ -77,6 +77,20 @@ def get_recommendations(db: Session = Depends(db_session)):
 
 @router.get("/issues")
 def get_issues(db: Session = Depends(db_session)):
+    # Read from the pre-computed cache. The radar is rebuilt by the
+    # Freshdesk sync in refresh_all.py; building on every GET used to
+    # cost 20-60s on a warm DB. Bootstrap path still builds once.
+    cached = read_cached_issue_radar(db)
+    if cached is not None:
+        return cached
+    return build_issue_radar(db)
+
+
+@router.post("/issues/rebuild")
+def rebuild_issues(db: Session = Depends(db_session)):
+    # Manual trigger for admins to force a radar rebuild (e.g. after
+    # correcting classifier keywords). Normally the nightly refresh
+    # pipeline rebuilds automatically after a Freshdesk sync.
     return build_issue_radar(db)
 
 

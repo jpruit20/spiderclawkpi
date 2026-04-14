@@ -755,3 +755,97 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             "moved_examples": moved_examples,
         },
     }
+
+
+def read_cached_issue_radar(db: Session) -> dict[str, Any] | None:
+    """Return the last-computed issue radar payload reconstructed from
+    ``issue_clusters`` / ``issue_signals`` rows, without re-classifying
+    tickets. Returns ``None`` if the cache is empty (caller should fall
+    back to build_issue_radar once to warm it).
+
+    The ticket-level classifier artifacts (``moved_examples``,
+    ``top_unknown_variants``) are not persisted, so the returned
+    ``classification_report`` contains empty placeholders. Every other
+    field that the dashboard consumes is reconstructed from the stored
+    cluster/signal rows.
+    """
+    clusters_rows = db.execute(select(IssueCluster)).scalars().all()
+    if not clusters_rows:
+        return None
+
+    signals_rows = db.execute(select(IssueSignal)).scalars().all()
+
+    clusters = [
+        {
+            "id": cluster.id,
+            "title": cluster.title,
+            "severity": cluster.severity,
+            "confidence": cluster.confidence,
+            "owner_team": cluster.owner_team,
+            "details_json": cluster.details_json or {},
+        }
+        for cluster in clusters_rows
+    ]
+    highest_business_risk = sorted(
+        clusters,
+        key=lambda item: item["details_json"].get("priority_score", 0),
+        reverse=True,
+    )
+    highest_burden = sorted(
+        clusters,
+        key=lambda item: item["details_json"].get("tickets_per_100_orders_by_theme", 0) or 0,
+        reverse=True,
+    )
+    fastest_rising = sorted(
+        clusters,
+        key=lambda item: item["details_json"].get("trend_pct", 0),
+        reverse=True,
+    )
+
+    signals = [
+        {
+            "id": signal.id,
+            "title": signal.title,
+            "summary": signal.summary,
+            "severity": signal.severity,
+            "confidence": signal.confidence,
+            "source": signal.source,
+            "metadata_json": signal.metadata_json,
+        }
+        for signal in signals_rows
+    ]
+
+    freshdesk_signal_count = sum(1 for s in signals_rows if s.source == "freshdesk")
+    freshdesk_cluster_count = sum(1 for c in clusters_rows if str(c.cluster_key).startswith("freshdesk:"))
+    telemetry_signal_count = sum(1 for s in signals_rows if s.source == "aws_telemetry")
+    telemetry_cluster_count = sum(1 for c in clusters_rows if str(c.cluster_key).startswith("aws_telemetry:"))
+    source_breakdown = [
+        {"source": "freshdesk", "live": True, "signals": freshdesk_signal_count, "clusters": freshdesk_cluster_count},
+        {"source": "aws_telemetry", "live": telemetry_cluster_count > 0, "signals": telemetry_signal_count, "clusters": telemetry_cluster_count},
+    ]
+    source_breakdown.extend({"source": source, "live": False, "signals": 0, "clusters": 0} for source in SCAFFOLDED_SOURCES)
+
+    trend_heatmap = [
+        {"theme": (c["details_json"].get("theme") or ""), "points": c["details_json"].get("daily_series", [])}
+        for c in highest_business_risk
+        if c["details_json"].get("theme")
+    ]
+
+    return {
+        "signals": signals,
+        "clusters": highest_business_risk,
+        "highest_business_risk": highest_business_risk[:10],
+        "highest_burden": highest_burden[:10],
+        "fastest_rising": fastest_rising[:10],
+        "source_breakdown": source_breakdown,
+        "trend_heatmap": trend_heatmap,
+        "live_sources": LIVE_SOURCES,
+        "scaffolded_sources": SCAFFOLDED_SOURCES,
+        "classification_report": {
+            "before_unknown_share": 0.0,
+            "after_unknown_share": 0.0,
+            "unknown_reduction_pct": 0.0,
+            "top_unknown_variants": [],
+            "moved_examples": [],
+        },
+    }
