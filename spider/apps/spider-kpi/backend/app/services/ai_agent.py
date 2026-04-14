@@ -141,7 +141,7 @@ async def run_cli_turn(
         "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
     ]
 
-    logger.info("AI agent start: user=%s division=%s binary=%s cwd=%s", scope.email, scope.division, claude_bin, workspace_root)
+    logger.warning("AI agent start: user=%s division=%s binary=%s cwd=%s", scope.email, scope.division, claude_bin, workspace_root)
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})
 
     # systemd services have a minimal PATH that may not include node/npm.
@@ -199,7 +199,7 @@ async def run_cli_turn(
                 continue
             line_count += 1
             if line_count <= 3:
-                logger.info("AI CLI stdout line %d (first 200 chars): %s", line_count, line[:200])
+                logger.warning("AI CLI stdout line %d (first 200 chars): %s", line_count, line[:200])
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
@@ -212,7 +212,7 @@ async def run_cli_turn(
             if top_type == "result":
                 result_text = obj.get("result", "")
                 usage = obj.get("usage", {})
-                logger.info("AI CLI result received: %d chars, %d files modified", len(result_text), len(files_modified))
+                logger.warning("AI CLI result received: %d chars, %d files modified", len(result_text), len(files_modified))
                 yield SSEEvent(event="done", data={
                     "result": result_text,
                     "files_changed": len(files_modified),
@@ -317,7 +317,7 @@ async def run_cli_turn(
                     logger.warning("AI CLI stderr: %s", stderr_data.decode("utf-8", errors="replace")[:500])
             except Exception:
                 pass
-        logger.info("AI CLI finished: %d stdout lines read, returncode=%s", line_count, process.returncode)
+        logger.warning("AI CLI finished: %d stdout lines read, returncode=%s", line_count, process.returncode)
         # Ensure process is cleaned up
         if process.returncode is None:
             try:
