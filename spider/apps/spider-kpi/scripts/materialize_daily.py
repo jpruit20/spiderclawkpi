@@ -79,9 +79,16 @@ SELECT
     COUNT(*)                                              AS total_events,
     AVG(rssi)                                             AS avg_rssi,
 
+    -- A row counts as an error_event only if any element in the
+    -- error_codes_json array is non-zero. Venom controllers send one
+    -- code slot per probe (commonly [0,0,0,0,0]); the previous filter
+    -- of "!= '[]' AND != '[0]'" treated every multi-probe all-OK row
+    -- as an error, producing a misleading 100% error rate.
     COUNT(*) FILTER (
-        WHERE error_codes_json != '[]'::jsonb
-          AND error_codes_json != '[0]'::jsonb
+        WHERE EXISTS (
+            SELECT 1 FROM jsonb_array_elements(error_codes_json) AS elem
+            WHERE (elem)::text::int <> 0
+        )
     )                                                     AS error_events,
 
     AVG(target_temp) FILTER (WHERE target_temp IS NOT NULL AND target_temp > 0)
