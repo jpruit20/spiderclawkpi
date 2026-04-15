@@ -135,13 +135,14 @@ def telemetry_summary(
     end: str | None = None,
     db: Session = Depends(db_session),
 ):
-    # The live/fleet portion of the summary pulls from telemetry_stream_events
-    # which is huge, so keep the lookback clamped. history_daily is 1 row/day
-    # (< 4k rows even for a decade) so it's cheap to return the full range.
-    days = max(1, min(days, 365))
-    payload = summarize_telemetry(db, lookback_days=days)
+    # When start/end are given, the dashboard date picker is authoritative
+    # and every block in the payload is scoped to that window. Without them
+    # we fall back to the trailing `days` window (clamped to 365 to protect
+    # telemetry_stream_events).
     start_date = date.fromisoformat(start) if start else None
     end_date = date.fromisoformat(end) if end else None
+    days = max(1, min(days, 365))
+    payload = summarize_telemetry(db, lookback_days=days, start=start_date, end=end_date)
     payload['history_daily'] = get_telemetry_history_daily(
         db,
         limit=days,

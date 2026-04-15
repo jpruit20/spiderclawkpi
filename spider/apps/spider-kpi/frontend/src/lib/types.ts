@@ -284,6 +284,9 @@ export interface TelemetryCollectionMetadata {
   max_record_cap_hit?: boolean
   session_gap_timeout_minutes?: number
   coverage_summary?: string
+  data_scope?: 'live_stream' | 'historical_daily'
+  historical_backfill_loaded?: boolean
+  historical_months_loaded?: number
 }
 
 export interface TelemetryConfidence {

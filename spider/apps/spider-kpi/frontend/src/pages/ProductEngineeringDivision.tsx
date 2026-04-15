@@ -538,6 +538,12 @@ export function ProductEngineeringDivision() {
             caveat={!streamBacked ? 'Running on daily aggregates — live stream unavailable. Some metrics may be delayed up to 24h.' : undefined}
           />
 
+          {collection?.data_scope === 'historical_daily' && (
+            <div className="scope-note" style={{ fontSize: 12, color: 'var(--blue)', padding: '8px 12px', background: 'rgba(110,168,255,0.08)', border: '1px solid rgba(110,168,255,0.2)', borderRadius: 6, marginBottom: 8 }}>
+              Historical view ({dateStart} to {dateEnd}) — fleet activity, cook styles, firmware / model mix, RSSI, and cook temperatures are rebuilt from daily rollups. Event-level detail (top error codes, issue patterns, per-session stability percentiles) only exists for the live 7-day stream retention window.
+            </div>
+          )}
+
           {/* Data quality warnings */}
           {isStale && (
             <div className="scope-note" style={{ fontSize: 12, color: 'var(--orange)', padding: '6px 12px', background: 'var(--warning-bg)', borderRadius: 6, marginBottom: 8 }}>
