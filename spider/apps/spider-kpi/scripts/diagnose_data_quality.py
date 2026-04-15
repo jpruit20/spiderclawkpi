@@ -97,7 +97,8 @@ def main() -> int:
         # 2. GA4 config check
         # =====================================================================
         hr("2. GA4 configuration")
-        from app.core.config import settings  # type: ignore
+        from app.core.config import get_settings  # type: ignore
+        settings = get_settings()
         ga4_errors = settings.ga4_validation_errors()
         print(f"  ga4_project_id configured  : {bool(settings.ga4_project_id)}")
         print(f"  ga4_property_id configured : {bool(settings.ga4_property_id)}")
