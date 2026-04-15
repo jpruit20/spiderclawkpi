@@ -83,8 +83,7 @@ SELECT
     -- error_codes_json array is non-zero. Venom controllers send one
     -- code slot per probe (commonly [0,0,0,0,0]); the previous filter
     -- of "!= '[]' AND != '[0]'" treated every multi-probe all-OK row
-    -- as an error, producing a misleading 100%% error rate.
-    -- (Note: %% is escaped because psycopg parses %(name)s placeholders.)
+    -- as an error, producing a misleading near-total error rate.
     COUNT(*) FILTER (
         WHERE EXISTS (
             SELECT 1 FROM jsonb_array_elements(error_codes_json) AS elem
