@@ -184,7 +184,14 @@ export const api = {
   alerts: (signal?: AbortSignal) => request('/api/alerts', { signal }),
   recommendations: (signal?: AbortSignal) => request<RecommendationItem[]>('/api/recommendations', { signal }),
   sourceHealth: (signal?: AbortSignal) => request<SourceHealthItem[]>('/api/source-health', { signal }),
-  telemetrySummary: (days?: number, signal?: AbortSignal) => request<TelemetrySummary>(`/api/telemetry/summary${days ? `?days=${days}` : ''}`, { signal }),
+  telemetrySummary: (days?: number, signal?: AbortSignal, start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (days) params.set('days', String(days))
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    const qs = params.toString()
+    return request<TelemetrySummary>(`/api/telemetry/summary${qs ? `?${qs}` : ''}`, { signal })
+  },
   cookAnalysis: (start: string, end: string, signal?: AbortSignal) => request<Record<string, any>>(`/api/telemetry/cook-analysis?start=${start}&end=${end}`, { signal }),
   supportOverview: (signal?: AbortSignal) => request<SupportOverviewResponse>('/api/support/overview', { signal }),
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),

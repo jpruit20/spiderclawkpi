@@ -288,7 +288,7 @@ export function ProductEngineeringDivision() {
       setError(null)
       try {
         const [telData, issuesData, radarData, miData, cxData] = await Promise.all([
-          api.telemetrySummary(daysDiff),
+          api.telemetrySummary(daysDiff, undefined, dateStart, dateEnd),
           api.engineeringIssues().catch(() => null),
           api.issues().catch(() => null),
           api.marketIntelligence(30).catch(() => null),
@@ -309,7 +309,7 @@ export function ProductEngineeringDivision() {
     }
     void load()
     return () => { cancelled = true }
-  }, [daysDiff])
+  }, [daysDiff, dateStart, dateEnd])
 
   const loadClusterDetail = useCallback(async (theme: string) => {
     setClusterDetailLoading(true)

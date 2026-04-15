@@ -10,13 +10,29 @@ from sqlalchemy.orm import Session
 from app.models import TelemetryHistoryDaily
 
 
-def get_telemetry_history_daily(db: Session, limit: int = 900) -> list[dict[str, Any]]:
-    cutoff_date = datetime.now(timezone.utc).date() - timedelta(days=limit)
-    rows = db.execute(
-        select(TelemetryHistoryDaily)
-        .where(TelemetryHistoryDaily.business_date >= cutoff_date)
-        .order_by(TelemetryHistoryDaily.business_date)
-    ).scalars().all()
+def get_telemetry_history_daily(
+    db: Session,
+    limit: int = 900,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict[str, Any]]:
+    """Return telemetry_history_daily rows.
+
+    If both *start* and *end* are provided, return every row in that closed
+    interval (no cap — the table is one row per day so 10 years is still
+    under 4k rows). Otherwise fall back to the trailing *limit* days from
+    today in Eastern business time.
+    """
+    stmt = select(TelemetryHistoryDaily).order_by(TelemetryHistoryDaily.business_date)
+    if start is not None and end is not None:
+        stmt = stmt.where(
+            TelemetryHistoryDaily.business_date >= start,
+            TelemetryHistoryDaily.business_date <= end,
+        )
+    else:
+        cutoff_date = datetime.now(timezone.utc).date() - timedelta(days=limit)
+        stmt = stmt.where(TelemetryHistoryDaily.business_date >= cutoff_date)
+    rows = db.execute(stmt).scalars().all()
     return [
         {
             'business_date': row.business_date.isoformat(),
