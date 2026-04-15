@@ -13,6 +13,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.ingestion.connectors.freshdesk import sync_freshdesk  # noqa: E402
+from app.ingestion.connectors.ga4 import sync_ga4  # noqa: E402
 from app.ingestion.connectors.shopify import sync_shopify_orders  # noqa: E402
 from app.ingestion.connectors.triplewhale import sync_triplewhale  # noqa: E402
 from app.services.issue_radar import build_issue_radar  # noqa: E402
@@ -25,6 +26,7 @@ def main() -> int:
         results = {
             "shopify": sync_shopify_orders(db),
             "triplewhale": sync_triplewhale(db, backfill_days=1),
+            "ga4": sync_ga4(db, days=7),
             "freshdesk": freshdesk_result,
         }
 

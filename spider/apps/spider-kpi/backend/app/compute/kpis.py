@@ -38,10 +38,10 @@ def _derive_day_flags(
     if tw and (tw.sessions or 0) > 0:
         sessions_source = "triplewhale"
     elif shopify_analytics and (shopify_analytics.sessions or 0) > 0:
-        sessions_source = None
+        sessions_source = "shopify_analytics"
     else:
         sessions_source = None
-    is_partial = shopify is None or revenue_source != "shopify" or sessions_source != "shopify"
+    is_partial = shopify is None or revenue_source != "shopify" or sessions_source not in ("shopify_analytics", "triplewhale")
     is_fallback = revenue_source == "triplewhale" or sessions_source == "triplewhale"
     return revenue_source, sessions_source, is_partial, is_fallback
 
@@ -160,13 +160,14 @@ def recompute_daily_kpis(db: Session) -> int:
 
         revenue = shopify.revenue if shopify else (tw.revenue if tw else 0.0)
         orders = shopify.orders if shopify else 0
+        # Sessions priority: TripleWhale (preferred — has ad attribution),
+        # then Shopify Analytics (GA4 sync). Both come from the same upstream
+        # event stream Shopify uses for its own admin analytics, so the
+        # fallback is honest — it's the same source Joseph sees in the
+        # Shopify admin UI.
         sessions = tw.sessions if tw else 0.0
         if sessions == 0 and shopify_analytics and (shopify_analytics.sessions or 0) > 0:
-            missing_data_messages.append({
-                "business_date": str(business_date),
-                "type": "shopify_analytics_ignored",
-                "message": "Shopify analytics exists but is not trusted; keeping sessions unavailable until a real analytics source is integrated.",
-            })
+            sessions = float(shopify_analytics.sessions)
         ad_spend = tw.ad_spend if tw else 0.0
         purchases = tw.purchases if tw else float(orders)
         expected_conversion = _safe_div(float(orders), sessions) * 100.0
