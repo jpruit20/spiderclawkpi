@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from app.services.telemetry import summarize_telemetry
 # so this bounds per-request cost even as history accumulates, while still
 # giving every chart in the dashboard plenty of range.
 OVERVIEW_LOOKBACK_DAYS = 730
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 
 def is_incomplete_kpi_day(row: KPIDaily | None) -> bool:
@@ -43,6 +45,7 @@ def build_kpi_payload(
     payload = {
         "business_date": row.business_date,
         "revenue": row.revenue,
+        "gross_revenue": getattr(row, "gross_revenue", 0.0) or 0.0,
         "refunds": row.refunds,
         "total_discounts": row.total_discounts,
         "orders": row.orders,
@@ -75,7 +78,7 @@ def build_kpi_payload(
 
 
 def build_overview(db: Session) -> dict:
-    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    cutoff = datetime.now(BUSINESS_TZ).date() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
     kpis = db.execute(
         select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
     ).scalars().all()

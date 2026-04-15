@@ -75,6 +75,7 @@ class DiagnosticOut(BaseModel):
 class KPIDailyOut(BaseModel):
     business_date: date
     revenue: float
+    gross_revenue: float = 0.0
     refunds: float = 0.0
     total_discounts: float = 0.0
     orders: int

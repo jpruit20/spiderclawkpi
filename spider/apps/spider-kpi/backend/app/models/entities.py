@@ -85,7 +85,10 @@ class ShopifyOrderDaily(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     orders: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # `revenue` is net/recognized sales: current_total_price post-refund, cancelled orders zeroed.
+    # `gross_revenue` is total_price (pre-refund, pre-cancellation) — matches Shopify admin "Total sales".
     revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    gross_revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     average_order_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     refunds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     total_discounts: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -368,6 +371,7 @@ class KPIDaily(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    gross_revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     orders: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     average_order_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     sessions: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

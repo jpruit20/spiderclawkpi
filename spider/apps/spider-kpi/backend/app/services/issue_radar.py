@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import re
 from typing import Any
 
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.models import FreshdeskTicket, IssueCluster, IssueSignal, ShopifyOrderDaily, TelemetryDaily, TelemetrySession
 from app.services.source_health import upsert_source_config
 from app.services.telemetry import telemetry_tables_available
+
+BUSINESS_TZ = ZoneInfo("America/New_York")
 
 THEMES: dict[str, list[str]] = {
     "shipping": [
@@ -408,7 +411,10 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             })
         severity = _severity(ticket, theme)
         product = _infer_product(parts["combined"])
-        business_date = ticket.created_at_source.date() if ticket.created_at_source else None
+        business_date = (
+            ticket.created_at_source.astimezone(BUSINESS_TZ).date()
+            if ticket.created_at_source else None
+        )
         if business_date is None:
             continue
         date_key = str(business_date)
@@ -529,7 +535,7 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         )
         if payload["recent_7d"] >= 2:
             signal = IssueSignal(
-                business_date=datetime.now(timezone.utc).date(),
+                business_date=datetime.now(BUSINESS_TZ).date(),
                 signal_type=signal_type,
                 severity=payload["severity"],
                 confidence=payload["confidence"],
@@ -677,7 +683,7 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
             db.flush()
             clusters.append(telemetry_cluster)
             telemetry_signal = IssueSignal(
-                business_date=datetime.now(timezone.utc).date(),
+                business_date=datetime.now(BUSINESS_TZ).date(),
                 signal_type="telemetry_issue",
                 severity=telemetry_cluster.severity,
                 confidence=0.82,

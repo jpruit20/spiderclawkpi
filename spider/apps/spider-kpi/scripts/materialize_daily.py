@@ -72,7 +72,7 @@ def _dsn_from_env() -> str:
 
 AGGREGATE_SQL = """\
 SELECT
-    (sample_timestamp AT TIME ZONE 'UTC')::date          AS business_date,
+    (sample_timestamp AT TIME ZONE 'America/New_York')::date AS business_date,
 
     COUNT(DISTINCT device_id)                             AS active_devices,
     COUNT(DISTINCT device_id) FILTER (WHERE engaged)      AS engaged_devices,
@@ -102,7 +102,7 @@ ORDER BY 1;
 
 FIRMWARE_DISTRIBUTION_SQL = """\
 SELECT
-    (sample_timestamp AT TIME ZONE 'UTC')::date AS business_date,
+    (sample_timestamp AT TIME ZONE 'America/New_York')::date AS business_date,
     COALESCE(firmware_version, 'unknown')        AS fw,
     COUNT(DISTINCT device_id)                    AS device_count
 FROM telemetry_stream_events
@@ -114,7 +114,7 @@ ORDER BY 1, 3 DESC;
 
 MODEL_DISTRIBUTION_SQL = """\
 SELECT
-    (sample_timestamp AT TIME ZONE 'UTC')::date AS business_date,
+    (sample_timestamp AT TIME ZONE 'America/New_York')::date AS business_date,
     COALESCE(grill_type, 'unknown')              AS model,
     COUNT(DISTINCT device_id)                    AS device_count
 FROM telemetry_stream_events
@@ -127,7 +127,7 @@ ORDER BY 1, 3 DESC;
 PEAK_HOUR_SQL = """\
 SELECT
     (sample_timestamp AT TIME ZONE 'UTC')::date                   AS business_date,
-    EXTRACT(HOUR FROM sample_timestamp AT TIME ZONE 'UTC')::int   AS hour,
+    EXTRACT(HOUR FROM sample_timestamp AT TIME ZONE 'America/New_York')::int   AS hour,
     COUNT(*)                                                       AS event_count
 FROM telemetry_stream_events
 WHERE sample_timestamp IS NOT NULL
@@ -150,7 +150,7 @@ SELECT
     error_codes_json
 FROM telemetry_stream_events
 WHERE sample_timestamp IS NOT NULL
-  AND (sample_timestamp AT TIME ZONE 'UTC')::date = %(day)s
+  AND (sample_timestamp AT TIME ZONE 'America/New_York')::date = %(day)s
 ORDER BY device_id, sample_timestamp;
 """
 

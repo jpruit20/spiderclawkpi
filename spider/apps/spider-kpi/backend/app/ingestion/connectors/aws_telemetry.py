@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy import delete, select
@@ -18,6 +19,7 @@ from app.services.source_health import finish_sync_run, refresh_source_health_al
 settings = get_settings()
 TIMEOUT_SECONDS = 60
 SOURCE_NAME = "aws_telemetry"
+BUSINESS_TZ = ZoneInfo("America/New_York")
 DEFAULT_SESSION_GAP_MINUTES = 20
 DEFAULT_LOOKBACK_HOURS = 24 * 30
 DEFAULT_MAX_SCAN_PAGES = 10
@@ -568,7 +570,7 @@ def sync_aws_telemetry(
         for session in sessions:
             db_session_payload = {key: value for key, value in session.items() if key != '_samples'}
             db.add(TelemetrySession(**db_session_payload))
-            business_date = session['session_start'].date()
+            business_date = session['session_start'].astimezone(BUSINESS_TZ).date()
             bucket = daily[business_date]
             bucket['sessions'] += 1
             if session.get('user_id'):

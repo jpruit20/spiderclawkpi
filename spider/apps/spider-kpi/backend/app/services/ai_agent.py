@@ -17,8 +17,12 @@ from app.services.ai_scoping import UserScope, DIVISION_LABELS
 
 logger = logging.getLogger(__name__)
 
-# Maximum wall-clock seconds before we kill the CLI process.
-CLI_TIMEOUT_SECONDS = 300
+# Maximum wall-clock seconds before we kill the CLI process (hard safety cap).
+# Must stay <= nginx proxy_read_timeout so we shut down cleanly rather than 504.
+CLI_TIMEOUT_SECONDS = 1800
+# Maximum seconds of CLI stdout inactivity before we treat the session as hung.
+# Long chain-of-thought "thinking" emits no stdout — this has to be generous.
+CLI_IDLE_TIMEOUT_SECONDS = 180
 # Dollar cap per request (safety net).
 CLI_MAX_BUDGET_USD = 0.50
 
@@ -194,7 +198,11 @@ async def run_cli_turn(
         # Also capture stderr for diagnostics
         stderr_task = asyncio.create_task(process.stderr.read()) if process.stderr else None
 
-        async for raw_line in _read_lines_with_timeout(process.stdout, CLI_TIMEOUT_SECONDS):
+        async for raw_line in _read_lines_with_timeout(
+            process.stdout,
+            overall_timeout=CLI_TIMEOUT_SECONDS,
+            idle_timeout=CLI_IDLE_TIMEOUT_SECONDS,
+        ):
             line = raw_line.strip()
             if not line:
                 continue
@@ -296,16 +304,24 @@ async def run_cli_turn(
 
 async def _read_lines_with_timeout(
     stream: asyncio.StreamReader,
-    timeout: float,
+    *,
+    overall_timeout: float,
+    idle_timeout: float,
 ) -> AsyncGenerator[str, None]:
-    """Read lines from *stream* with an overall *timeout*."""
-    deadline = asyncio.get_event_loop().time() + timeout
+    """Read lines from *stream* with both a per-line idle timeout and an overall cap.
+
+    The idle timeout catches real hangs while allowing long chain-of-thought
+    reasoning between stdout writes. The overall timeout is a hard safety cap
+    so a runaway CLI can't hold a connection forever.
+    """
+    deadline = asyncio.get_event_loop().time() + overall_timeout
     while True:
-        remaining = deadline - asyncio.get_event_loop().time()
-        if remaining <= 0:
+        remaining_overall = deadline - asyncio.get_event_loop().time()
+        if remaining_overall <= 0:
             raise asyncio.TimeoutError()
+        per_read_timeout = min(idle_timeout, remaining_overall)
         try:
-            line = await asyncio.wait_for(stream.readline(), timeout=remaining)
+            line = await asyncio.wait_for(stream.readline(), timeout=per_read_timeout)
         except asyncio.TimeoutError:
             raise
         if not line:

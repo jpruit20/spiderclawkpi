@@ -159,6 +159,7 @@ def recompute_daily_kpis(db: Session) -> int:
         support = support_map.get(business_date)
 
         revenue = shopify.revenue if shopify else (tw.revenue if tw else 0.0)
+        gross_revenue = shopify.gross_revenue if shopify else (tw.revenue if tw else 0.0)
         orders = shopify.orders if shopify else 0
         # Sessions priority: TripleWhale (preferred — has ad attribution),
         # then Shopify Analytics (GA4 sync). Both come from the same upstream
@@ -182,6 +183,7 @@ def recompute_daily_kpis(db: Session) -> int:
             db.add(record)
 
         record.revenue = revenue
+        record.gross_revenue = gross_revenue
         record.orders = orders
         record.average_order_value = expected_aov
         record.sessions = sessions

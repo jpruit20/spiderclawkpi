@@ -300,7 +300,10 @@ def rebuild_shopify_daily_from_events(
         if row.order_id
     }
 
-    daily: dict[datetime.date, dict[str, float]] = {d: {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0} for d in business_dates}
+    daily: dict[datetime.date, dict[str, float]] = {
+        d: {"orders": 0, "revenue": 0.0, "gross_revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0}
+        for d in business_dates
+    }
     for order_id in order_ids:
         latest = _latest_order_state(db, order_id)
         if latest is None:
@@ -314,7 +317,7 @@ def rebuild_shopify_daily_from_events(
         if business_date not in business_dates:
             continue
         if business_date not in daily:
-            daily[business_date] = {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0}
+            daily[business_date] = {"orders": 0, "revenue": 0.0, "gross_revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0}
         if payload.get("counts_as_order"):
             daily[business_date]["orders"] += 1
         daily[business_date]["revenue"] += float(
@@ -323,17 +326,19 @@ def rebuild_shopify_daily_from_events(
             or payload.get("total_price")
             or 0.0
         )
+        daily[business_date]["gross_revenue"] += float(payload.get("total_price") or 0.0)
         daily[business_date]["refunds"] += float(payload.get("refunds") or 0.0)
         daily[business_date]["total_discounts"] += float(payload.get("total_discounts") or 0.0)
 
     for business_date in business_dates:
         record = db.execute(select(ShopifyOrderDaily).where(ShopifyOrderDaily.business_date == business_date)).scalars().first()
-        values = daily.get(business_date, {"orders": 0, "revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0})
+        values = daily.get(business_date, {"orders": 0, "revenue": 0.0, "gross_revenue": 0.0, "refunds": 0.0, "total_discounts": 0.0})
         if record is None:
             record = ShopifyOrderDaily(business_date=business_date)
             db.add(record)
         record.orders = int(values["orders"])
         record.revenue = float(values["revenue"])
+        record.gross_revenue = float(values["gross_revenue"])
         record.refunds = float(values["refunds"])
         record.total_discounts = float(values["total_discounts"])
         record.average_order_value = (record.revenue / record.orders) if record.orders else 0.0

@@ -78,7 +78,7 @@ function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
 
 function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
   const totals: Record<string, number> = {}
-  for (const row of historyRows.slice(-30)) {
+  for (const row of historyRows) {
     for (const [model, count] of Object.entries(row.model_distribution || {})) {
       totals[model] = (totals[model] || 0) + (count as number)
     }
@@ -89,12 +89,26 @@ function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
 
 function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
   const totals: Record<string, number> = {}
-  for (const row of historyRows.slice(-30)) {
+  for (const row of historyRows) {
     for (const [fw, count] of Object.entries(row.firmware_distribution || {})) {
       totals[fw] = (totals[fw] || 0) + (count as number)
     }
   }
   return Object.entries(totals).sort(([, a], [, b]) => b - a).slice(0, 8).map(([firmware, events]) => ({ firmware, events }))
+}
+
+function avgWeighted(historyRows: TelemetryHistoryDailyRow[], valueKey: 'avg_rssi' | 'avg_cook_temp', weightKey: 'total_events' = 'total_events'): number | null {
+  let weightedSum = 0
+  let weightTotal = 0
+  for (const row of historyRows) {
+    const v = row[valueKey] as number | null | undefined
+    const w = (row[weightKey] as number | undefined) || 0
+    if (v != null && w > 0) {
+      weightedSum += v * w
+      weightTotal += w
+    }
+  }
+  return weightTotal > 0 ? weightedSum / weightTotal : null
 }
 
 function sentimentColor(s: number | undefined): string {
@@ -372,7 +386,9 @@ export function ProductEngineeringDivision() {
     const totalErrors = rangedHistory.reduce((s, r) => s + r.error_events, 0)
     const totalEvents = rangedHistory.reduce((s, r) => s + r.total_events, 0)
     const peakDay = rangedHistory.reduce((best, r) => r.active_devices > (best?.active_devices || 0) ? r : best, rangedHistory[0])
-    return { avgDevices, totalErrors, totalEvents, errorRate: totalEvents > 0 ? totalErrors / totalEvents : 0, peakDay }
+    const historicalRssi = avgWeighted(rangedHistory, 'avg_rssi')
+    const historicalCookTemp = avgWeighted(rangedHistory, 'avg_cook_temp')
+    return { avgDevices, totalErrors, totalEvents, errorRate: totalEvents > 0 ? totalErrors / totalEvents : 0, peakDay, historicalRssi, historicalCookTemp }
   }, [rangedHistory])
 
   /* Issue Radar: product-related clusters — filter out "unknown" */
@@ -617,6 +633,40 @@ export function ProductEngineeringDivision() {
                     </ResponsiveContainer>
                   </div>
                 ) : <div className="state-message">No historical daily data available for this date range. Run the S3 import to populate fleet history.</div>}
+                {historyStats && (historyStats.historicalRssi != null || historyStats.historicalCookTemp != null) ? (
+                  <div className="venom-kpi-strip" style={{ marginTop: 12 }}>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Avg WiFi Signal (period)</div>
+                      <div className="venom-kpi-value">
+                        {historyStats.historicalRssi != null ? `${historyStats.historicalRssi.toFixed(1)} dBm` : '\u2014'}
+                      </div>
+                      <div className="venom-kpi-sub">
+                        {historyStats.historicalRssi != null && historyStats.historicalRssi < -75
+                          ? 'Weak \u2014 outdoor placement far from router'
+                          : historyStats.historicalRssi != null && historyStats.historicalRssi < -65
+                            ? 'Fair signal'
+                            : 'Strong signal'}
+                      </div>
+                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Avg Cook Temp (period)</div>
+                      <div className="venom-kpi-value">
+                        {historyStats.historicalCookTemp != null ? `${Math.round(historyStats.historicalCookTemp)}\u00b0F` : '\u2014'}
+                      </div>
+                      <div className="venom-kpi-sub">
+                        Weighted by telemetry event volume across {rangedHistory.length} day{rangedHistory.length !== 1 ? 's' : ''}
+                      </div>
+                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Total Events (period)</div>
+                      <div className="venom-kpi-value">{fmtInt(historyStats.totalEvents)}</div>
+                      <div className="venom-kpi-sub">{fmtInt(historyStats.totalErrors)} errors \u00b7 {fmtPct(historyStats.errorRate)} rate</div>
+                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
               {/* Cook Type Analysis */}

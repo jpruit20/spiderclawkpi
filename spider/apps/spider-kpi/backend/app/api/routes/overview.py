@@ -30,7 +30,7 @@ def get_overview(db: Session = Depends(db_session)) -> OverviewResponse:
 
 @router.get("/kpis/daily", response_model=list[KPIDailyOut])
 def get_kpis_daily(db: Session = Depends(db_session)):
-    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    cutoff = datetime.now(BUSINESS_TZ).date() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
     rows = db.execute(
         select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
     ).scalars().all()
@@ -104,7 +104,7 @@ def get_cluster_detail(theme: str, db: Session = Depends(db_session)):
 
 @router.get("/support/overview")
 def get_support_overview(db: Session = Depends(db_session)):
-    cutoff = date.today() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
+    cutoff = datetime.now(BUSINESS_TZ).date() - timedelta(days=OVERVIEW_LOOKBACK_DAYS)
     kpis = db.execute(
         select(KPIDaily).where(KPIDaily.business_date >= cutoff).order_by(KPIDaily.business_date)
     ).scalars().all()

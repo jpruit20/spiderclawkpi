@@ -74,6 +74,8 @@ export function RevenueEngine() {
 
   const rev = sum(currentRows, 'revenue')
   const revPrior = sum(priorRows, 'revenue')
+  const grossRev = sum(currentRows, 'gross_revenue')
+  const grossRevPrior = sum(priorRows, 'gross_revenue')
   const refunds = sum(currentRows, 'refunds')
   const discounts = sum(currentRows, 'total_discounts')
   const adSpend = sum(currentRows, 'ad_spend')
@@ -92,11 +94,12 @@ export function RevenueEngine() {
   const discountRate = rev > 0 ? (discounts / (rev + discounts)) * 100 : 0
 
   const kpiCards = useMemo<KpiCardDef[]>(() => [
-    { label: 'Revenue', value: currency(rev), sub: `${currentRows.length} days`, truthState: 'canonical', delta: { text: deltaPct(rev, revPrior), direction: deltaDirection(rev, revPrior) } },
-    { label: 'Gross Profit Proxy', value: currency(grossProfit), sub: `Rev − refunds − ad spend${discounts > 0 ? ` · ${fmtPct(discountRate / 100, 1)} discount rate` : ''}`, truthState: 'proxy', delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) } },
-    { label: 'MER', value: mer > 0 ? `${mer.toFixed(1)}x` : '\u2014', sub: 'Revenue / ad spend', truthState: 'canonical', delta: merPrior > 0 ? { text: deltaPct(mer, merPrior), direction: deltaDirection(mer, merPrior) } : undefined },
+    { label: 'Gross Sales', value: currency(grossRev), sub: 'Shopify total_price · matches Shopify admin "Total sales"', truthState: 'canonical', delta: { text: deltaPct(grossRev, grossRevPrior), direction: deltaDirection(grossRev, grossRevPrior) } },
+    { label: 'Net Sales', value: currency(rev), sub: `${currentRows.length} days · post-refund, cancellations zeroed`, truthState: 'canonical', delta: { text: deltaPct(rev, revPrior), direction: deltaDirection(rev, revPrior) } },
+    { label: 'Gross Profit Proxy', value: currency(grossProfit), sub: `Net − refunds − ad spend${discounts > 0 ? ` · ${fmtPct(discountRate / 100, 1)} discount rate` : ''}`, truthState: 'proxy', delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) } },
+    { label: 'MER', value: mer > 0 ? `${mer.toFixed(1)}x` : '\u2014', sub: 'Net sales / ad spend', truthState: 'canonical', delta: merPrior > 0 ? { text: deltaPct(mer, merPrior), direction: deltaDirection(mer, merPrior) } : undefined },
     { label: 'Conversion', value: fmtPct(convAvg / 100, 2), sub: 'Period average', truthState: 'canonical', delta: { text: deltaPct(convAvg, convPrior), direction: deltaDirection(convAvg, convPrior) } },
-  ], [rev, revPrior, grossProfit, grossProfitPrior, mer, merPrior, convAvg, convPrior, currentRows.length, discounts, discountRate])
+  ], [grossRev, grossRevPrior, rev, revPrior, grossProfit, grossProfitPrior, mer, merPrior, convAvg, convPrior, currentRows.length, discounts, discountRate])
 
   const chartData = useMemo(() => {
     return currentRows.map((r, i) => ({
@@ -149,7 +152,8 @@ export function RevenueEngine() {
             <section className="card">
               <div className="venom-panel-head"><strong>Revenue Composition</strong></div>
               <div className="venom-breakdown-list">
-                <div className="venom-breakdown-row"><span>Revenue</span><span className="venom-breakdown-val">{currency(rev)}</span><TruthBadge state="canonical" /></div>
+                <div className="venom-breakdown-row"><span>Gross Sales</span><span className="venom-breakdown-val">{currency(grossRev)}</span><TruthBadge state="canonical" /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>Shopify "Total sales"</span></div>
+                <div className="venom-breakdown-row"><span>Net Sales</span><span className="venom-breakdown-val">{currency(rev)}</span><TruthBadge state="canonical" /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>post-refund</span></div>
                 <div className="venom-breakdown-row"><span>Refunds</span><span className="venom-breakdown-val">{currency(refunds)}</span><TruthBadge state="canonical" /></div>
                 <div className="venom-breakdown-row"><span>Discounts</span><span className="venom-breakdown-val">{discounts > 0 ? currency(discounts) : '$0.00'}</span><TruthBadge state={discounts > 0 ? 'canonical' : 'proxy'} />{discounts > 0 && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>({fmtPct(discountRate / 100, 1)} of gross)</span>}</div>
                 <div className="venom-breakdown-row"><span>Ad Spend</span><span className="venom-breakdown-val">{currency(adSpend)}</span><TruthBadge state="canonical" /></div>
