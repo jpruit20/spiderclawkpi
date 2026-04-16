@@ -17,9 +17,12 @@ from app.api.routes.auth import COOKIE_NAME, get_user_from_request
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import AuthUser
+import re
+
 from app.services.ai_scoping import get_user_divisions, resolve_scope
 from app.services.ai_agent import run_cli_turn, SSEEvent
 from app.services.ai_deploy import validate_and_deploy
+from app.services.ai_escalation import send_escalation_email
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai-assistant"])
@@ -112,29 +115,56 @@ async def send_ai_message(
     workspace = getattr(settings, "workspace_root", ".")
     history = [{"role": m.role, "content": m.content} for m in body.history]
 
+    _ESCALATE_RE = re.compile(r'\[ESCALATE:\s*(.+?)\]')
+
     async def event_stream():
         files_modified: list[str] = []
+        text_chunks: list[str] = []
+        escalation_sent = False
         try:
             async for sse in run_cli_turn(body.message, scope, history, workspace):
-                # Track file modifications for deploy
                 if sse.event == "file_modified":
                     files_modified.append(sse.data.get("file", ""))
 
+                # Collect text chunks to check for escalation markers
+                if sse.event == "text":
+                    text_chunks.append(sse.data.get("content", ""))
+
                 yield f"event: {sse.event}\ndata: {json.dumps(sse.data)}\n\n"
 
-                # After the "done" event, trigger deploy if files changed
-                if sse.event == "done" and files_modified:
-                    yield f"event: status\ndata: {json.dumps({'message': 'Deploying changes...'})}\n\n"
-                    try:
-                        result = await validate_and_deploy(
-                            scope=scope,
-                            workspace_root=workspace,
-                            summary=body.message[:80],
-                        )
-                        yield f"event: deploy\ndata: {json.dumps({'success': result.success, 'commit': result.commit_sha, 'message': result.message, 'reverted': result.reverted_files})}\n\n"
-                    except Exception as deploy_err:
-                        logger.exception("Deploy failed for user=%s", user.email)
-                        yield f"event: deploy\ndata: {json.dumps({'success': False, 'message': str(deploy_err)})}\n\n"
+                # After "done", deploy if files changed + check for escalation
+                if sse.event == "done":
+                    # Check for escalation in the AI's full response
+                    full_text = "".join(text_chunks) + (sse.data.get("result") or "")
+                    escalation_match = _ESCALATE_RE.search(full_text)
+                    if escalation_match and not escalation_sent:
+                        escalation_sent = True
+                        reason = escalation_match.group(1).strip()
+                        try:
+                            send_escalation_email(
+                                requester_email=user.email,
+                                division=scope.division_label,
+                                user_message=body.message,
+                                escalation_reason=reason,
+                                ai_response_excerpt=full_text[:1500],
+                            )
+                            yield f"event: escalation\ndata: {json.dumps({'sent': True, 'reason': reason})}\n\n"
+                        except Exception as esc_err:
+                            logger.warning("Escalation email failed: %s", esc_err)
+                            yield f"event: escalation\ndata: {json.dumps({'sent': False, 'reason': reason})}\n\n"
+
+                    if files_modified:
+                        yield f"event: status\ndata: {json.dumps({'message': 'Deploying changes...'})}\n\n"
+                        try:
+                            result = await validate_and_deploy(
+                                scope=scope,
+                                workspace_root=workspace,
+                                summary=body.message[:80],
+                            )
+                            yield f"event: deploy\ndata: {json.dumps({'success': result.success, 'commit': result.commit_sha, 'message': result.message, 'reverted': result.reverted_files})}\n\n"
+                        except Exception as deploy_err:
+                            logger.exception("Deploy failed for user=%s", user.email)
+                            yield f"event: deploy\ndata: {json.dumps({'success': False, 'message': str(deploy_err)})}\n\n"
 
         except Exception as exc:
             logger.exception("AI stream error for user=%s", user.email)
