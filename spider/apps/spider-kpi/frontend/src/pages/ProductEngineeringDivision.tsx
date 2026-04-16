@@ -360,32 +360,11 @@ export function ProductEngineeringDivision() {
     return weightN > 0 ? weightSum / weightN : null
   }, [cookAnalysis])
 
-  // Range-first metrics: prefer values derived from the user's selected range
-  // (historyStats + cookAnalysis), falling back to stream-backed values only
-  // when the daily rollups don't have the field.
-  const sampleSize = historyStats?.totalSessions || Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
-
-  const activeCooks = isHistoricalOnly
-    ? Math.round(historyStats?.avgEngaged ?? 0)
-    : (derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0)
-  const devicesReporting = isHistoricalOnly
-    ? Math.round(historyStats?.avgDevices ?? 0)
-    : (derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0)
-  const successRate = historyStats?.sessionSuccessRate ?? derived?.session_success_rate ?? null
-  const disconnectRate = derived?.disconnect_proxy_rate ?? null
-  const stabilityScore = cookStabilityScore ?? derived?.stability_score ?? null
-  const overshootRate = derived?.overshoot_rate ?? null
-  const p50Stabilize = derived?.time_to_stabilize_p50_seconds ?? null
-  const p95Stabilize = derived?.time_to_stabilize_p95_seconds ?? null
-  const medianCookDuration = derived?.median_cook_duration_seconds ?? null
-  const p95CookDuration = derived?.p95_cook_duration_seconds ?? null
-  const medianRssi = historyStats?.historicalRssi ?? derived?.median_rssi_now ?? null
-  const probeErrorRate = analytics?.probe_failure_rate ?? null
-  const devices24h = isHistoricalOnly
-    ? Math.round(historyStats?.avgDevices ?? 0)
-    : (collection?.active_devices_last_24h ?? 0)
-  const devices60m = isHistoricalOnly ? 0 : (collection?.active_devices_last_60m ?? 0)
-
+  // NOTE: rangedHistory + historyStats are declared *before* the derived
+  // metrics below because the derived metrics read historyStats?.*. Using a
+  // `const` before its declaration triggers a temporal-dead-zone ReferenceError
+  // at render time (surfaces in prod minified builds as "Cannot access 't'
+  // before initialization").
   const rangedHistory = useMemo(() => {
     if (!historyDaily.length) return []
     const start = new Date(dateStart).getTime()
@@ -426,6 +405,32 @@ export function ProductEngineeringDivision() {
       daysWithSessions: rangedHistory.filter(r => (r.session_count || 0) > 0).length,
     }
   }, [rangedHistory])
+
+  // Range-first metrics: prefer values derived from the user's selected range
+  // (historyStats + cookAnalysis), falling back to stream-backed values only
+  // when the daily rollups don't have the field.
+  const sampleSize = historyStats?.totalSessions || Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
+
+  const activeCooks = isHistoricalOnly
+    ? Math.round(historyStats?.avgEngaged ?? 0)
+    : (derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0)
+  const devicesReporting = isHistoricalOnly
+    ? Math.round(historyStats?.avgDevices ?? 0)
+    : (derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0)
+  const successRate = historyStats?.sessionSuccessRate ?? derived?.session_success_rate ?? null
+  const disconnectRate = derived?.disconnect_proxy_rate ?? null
+  const stabilityScore = cookStabilityScore ?? derived?.stability_score ?? null
+  const overshootRate = derived?.overshoot_rate ?? null
+  const p50Stabilize = derived?.time_to_stabilize_p50_seconds ?? null
+  const p95Stabilize = derived?.time_to_stabilize_p95_seconds ?? null
+  const medianCookDuration = derived?.median_cook_duration_seconds ?? null
+  const p95CookDuration = derived?.p95_cook_duration_seconds ?? null
+  const medianRssi = historyStats?.historicalRssi ?? derived?.median_rssi_now ?? null
+  const probeErrorRate = analytics?.probe_failure_rate ?? null
+  const devices24h = isHistoricalOnly
+    ? Math.round(historyStats?.avgDevices ?? 0)
+    : (collection?.active_devices_last_24h ?? 0)
+  const devices60m = isHistoricalOnly ? 0 : (collection?.active_devices_last_60m ?? 0)
 
   /* Issue Radar: product-related clusters — filter out "unknown" */
   const productClusters = useMemo(() => {
