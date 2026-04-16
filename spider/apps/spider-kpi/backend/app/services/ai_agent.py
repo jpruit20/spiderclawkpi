@@ -178,12 +178,15 @@ async def run_cli_turn(
     env["PATH"] = ":".join(extra_paths) + ":" + existing
 
     try:
+        # Increase buffer limit to 2MB to handle large JSON outputs from Claude
+        # (default 64KB is too small for file edit diffs)
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_root,
             env=env,
+            limit=2 * 1024 * 1024,
         )
     except Exception as exc:
         logger.exception("Failed to start Claude CLI: binary=%s cwd=%s", claude_bin, workspace_root)
