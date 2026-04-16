@@ -1,4 +1,5 @@
 import type {
+  AppSideFleetResponse,
   AuthCodeRequestResponse,
   AuthStatusResponse,
   ClarityPageMetric,
@@ -301,4 +302,12 @@ export const api = {
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),
+  appSideFleet: (days?: number, signal?: AbortSignal, start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (days) params.set('days', String(days))
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    const qs = params.toString()
+    return request<AppSideFleetResponse>(`/api/telemetry/app-side${qs ? `?${qs}` : ''}`, { signal })
+  },
 }

@@ -255,6 +255,87 @@ class FreshdeskGroupsDaily(TimestampMixin, Base):
     unresolved_tickets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class AppSideUserObservation(TimestampMixin, Base):
+    """One-row-per-(source, source_ref_id) raw observation that a particular
+    Spider Grills app user was seen on a given business date. Kept long/event-level
+    so the daily rollup can be recomputed deterministically when new sources
+    are added (e.g. direct app backend DB pull alongside the Freshdesk pull).
+    """
+    __tablename__ = "app_side_user_observations"
+    __table_args__ = (
+        UniqueConstraint("source", "source_ref_id", name="uq_app_side_user_observations_source_ref"),
+        Index("ix_app_side_user_observations_business_date_source", "business_date", "source"),
+        Index("ix_app_side_user_observations_user_key", "user_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # 'freshdesk' | 'app_backend'
+    source_ref_id: Mapped[str] = mapped_column(String(128), nullable=False)  # freshdesk ticket_id or backend user id
+    user_key: Mapped[str] = mapped_column(String(128), nullable=False)  # sha256(lower(email)) — stable dedup key across sources
+    email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    email_domain: Mapped[Optional[str]] = mapped_column(String(255))
+    observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class AppSideDeviceObservation(TimestampMixin, Base):
+    """One-row-per-(source, source_ref_id) raw observation linking an app user to
+    a particular Venom device (by MAC) with self-reported context (firmware,
+    app version, phone). MAC is normalized (lowercase, colons stripped) so rows
+    from Freshdesk and the app backend align for deduplication.
+    """
+    __tablename__ = "app_side_device_observations"
+    __table_args__ = (
+        UniqueConstraint("source", "source_ref_id", name="uq_app_side_device_observations_source_ref"),
+        Index("ix_app_side_device_observations_business_date_source", "business_date", "source"),
+        Index("ix_app_side_device_observations_mac", "mac_normalized"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_ref_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    mac_raw: Mapped[Optional[str]] = mapped_column(String(64))
+    mac_normalized: Mapped[Optional[str]] = mapped_column(String(64), index=True)  # hex-only lowercase, bridge to Dynamo thingName
+    controller_model: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    app_version: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    phone_os: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    phone_os_version: Mapped[Optional[str]] = mapped_column(String(32))
+    phone_brand: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    phone_model: Mapped[Optional[str]] = mapped_column(String(128))
+    observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class AppSideDaily(TimestampMixin, Base):
+    """Per-day rollup of app-side fleet metrics, split by data source so we can
+    always tell what came from Freshdesk (passive — users who ran diagnostics)
+    vs. what came from the app backend (full active population, once connected).
+    Distribution columns are JSONB { value: count }.
+    """
+    __tablename__ = "app_side_daily"
+    __table_args__ = (
+        UniqueConstraint("business_date", "source", name="uq_app_side_daily_date_source"),
+        Index("ix_app_side_daily_business_date", "business_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)  # 'freshdesk' | 'app_backend'
+    observations: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unique_users: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unique_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    app_version_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    firmware_version_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    controller_model_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    phone_os_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    phone_brand_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    phone_model_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class TelemetryStreamEvent(TimestampMixin, Base):
     __tablename__ = "telemetry_stream_events"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_stream_events_source_event_id"),)

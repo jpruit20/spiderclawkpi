@@ -7,7 +7,7 @@ import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
-import type { ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
+import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
 import {
   BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart, PieChart, Pie, Cell,
 } from 'recharts'
@@ -250,6 +250,7 @@ export function ProductEngineeringDivision() {
   const [issueRadar, setIssueRadar] = useState<IssueRadarResponse | null>(null)
   const [marketIntel, setMarketIntel] = useState<MarketIntelligence | null>(null)
   const [cxSnapshot, setCxSnapshot] = useState<CXSnapshotResponse | null>(null)
+  const [appSide, setAppSide] = useState<AppSideFleetResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -287,12 +288,13 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [telData, issuesData, radarData, miData, cxData] = await Promise.all([
+        const [telData, issuesData, radarData, miData, cxData, appSideData] = await Promise.all([
           api.telemetrySummary(daysDiff, undefined, dateStart, dateEnd),
           api.engineeringIssues().catch(() => null),
           api.issues().catch(() => null),
           api.marketIntelligence(30).catch(() => null),
           api.cxSnapshot().catch(() => null),
+          api.appSideFleet(daysDiff, undefined, dateStart, dateEnd).catch(() => null),
         ])
         if (!cancelled) {
           setTelemetry(telData)
@@ -300,6 +302,7 @@ export function ProductEngineeringDivision() {
           setIssueRadar(radarData)
           setMarketIntel(miData)
           setCxSnapshot(cxData)
+          setAppSide(appSideData)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load product data')
@@ -937,6 +940,228 @@ export function ProductEngineeringDivision() {
                   )}
                 </section>
               </div>
+
+              {/* App-side fleet — Freshdesk-derived today, app backend pending */}
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>App-side fleet</strong>
+                  <span className="venom-panel-hint">
+                    {appSide?.latest_observed_at
+                      ? `Latest observation · ${formatFreshness(appSide.latest_observed_at)}`
+                      : 'No observations yet'}
+                  </span>
+                </div>
+                <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+                  Complements the device-side DynamoDB/S3 telemetry with data reported directly from
+                  the Spider Grills mobile app (React Native). Every metric is explicitly tagged
+                  by source so Freshdesk-derived rows and direct app-backend rows stay separable
+                  and never double-count.
+                </p>
+
+                <div className="two-col two-col-equal" style={{ marginBottom: 12 }}>
+                  {/* Freshdesk source column */}
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 6 }}>
+                      <strong style={{ fontSize: 13 }}>Freshdesk (diagnostics-only)</strong>
+                      <span className="badge badge-neutral" style={{ fontSize: 10 }}>
+                        {appSide?.sources?.freshdesk?.connected ? 'connected' : 'not connected'}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+                      Only users who submitted an in-app diagnostic ticket — a floor, not the full population.
+                    </p>
+                    <div className="venom-bar-list">
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Unique users (window)</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.freshdesk?.unique_users_window ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Unique devices by MAC</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.freshdesk?.unique_devices_window ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Observations</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.freshdesk?.observations ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">No MAC reported</span>
+                        <span className="venom-breakdown-val" style={{ color: 'var(--muted)' }}>
+                          {fmtInt(appSide?.sources?.freshdesk?.device_observations_without_mac ?? 0)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* App backend source column */}
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 6 }}>
+                      <strong style={{ fontSize: 13 }}>App backend (spidergrills.app)</strong>
+                      <span
+                        className={`badge ${appSide?.sources?.app_backend?.connected ? 'badge-neutral' : 'badge-warn'}`}
+                        style={{ fontSize: 10 }}
+                      >
+                        {appSide?.sources?.app_backend?.connected ? 'connected' : 'pending credentials'}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+                      Full DAU/MAU, every paired device, signup funnel. Live once the direct DB pull is wired in.
+                    </p>
+                    <div className="venom-bar-list">
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Unique users (window)</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.app_backend?.unique_users_window ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Unique devices by MAC</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.app_backend?.unique_devices_window ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Observations</span>
+                        <span className="venom-breakdown-val">{fmtInt(appSide?.sources?.app_backend?.observations ?? 0)}</span>
+                      </div>
+                      <div className="venom-breakdown-row">
+                        <span className="venom-bar-label">Overlap with Freshdesk (users)</span>
+                        <span className="venom-breakdown-val" style={{ color: 'var(--muted)' }}>
+                          {appSide?.overlap?.users_in_both != null ? fmtInt(appSide.overlap.users_in_both) : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Combined / deduped totals */}
+                <div className="venom-panel-head" style={{ marginTop: 6, marginBottom: 6 }}>
+                  <strong style={{ fontSize: 13 }}>Combined (deduped by MAC + user_key)</strong>
+                  <span className="venom-panel-hint">safe to read as a union</span>
+                </div>
+                <div className="venom-bar-list" style={{ marginBottom: 12 }}>
+                  <div className="venom-breakdown-row">
+                    <span className="venom-bar-label">Unique users across sources</span>
+                    <span className="venom-breakdown-val">{fmtInt(appSide?.combined?.unique_users_window ?? 0)}</span>
+                  </div>
+                  <div className="venom-breakdown-row">
+                    <span className="venom-bar-label">Unique devices across sources</span>
+                    <span className="venom-breakdown-val">{fmtInt(appSide?.combined?.unique_devices_window ?? 0)}</span>
+                  </div>
+                </div>
+
+                {/* Distribution breakdowns — each shows combined + per-source split */}
+                <div className="two-col two-col-equal">
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>App version (top)</strong>
+                    </div>
+                    {(appSide?.combined?.app_version_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.app_version_top || []).slice(0, 8).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No app-version signal yet.</div>}
+                  </div>
+
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>Firmware (as reported by app)</strong>
+                    </div>
+                    {(appSide?.combined?.firmware_version_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.firmware_version_top || []).slice(0, 8).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No firmware signal yet.</div>}
+                  </div>
+                </div>
+
+                <div className="two-col two-col-equal" style={{ marginTop: 10 }}>
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>Phone OS</strong>
+                    </div>
+                    {(appSide?.combined?.phone_os_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.phone_os_top || []).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No OS signal yet.</div>}
+                  </div>
+
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>Controller model (as reported by app)</strong>
+                    </div>
+                    {(appSide?.combined?.controller_model_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.controller_model_top || []).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No controller-model signal yet.</div>}
+                  </div>
+                </div>
+
+                <div className="two-col two-col-equal" style={{ marginTop: 10 }}>
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>Phone brand</strong>
+                    </div>
+                    {(appSide?.combined?.phone_brand_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.phone_brand_top || []).slice(0, 8).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No phone-brand signal yet.</div>}
+                  </div>
+
+                  <div>
+                    <div className="venom-panel-head" style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 12 }}>Top phone models</strong>
+                    </div>
+                    {(appSide?.combined?.phone_model_top || []).length > 0 ? (
+                      <div className="venom-breakdown-list">
+                        {(appSide?.combined?.phone_model_top || []).slice(0, 10).map((row) => (
+                          <div key={row.value} className="venom-breakdown-row">
+                            <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.value}</span>
+                            <span className="venom-breakdown-val">{fmtInt(row.count)}</span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtPct(row.pct)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">No phone-model signal yet.</div>}
+                  </div>
+                </div>
+
+                <p style={{ fontSize: 10, color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
+                  <strong>Source note:</strong> Freshdesk rows are mined from [AUTOMATED] diagnostic-ticket
+                  custom fields (MAC, firmware, app version, phone). App-backend rows will come from a
+                  direct pull of the spidergrills.app database once credentials are in place. Devices
+                  are deduped by normalized MAC; users by sha256(email) — so a user who appears in both
+                  sources is counted once in the combined totals.
+                </p>
+              </section>
 
               {/* GitHub Issues + Product Clusters */}
               <div className="two-col two-col-equal">

@@ -10,6 +10,7 @@ from starlette.responses import FileResponse
 
 from app.api.routes.admin import router as admin_router
 from app.api.routes.ai_assistant import router as ai_router
+from app.api.routes.app_side import router as app_side_router
 from app.api.deps import require_auth
 from app.api.routes.auth import router as auth_router
 from app.api.routes.deci import router as deci_router
@@ -80,6 +81,7 @@ app.include_router(overview_router)
 app.include_router(admin_router)
 app.include_router(deci_router)
 app.include_router(ai_router)
+app.include_router(app_side_router)
 app.include_router(shopify_webhook_router)
 
 if FRONTEND_ASSETS_DIR.exists():

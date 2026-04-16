@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from app.compute.app_side import materialize_app_side
 from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.db.session import SessionLocal
@@ -78,8 +79,18 @@ def run_syncs() -> None:
             any_success = _successful_result(sync_shopify_orders(db)) or any_success
         if not _already_running(db, "triplewhale"):
             any_success = _successful_result(sync_triplewhale(db, backfill_days=1)) or any_success
+        freshdesk_success = False
         if not _already_running(db, "freshdesk"):
-            any_success = _successful_result(sync_freshdesk(db, days=7)) or any_success
+            freshdesk_success = _successful_result(sync_freshdesk(db, days=7))
+            any_success = freshdesk_success or any_success
+        if freshdesk_success:
+            try:
+                materialize_app_side(db)
+            except Exception:
+                # Materializer failure should not abort the scheduler sweep.
+                import logging
+                logging.getLogger(__name__).exception("app_side materialize failed")
+                db.rollback()
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
         if not _already_running(db, "aws_telemetry"):

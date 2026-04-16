@@ -956,3 +956,65 @@ export interface GithubIssuesResponse {
   fetched_at?: string
   error?: string
 }
+
+export interface AppSideDistributionItem {
+  value: string
+  count: number
+  pct: number
+}
+
+export interface AppSideSourceDailyRow {
+  business_date: string
+  observations: number
+  unique_users: number
+  unique_devices: number
+}
+
+export interface AppSideSourceStats {
+  observations: number
+  unique_users_window: number
+  unique_devices_window: number
+  device_observations_without_mac: number
+  connected: boolean
+  daily: AppSideSourceDailyRow[]
+  app_version_top: AppSideDistributionItem[]
+  firmware_version_top: AppSideDistributionItem[]
+  controller_model_top: AppSideDistributionItem[]
+  phone_os_top: AppSideDistributionItem[]
+  phone_brand_top: AppSideDistributionItem[]
+  phone_model_top: AppSideDistributionItem[]
+}
+
+export interface AppSideCombinedStats {
+  unique_users_window: number
+  unique_devices_window: number
+  app_version_top: AppSideDistributionItem[]
+  firmware_version_top: AppSideDistributionItem[]
+  controller_model_top: AppSideDistributionItem[]
+  phone_os_top: AppSideDistributionItem[]
+  phone_brand_top: AppSideDistributionItem[]
+  phone_model_top: AppSideDistributionItem[]
+}
+
+export interface AppSideOverlap {
+  users_in_both?: number
+  devices_in_both?: number
+  users_only_freshdesk?: number
+  users_only_app_backend?: number
+}
+
+export interface AppSideFleetResponse {
+  window: { start: string; end: string; days: number }
+  sources: {
+    freshdesk: AppSideSourceStats
+    app_backend: AppSideSourceStats
+  }
+  combined: AppSideCombinedStats
+  overlap: AppSideOverlap
+  latest_observed_at: string | null
+  notes: {
+    freshdesk: string
+    app_backend: string
+    combined: string
+  }
+}

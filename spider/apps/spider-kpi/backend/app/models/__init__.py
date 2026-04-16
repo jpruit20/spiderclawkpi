@@ -1,5 +1,8 @@
 from app.models.entities import (
     Alert,
+    AppSideDaily,
+    AppSideDeviceObservation,
+    AppSideUserObservation,
     AuthUser,
     AuthVerificationChallenge,
     ClarityPageMetric,
@@ -42,6 +45,9 @@ from app.models.entities import (
 
 __all__ = [
     "Alert",
+    "AppSideDaily",
+    "AppSideDeviceObservation",
+    "AppSideUserObservation",
     "AuthUser",
     "AuthVerificationChallenge",
     "ClarityPageMetric",
