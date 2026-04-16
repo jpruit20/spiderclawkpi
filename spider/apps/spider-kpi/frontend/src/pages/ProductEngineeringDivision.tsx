@@ -333,6 +333,7 @@ export function ProductEngineeringDivision() {
   const confidence = telemetry?.confidence || null
 
   const streamBacked = collection?.sample_source === 'dynamodb_stream'
+  const isHistoricalOnly = collection?.data_scope === 'historical_daily'
 
   // Staleness: warn if newest sample is > 1 hour old
   const newestSample = collection?.newest_sample_timestamp_seen
@@ -342,22 +343,45 @@ export function ProductEngineeringDivision() {
   // Truncation: warn if DynamoDB scan was bounded
   const scanTruncated = collection?.scan_truncated === true
   const capHit = collection?.max_record_cap_hit === true
-  const sampleSize = Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
 
-  const activeCooks = derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0
-  const devicesReporting = derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0
-  const successRate = derived?.session_success_rate ?? latest?.session_reliability_score ?? null
-  const disconnectRate = derived?.disconnect_proxy_rate ?? latest?.disconnect_rate ?? null
-  const stabilityScore = derived?.stability_score ?? latest?.temp_stability_score ?? null
+  // Compute a cookAnalysis-derived stability score (weighted by style session count)
+  const cookStabilityScore = useMemo(() => {
+    const details = cookAnalysis?.style_details
+    if (!details) return null
+    let weightSum = 0, weightN = 0
+    for (const d of Object.values(details) as any[]) {
+      const c = d?.count || 0
+      const s = d?.avg_stability_score
+      if (c > 0 && s != null) { weightSum += s * c; weightN += c }
+    }
+    return weightN > 0 ? weightSum / weightN : null
+  }, [cookAnalysis])
+
+  // Range-first metrics: prefer values derived from the user's selected range
+  // (historyStats + cookAnalysis), falling back to stream-backed values only
+  // when the daily rollups don't have the field.
+  const sampleSize = historyStats?.totalSessions || Math.max(telemetry?.slice_snapshot?.sessions_derived || 0, collection?.distinct_devices_observed || 0)
+
+  const activeCooks = isHistoricalOnly
+    ? Math.round(historyStats?.avgEngaged ?? 0)
+    : (derived?.active_cooks_now ?? collection?.active_devices_last_15m ?? 0)
+  const devicesReporting = isHistoricalOnly
+    ? Math.round(historyStats?.avgDevices ?? 0)
+    : (derived?.devices_reporting_last_5m ?? collection?.active_devices_last_5m ?? 0)
+  const successRate = historyStats?.sessionSuccessRate ?? derived?.session_success_rate ?? null
+  const disconnectRate = derived?.disconnect_proxy_rate ?? null
+  const stabilityScore = cookStabilityScore ?? derived?.stability_score ?? null
   const overshootRate = derived?.overshoot_rate ?? null
   const p50Stabilize = derived?.time_to_stabilize_p50_seconds ?? null
   const p95Stabilize = derived?.time_to_stabilize_p95_seconds ?? null
   const medianCookDuration = derived?.median_cook_duration_seconds ?? null
   const p95CookDuration = derived?.p95_cook_duration_seconds ?? null
-  const medianRssi = derived?.median_rssi_now ?? null
+  const medianRssi = historyStats?.historicalRssi ?? derived?.median_rssi_now ?? null
   const probeErrorRate = analytics?.probe_failure_rate ?? null
-  const devices24h = collection?.active_devices_last_24h ?? 0
-  const devices60m = collection?.active_devices_last_60m ?? 0
+  const devices24h = isHistoricalOnly
+    ? Math.round(historyStats?.avgDevices ?? 0)
+    : (collection?.active_devices_last_24h ?? 0)
+  const devices60m = isHistoricalOnly ? 0 : (collection?.active_devices_last_60m ?? 0)
 
   const rangedHistory = useMemo(() => {
     if (!historyDaily.length) return []
@@ -383,12 +407,21 @@ export function ProductEngineeringDivision() {
   const historyStats = useMemo(() => {
     if (!rangedHistory.length) return null
     const avgDevices = rangedHistory.reduce((s, r) => s + r.active_devices, 0) / rangedHistory.length
+    const avgEngaged = rangedHistory.reduce((s, r) => s + r.engaged_devices, 0) / rangedHistory.length
     const totalErrors = rangedHistory.reduce((s, r) => s + r.error_events, 0)
     const totalEvents = rangedHistory.reduce((s, r) => s + r.total_events, 0)
+    const totalSessions = rangedHistory.reduce((s, r) => s + (r.session_count || 0), 0)
+    const totalSuccessful = rangedHistory.reduce((s, r) => s + (r.successful_sessions || 0), 0)
     const peakDay = rangedHistory.reduce((best, r) => r.active_devices > (best?.active_devices || 0) ? r : best, rangedHistory[0])
     const historicalRssi = avgWeighted(rangedHistory, 'avg_rssi')
     const historicalCookTemp = avgWeighted(rangedHistory, 'avg_cook_temp')
-    return { avgDevices, totalErrors, totalEvents, errorRate: totalEvents > 0 ? totalErrors / totalEvents : 0, peakDay, historicalRssi, historicalCookTemp }
+    return {
+      avgDevices, avgEngaged, totalErrors, totalEvents, totalSessions, totalSuccessful,
+      errorRate: totalEvents > 0 ? totalErrors / totalEvents : 0,
+      sessionSuccessRate: totalSessions > 0 ? totalSuccessful / totalSessions : null,
+      peakDay, historicalRssi, historicalCookTemp,
+      daysWithSessions: rangedHistory.filter(r => (r.session_count || 0) > 0).length,
+    }
   }, [rangedHistory])
 
   /* Issue Radar: product-related clusters — filter out "unknown" */
@@ -532,10 +565,10 @@ export function ProductEngineeringDivision() {
         <>
           <ProvenanceBanner
             compact
-            truthState={streamBacked ? 'canonical' : 'degraded'}
+            truthState={streamBacked ? 'canonical' : (rangedHistory.length > 0 ? 'estimated' : 'degraded')}
             lastUpdated={collection?.newest_sample_timestamp_seen}
-            scope={`${daysDiff}-day window · ${fmtInt(sampleSize)} device samples`}
-            caveat={!streamBacked ? 'Running on daily aggregates — live stream unavailable. Some metrics may be delayed up to 24h.' : undefined}
+            scope={`${dateStart} to ${dateEnd} (${daysDiff}d) · ${fmtInt(rangedHistory.length)} daily rows · ${fmtInt(historyStats?.totalSessions || sampleSize)} sessions`}
+            caveat={isHistoricalOnly ? 'Historical view — metrics derived from daily rollups. Event-level details (disconnect rate, probe errors, stabilization percentiles) require the live stream window.' : undefined}
           />
 
           {collection?.data_scope === 'historical_daily' && (
@@ -586,30 +619,43 @@ export function ProductEngineeringDivision() {
               {/* KPI Strip */}
               <div className="venom-kpi-strip">
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Active Cooks</div>
+                  <div className="venom-kpi-label">{isHistoricalOnly ? 'Avg Engaged Devices' : 'Active Cooks'}</div>
                   <div className="venom-kpi-value">{fmtInt(activeCooks)}</div>
-                  <div className="venom-kpi-sub">{fmtInt(devicesReporting)} devices reporting (5m)</div>
+                  <div className="venom-kpi-sub">
+                    {isHistoricalOnly
+                      ? `avg/day over ${rangedHistory.length} days`
+                      : <>{fmtInt(devicesReporting)} devices reporting (5m)</>}
+                  </div>
                   <div className="venom-kpi-badges">
-                    <TruthBadge state={(confidence?.global_completeness as TruthState) || 'proxy'} />
-                    {devices60m > 0 && <span className="venom-delta venom-delta-up">{fmtInt(devices60m)} in 60m · {fmtInt(devices24h)} in 24h</span>}
+                    <TruthBadge state={isHistoricalOnly ? 'canonical' : (confidence?.global_completeness as TruthState) || 'proxy'} />
+                    {!isHistoricalOnly && devices60m > 0 && <span className="venom-delta venom-delta-up">{fmtInt(devices60m)} in 60m · {fmtInt(devices24h)} in 24h</span>}
                   </div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Reliability</div>
                   <div className="venom-kpi-value">{fmtPct(successRate)}</div>
-                  <div className="venom-kpi-sub">session success · n={fmtInt(sampleSize)}</div>
-                  <div className="venom-kpi-badges"><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
+                  <div className="venom-kpi-sub">
+                    {historyStats?.daysWithSessions
+                      ? `session success · ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions}d`
+                      : `session success · n=${fmtInt(sampleSize)}`}
+                  </div>
+                  <div className="venom-kpi-badges"><TruthBadge state={historyStats?.sessionSuccessRate != null ? 'canonical' : (confidence?.cook_success as TruthState) || 'estimated'} /></div>
                 </div>
                 <div className="venom-kpi-card">
                   <div className="venom-kpi-label">Temp Stability</div>
                   <div className="venom-kpi-value">{fmtDecimal(stabilityScore)}</div>
-                  <div className="venom-kpi-sub">score (0-1, higher = steadier)</div>
-                  <div className="venom-kpi-badges"><TruthBadge state={(confidence?.session_derivation as TruthState) || 'estimated'} /></div>
+                  <div className="venom-kpi-sub">
+                    {cookStabilityScore != null ? 'weighted avg from cook styles in range' : 'score (0-1, higher = steadier)'}
+                  </div>
+                  <div className="venom-kpi-badges"><TruthBadge state={cookStabilityScore != null ? 'canonical' : (confidence?.session_derivation as TruthState) || 'estimated'} /></div>
                 </div>
                 <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Product Issues</div>
-                  <div className="venom-kpi-value">{productClusters.length}</div>
-                  <div className="venom-kpi-sub">active clusters from support + telemetry</div>
+                  <div className="venom-kpi-label">Error Rate</div>
+                  <div className="venom-kpi-value">{historyStats ? fmtPct(historyStats.errorRate) : '\u2014'}</div>
+                  <div className="venom-kpi-sub">
+                    {historyStats ? `${fmtInt(historyStats.totalErrors)} errors / ${fmtInt(historyStats.totalEvents)} events` : 'no data in range'}
+                  </div>
+                  <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
                 </div>
               </div>
 
@@ -752,10 +798,15 @@ export function ProductEngineeringDivision() {
                     <div className="venom-breakdown-row"><span>Session success rate</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
                     <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state={(confidence?.disconnect_detection as TruthState) || 'proxy'} /></div>
                     <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
-                    <div className="venom-breakdown-row"><span>Median RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${medianRssi} dBm` : '\u2014'}</span></div>
+                    <div className="venom-breakdown-row"><span>Avg RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${typeof medianRssi === 'number' ? medianRssi.toFixed(1) : medianRssi} dBm` : '\u2014'}</span></div>
+                    {historyStats && (
+                      <div className="venom-breakdown-row"><span>Error rate</span><span className="venom-breakdown-val">{fmtPct(historyStats.errorRate)}</span><TruthBadge state="canonical" /></div>
+                    )}
                   </div>
                   <small className="venom-panel-footer">
-                    Disconnect rate = sessions where a &gt;45-minute gap was detected between telemetry events (proxy for WiFi dropout). Probe error = sessions where food probe readings were expected but missing. RSSI = WiFi signal strength (below -75 dBm = weak). n={fmtInt(sampleSize)} sessions.
+                    {historyStats?.daysWithSessions
+                      ? `Based on ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions} days in the selected range.`
+                      : `Disconnect rate = sessions where a >45-minute gap was detected. Probe error = sessions where food probe readings were missing. n=${fmtInt(sampleSize)} sessions.`}
                   </small>
                   {grillTypeHealth.length > 0 && (
                     <div style={{ marginTop: 12 }}>
