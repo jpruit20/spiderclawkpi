@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 CLI_TIMEOUT_SECONDS = 1800
 # Maximum seconds of CLI stdout inactivity before we treat the session as hung.
 # Long chain-of-thought "thinking" emits no stdout — this has to be generous.
-CLI_IDLE_TIMEOUT_SECONDS = 180
+# Increased from 180s to 600s to allow complex reasoning without false timeouts.
+CLI_IDLE_TIMEOUT_SECONDS = 600
 # Dollar cap per request (safety net).
-CLI_MAX_BUDGET_USD = 0.50
+CLI_MAX_BUDGET_USD = 2.00
 
 
 @dataclass
@@ -131,6 +132,11 @@ async def run_cli_turn(
     prompt = _build_prompt(user_message, history)
     system_prompt = _build_system_prompt(scope)
 
+    # Load settings early so we can use ai_assistant_model in the command
+    import os as _os
+    from app.core.config import get_settings as _get_settings
+    _settings = _get_settings()
+
     # Build CLI command — tools must be comma-separated as one arg
     base_cmd = [claude_bin]
     if claude_bin.endswith("npx"):
@@ -139,22 +145,19 @@ async def run_cli_turn(
         "-p", prompt,
         "--output-format", "stream-json",
         "--verbose",
-        "--model", "sonnet",
+        "--model", _settings.ai_assistant_model,
         "--bare",
         "--append-system-prompt", system_prompt,
         "--allowedTools", "Read,Edit,Glob,Grep",
         "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
     ]
 
-    logger.warning("AI agent start: user=%s division=%s binary=%s cwd=%s", scope.email, scope.division, claude_bin, workspace_root)
+    logger.warning("AI agent start: user=%s division=%s binary=%s cwd=%s model=%s", scope.email, scope.division, claude_bin, workspace_root, _settings.ai_assistant_model)
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})
 
     # systemd services have a minimal PATH that may not include node/npm.
     # Build a rich PATH so the claude CLI (a Node.js script) can find its
     # interpreter and any required binaries.
-    import os as _os
-    from app.core.config import get_settings as _get_settings
-    _settings = _get_settings()
     env = _os.environ.copy()
     # Inject the Anthropic API key — Pydantic loads it from .env but
     # doesn't export it to os.environ, so the subprocess needs it explicitly.
