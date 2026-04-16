@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 from app.services.ai_scoping import UserScope, DIVISION_LABELS
