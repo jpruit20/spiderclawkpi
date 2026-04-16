@@ -5,6 +5,7 @@ import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, formatFreshness } from '../lib/format'
@@ -1393,6 +1394,13 @@ export function CustomerExperienceDivision() {
               <div className="state-message">Social listening will populate after first Reddit sync</div>
             )}
           </section>
+
+          {/* ClickUp tasks relevant to CX */}
+          <ClickUpTasksCard
+            title="ClickUp tasks — Customer Experience"
+            subtitle="Tasks tagged for CX work across ClickUp. Filter scope with the chips; link to open in ClickUp."
+            defaultFilter={{ limit: 30 }}
+          />
 
           {/* Navigation tiles */}
           <section className="card">

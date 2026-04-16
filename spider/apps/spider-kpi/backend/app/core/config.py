@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     freshdesk_api_key: Optional[str] = None
     freshdesk_api_user: Optional[str] = None
 
+    # ClickUp (Spider Grills workspace)
+    clickup_api_token: Optional[str] = None
+    clickup_team_id: Optional[str] = None
+    clickup_base_url: str = "https://api.clickup.com/api/v2"
+    clickup_sync_interval_minutes: int = 15
+    clickup_task_lookback_days: int = 120
+
     aws_telemetry_url: Optional[str] = None
     aws_telemetry_local_path: Optional[str] = None
     aws_telemetry_api_token: Optional[str] = None

@@ -242,6 +242,8 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
   const [newCrossFunctional, setNewCrossFunctional] = useState(false)
   const [newDescription, setNewDescription] = useState('')
   const [newDueDate, setNewDueDate] = useState('')
+  const [newClickupListId, setNewClickupListId] = useState('')
+  const [clickupLists, setClickupLists] = useState<{ list_id: string; list_name: string | null; space_name: string | null }[]>([])
   const [creating, setCreating] = useState(false)
   const [seeding, setSeeding] = useState(false)
 
@@ -257,11 +259,24 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
     }
   }, [selectedDomain])
 
+  // Load ClickUp lists once the user opens the New Decision form, so the
+  // "Also create in ClickUp" dropdown is populated. Silent on failure
+  // (ClickUp not configured or no tasks synced yet).
+  useEffect(() => {
+    if (!showCreate) return
+    if (clickupLists.length > 0) return
+    let cancelled = false
+    api.clickupLists()
+      .then((r) => { if (!cancelled) setClickupLists(r.lists || []) })
+      .catch(() => { /* silent */ })
+    return () => { cancelled = true }
+  }, [showCreate])  // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleCreate() {
     if (!newTitle.trim()) return
     setCreating(true)
     try {
-      await api.deciCreateDecision({
+      const created = await api.deciCreateDecision({
         title: newTitle.trim(),
         description: newDescription.trim() || undefined,
         type: newType,
@@ -271,12 +286,24 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
         domain_id: newDomainId || undefined,
         cross_functional: newCrossFunctional,
         due_date: newDueDate || undefined,
-      })
+      }) as { id?: string }
+
+      // Optionally mirror into ClickUp. Best-effort — a ClickUp failure does
+      // not roll back the decision we just created.
+      if (newClickupListId && created?.id) {
+        const cuPriority = newPriority === 'critical' ? 1 : newPriority === 'high' ? 2 : newPriority === 'medium' ? 3 : 4
+        try {
+          await api.clickupDeciSync(created.id, { list_id: newClickupListId, priority: cuPriority })
+        } catch (err) {
+          console.warn('ClickUp sync failed (decision still created):', err)
+        }
+      }
       setNewTitle('')
       setNewDescription('')
       setNewDomainId('')
       setNewCrossFunctional(false)
       setNewDueDate('')
+      setNewClickupListId('')
       setShowCreate(false)
       onReload()
     } finally {
@@ -373,6 +400,17 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingBottom: 4 }}>
               <input type="checkbox" checked={newCrossFunctional} onChange={e => setNewCrossFunctional(e.target.checked)} id="cf-check" />
               <label htmlFor="cf-check" style={{ fontSize: 11, color: 'var(--muted)' }}>Cross-functional</label>
+            </div>
+            <div style={{ flex: '1 1 220px' }}>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Also create in ClickUp (optional)</label>
+              <select value={newClickupListId} onChange={e => setNewClickupListId(e.target.value)} className="deci-input" style={{ width: '100%' }}>
+                <option value="">— Do not mirror —</option>
+                {clickupLists.map(l => (
+                  <option key={l.list_id} value={l.list_id}>
+                    {l.space_name ? `${l.space_name} · ` : ''}{l.list_name || l.list_id}
+                  </option>
+                ))}
+              </select>
             </div>
             <button className="range-button active" onClick={handleCreate} disabled={creating || !newTitle.trim()}>
               {creating ? 'Creating...' : 'Create'}

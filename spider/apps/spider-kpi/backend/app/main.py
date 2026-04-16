@@ -13,6 +13,7 @@ from app.api.routes.ai_assistant import router as ai_router
 from app.api.routes.app_side import router as app_side_router
 from app.api.deps import require_auth
 from app.api.routes.auth import router as auth_router
+from app.api.routes.clickup import router as clickup_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.health import router as health_router
 from app.api.routes.overview import router as overview_router
@@ -82,6 +83,7 @@ app.include_router(admin_router)
 app.include_router(deci_router)
 app.include_router(ai_router)
 app.include_router(app_side_router)
+app.include_router(clickup_router)
 app.include_router(shopify_webhook_router)
 
 if FRONTEND_ASSETS_DIR.exists():

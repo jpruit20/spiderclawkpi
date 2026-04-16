@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.ingestion.connectors.clarity import sync_clarity
+from app.ingestion.connectors.clickup import sync_clickup
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
@@ -136,6 +137,19 @@ def run_syncs() -> None:
         if amazon_due and not _already_running(db, "amazon"):
             from app.ingestion.connectors.amazon import sync_amazon
             any_success = _successful_result(sync_amazon(db)) or any_success
+        latest_clickup_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "clickup")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        clickup_due = (
+            latest_clickup_run is None
+            or latest_clickup_run.started_at is None
+            or latest_clickup_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.clickup_sync_interval_minutes)
+        )
+        if clickup_due and not _already_running(db, "clickup"):
+            any_success = _successful_result(sync_clickup(db)) or any_success
         latest_youtube_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "youtube")

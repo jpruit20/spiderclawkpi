@@ -1,6 +1,12 @@
 import type {
   AppSideFleetResponse,
   AuthCodeRequestResponse,
+  ClickUpConfigResponse,
+  ClickUpListsResponse,
+  ClickUpSpacesResponse,
+  ClickUpTaskFilter,
+  ClickUpTaskListResponse,
+  DeciClickUpLink,
   AuthStatusResponse,
   ClarityPageMetric,
   ClusterTicketDetail,
@@ -302,6 +308,51 @@ export const api = {
   clarityFriction: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/friction', { signal }),
   clarityPageHealth: (signal?: AbortSignal) => request<ClarityPageMetric[]>('/api/clarity/page-health', { signal }),
   engineeringIssues: (signal?: AbortSignal) => request<GithubIssuesResponse>('/api/engineering/issues', { signal }),
+  // ClickUp --------------------------------------------------------------
+  clickupConfig: (signal?: AbortSignal) =>
+    request<ClickUpConfigResponse>('/api/clickup/config', { signal }),
+  clickupSpaces: (signal?: AbortSignal) =>
+    request<ClickUpSpacesResponse>('/api/clickup/spaces', { signal }),
+  clickupLists: (space_id?: string, signal?: AbortSignal) =>
+    request<ClickUpListsResponse>(`/api/clickup/lists${space_id ? `?space_id=${encodeURIComponent(space_id)}` : ''}`, { signal }),
+  clickupTasks: (filter?: ClickUpTaskFilter, signal?: AbortSignal) => {
+    const params = new URLSearchParams()
+    if (filter) {
+      for (const [k, v] of Object.entries(filter)) {
+        if (v === undefined || v === null || v === '') continue
+        params.set(k, String(v))
+      }
+    }
+    const qs = params.toString()
+    return request<ClickUpTaskListResponse>(`/api/clickup/tasks${qs ? `?${qs}` : ''}`, { signal })
+  },
+  clickupDeciSync: (decisionId: string, body: { list_id: string; name?: string; description?: string; priority?: number }) =>
+    fetch(`${API_BASE}/api/clickup/deci/${decisionId}/sync`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(async r => {
+      if (!r.ok) throw new ApiError(`API error ${r.status} for /api/clickup/deci/${decisionId}/sync`, r.status, `/api/clickup/deci/${decisionId}/sync`)
+      return r.json() as Promise<DeciClickUpLink>
+    }),
+  clickupDeciLink: (decisionId: string, task_id: string) =>
+    fetch(`${API_BASE}/api/clickup/deci/${decisionId}/link`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id }),
+    }).then(r => r.json() as Promise<DeciClickUpLink>),
+  clickupDeciRefresh: (decisionId: string) =>
+    fetch(`${API_BASE}/api/clickup/deci/${decisionId}/refresh`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<DeciClickUpLink>),
+  clickupDeciUnlink: (decisionId: string) =>
+    fetch(`${API_BASE}/api/clickup/deci/${decisionId}/unlink`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<DeciClickUpLink>),
+  clickupSyncNow: (full?: boolean) =>
+    fetch(`${API_BASE}/api/clickup/sync-now${full ? '?full=true' : ''}`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json()),
   appSideFleet: (days?: number, signal?: AbortSignal, start?: string, end?: string) => {
     const params = new URLSearchParams()
     if (days) params.set('days', String(days))

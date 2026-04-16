@@ -336,6 +336,95 @@ class AppSideDaily(TimestampMixin, Base):
     phone_model_dist: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
+class ClickUpTask(TimestampMixin, Base):
+    """One row per ClickUp task_id. Full ``raw_payload`` is stored so we never
+    lose fields and can re-derive anything later. Status + priority are
+    mirrored as top-level columns for index-friendly filtering.
+    """
+    __tablename__ = "clickup_tasks"
+    __table_args__ = (
+        UniqueConstraint("task_id", name="uq_clickup_tasks_task_id"),
+        Index("ix_clickup_tasks_status_type", "status_type"),
+        Index("ix_clickup_tasks_space_list", "space_id", "list_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    custom_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(500))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    status_type: Mapped[Optional[str]] = mapped_column(String(32))  # 'open' | 'closed' | 'done' | 'custom'
+    priority: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    space_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    space_name: Mapped[Optional[str]] = mapped_column(String(128))
+    folder_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    folder_name: Mapped[Optional[str]] = mapped_column(String(128))
+    list_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    list_name: Mapped[Optional[str]] = mapped_column(String(128))
+    parent_task_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    creator_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    creator_username: Mapped[Optional[str]] = mapped_column(String(128))
+    assignees_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    tags_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    custom_fields_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(Text)
+    points: Mapped[Optional[float]] = mapped_column(Float)
+    time_estimate_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    date_created: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    date_updated: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    date_closed: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    date_done: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class ClickUpTaskEvent(TimestampMixin, Base):
+    """Append-only log of task snapshots / status changes. Lets us chart status
+    transitions and recompute rollups from scratch at any time.
+    """
+    __tablename__ = "clickup_task_events"
+    __table_args__ = (
+        Index("ix_clickup_task_events_task_ts", "task_id", "event_timestamp"),
+        UniqueConstraint("task_id", "event_type", "event_timestamp", name="uq_clickup_task_events_natural"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    normalized_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class ClickUpTasksDaily(TimestampMixin, Base):
+    """Per-(business_date, space_id) rollup for dashboard charts. Kept
+    intentionally simple — pages that need richer views can hit the raw
+    ``clickup_tasks`` table via the filtered API endpoint.
+    """
+    __tablename__ = "clickup_tasks_daily"
+    __table_args__ = (
+        UniqueConstraint("business_date", "space_id", name="uq_clickup_tasks_daily_date_space"),
+        Index("ix_clickup_tasks_daily_business_date", "business_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False)
+    space_id: Mapped[Optional[str]] = mapped_column(String(64))
+    space_name: Mapped[Optional[str]] = mapped_column(String(128))
+    tasks_open: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tasks_closed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tasks_overdue: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tasks_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tasks_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status_breakdown: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    priority_breakdown: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    assignee_breakdown: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class TelemetryStreamEvent(TimestampMixin, Base):
     __tablename__ = "telemetry_stream_events"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_stream_events_source_event_id"),)
@@ -679,6 +768,11 @@ class DeciDecision(TimestampMixin, Base):
     cross_functional: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ClickUp linkage — populated when user creates/links a ClickUp task for this decision.
+    clickup_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    clickup_status_cached: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    clickup_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    clickup_last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DeciAssignment(TimestampMixin, Base):

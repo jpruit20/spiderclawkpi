@@ -1003,6 +1003,102 @@ export interface AppSideOverlap {
   users_only_app_backend?: number
 }
 
+/* ClickUp ---------------------------------------------------------------- */
+
+export interface ClickUpAssignee {
+  id: string
+  username?: string | null
+  email?: string | null
+}
+
+export interface ClickUpTask {
+  task_id: string
+  custom_id?: string | null
+  name?: string | null
+  status?: string | null
+  status_type?: string | null
+  priority?: string | null
+  space_id?: string | null
+  space_name?: string | null
+  folder_id?: string | null
+  folder_name?: string | null
+  list_id?: string | null
+  list_name?: string | null
+  assignees: ClickUpAssignee[]
+  tags: string[]
+  url?: string | null
+  date_created?: string | null
+  date_updated?: string | null
+  date_done?: string | null
+  due_date?: string | null
+  archived: boolean
+  is_open: boolean
+}
+
+export interface ClickUpTaskListResponse {
+  tasks: ClickUpTask[]
+  summary: {
+    total: number
+    open: number
+    overdue: number
+    by_status: Record<string, number>
+    by_priority: Record<string, number>
+  }
+  configured: boolean
+}
+
+export interface ClickUpSpace {
+  id: string
+  name: string
+  private: boolean
+}
+
+export interface ClickUpSpacesResponse {
+  source: 'live' | 'db'
+  spaces: ClickUpSpace[]
+}
+
+export interface ClickUpConfigResponse {
+  configured: boolean
+  team_id: string | null
+  base_url: string
+}
+
+export interface ClickUpListItem {
+  list_id: string
+  list_name: string | null
+  space_id: string | null
+  space_name: string | null
+  folder_name: string | null
+}
+
+export interface ClickUpListsResponse {
+  lists: ClickUpListItem[]
+}
+
+export interface DeciClickUpLink {
+  id: string
+  title: string
+  status: string
+  clickup_task_id: string | null
+  clickup_status_cached: string | null
+  clickup_url: string | null
+  clickup_last_synced_at: string | null
+}
+
+export interface ClickUpTaskFilter {
+  space_id?: string
+  list_id?: string
+  folder_id?: string
+  status_type?: 'open' | 'closed' | 'done'
+  priority?: string
+  assignee?: string
+  due_within_days?: number
+  overdue_only?: boolean
+  q?: string
+  limit?: number
+}
+
 export interface AppSideFleetResponse {
   window: { start: string; end: string; days: number }
   sources: {
