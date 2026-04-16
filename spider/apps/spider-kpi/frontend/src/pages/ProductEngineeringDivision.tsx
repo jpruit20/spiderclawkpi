@@ -685,10 +685,26 @@ export function ProductEngineeringDivision() {
                     </ResponsiveContainer>
                   </div>
                 ) : <div className="state-message">No historical daily data available for this date range. Run the S3 import to populate fleet history.</div>}
-                {historyStats && (historyStats.historicalRssi != null || historyStats.historicalCookTemp != null) ? (
+                {historyStats ? (
                   <div className="venom-kpi-strip" style={{ marginTop: 12 }}>
                     <div className="venom-kpi-card">
-                      <div className="venom-kpi-label">Avg WiFi Signal (period)</div>
+                      <div className="venom-kpi-label">Unique Devices (avg/day)</div>
+                      <div className="venom-kpi-value">{fmtInt(Math.round(historyStats.avgDevices))}</div>
+                      <div className="venom-kpi-sub">
+                        peak: {historyStats.peakDay ? fmtInt(historyStats.peakDay.active_devices) : '\u2014'} on {historyStats.peakDay?.business_date ?? '\u2014'}
+                      </div>
+                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Total Device-Days</div>
+                      <div className="venom-kpi-value">{fmtInt(rangedHistory.reduce((s, r) => s + r.active_devices, 0))}</div>
+                      <div className="venom-kpi-sub">
+                        {fmtInt(rangedHistory.reduce((s, r) => s + r.engaged_devices, 0))} engaged device-days ({rangedHistory.length}d)
+                      </div>
+                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                    </div>
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Avg WiFi Signal</div>
                       <div className="venom-kpi-value">
                         {historyStats.historicalRssi != null ? `${historyStats.historicalRssi.toFixed(1)} dBm` : '\u2014'}
                       </div>
@@ -697,22 +713,20 @@ export function ProductEngineeringDivision() {
                           ? 'Weak \u2014 outdoor placement far from router'
                           : historyStats.historicalRssi != null && historyStats.historicalRssi < -65
                             ? 'Fair signal'
-                            : 'Strong signal'}
+                            : historyStats.historicalRssi != null ? 'Strong signal' : 'no RSSI data in range'}
                       </div>
                       <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
                     </div>
                     <div className="venom-kpi-card">
-                      <div className="venom-kpi-label">Avg Cook Temp (period)</div>
+                      <div className="venom-kpi-label">Avg Cook Temp</div>
                       <div className="venom-kpi-value">
                         {historyStats.historicalCookTemp != null ? `${Math.round(historyStats.historicalCookTemp)}\u00b0F` : '\u2014'}
                       </div>
-                      <div className="venom-kpi-sub">
-                        Weighted by telemetry event volume across {rangedHistory.length} day{rangedHistory.length !== 1 ? 's' : ''}
-                      </div>
+                      <div className="venom-kpi-sub">weighted by event volume</div>
                       <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
                     </div>
                     <div className="venom-kpi-card">
-                      <div className="venom-kpi-label">Total Events (period)</div>
+                      <div className="venom-kpi-label">Total Events</div>
                       <div className="venom-kpi-value">{fmtInt(historyStats.totalEvents)}</div>
                       <div className="venom-kpi-sub">{fmtInt(historyStats.totalErrors)} errors \u00b7 {fmtPct(historyStats.errorRate)} rate</div>
                       <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
