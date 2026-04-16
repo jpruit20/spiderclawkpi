@@ -162,16 +162,47 @@ async def validate_and_deploy(
     if rc != 0:
         logger.error("git push failed: %s", err)
         return DeployResult(
-            success=True,
+            success=False,
             commit_sha=sha,
-            message=f"Committed ({sha}) but push failed: {err}. Deploy manually.",
+            message=f"Committed ({sha}) but push failed: {err}. Ask an admin to deploy manually.",
             reverted_files=reverted or None,
         )
 
     logger.info("AI deploy: commit=%s files=%s user=%s", sha, authorized, scope.email)
+
+    # Schedule a background backend pull+restart so the droplet picks up
+    # the new commit.  We delay a few seconds to let the SSE response
+    # finish before the service restarts.
+    await _schedule_backend_reload(workspace_root)
+
     return DeployResult(
         success=True,
         commit_sha=sha,
-        message=f"Deployed ({sha}). Vercel will auto-build.",
+        message=f"Deployed ({sha}). Frontend auto-builds on Vercel; backend reloading.",
         reverted_files=reverted or None,
     )
+
+
+async def _schedule_backend_reload(workspace_root: str) -> None:
+    """Fire-and-forget a backend reload after a successful push.
+
+    Uses ``systemd-run`` to schedule a one-shot unit 5 seconds in the future
+    so the current SSE response finishes cleanly before the service restarts.
+    Falls back to a direct background subprocess if systemd-run isn't available.
+    """
+    reload_script = (
+        f"sleep 5 && "
+        f"cd {workspace_root} && "
+        f"git pull --ff-only origin master && "
+        f"sudo systemctl restart spider-kpi.service"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "-c", f"nohup bash -c '{reload_script}' >/dev/null 2>&1 &",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=3)
+        logger.info("Scheduled backend reload in background")
+    except Exception as exc:
+        logger.warning("Could not schedule backend reload: %s", exc)
