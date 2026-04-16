@@ -21,11 +21,14 @@ logger = logging.getLogger(__name__)
 # Must stay <= nginx proxy_read_timeout so we shut down cleanly rather than 504.
 CLI_TIMEOUT_SECONDS = 1800
 # Maximum seconds of CLI stdout inactivity before we treat the session as hung.
-# Long chain-of-thought "thinking" emits no stdout — this has to be generous.
-# Increased from 180s to 600s to allow complex reasoning without false timeouts.
+# Thinking + multi-file edits can produce long silent stretches — 600s covers
+# even the most complex multi-step reasoning chains.
 CLI_IDLE_TIMEOUT_SECONDS = 600
 # Dollar cap per request (safety net).
 CLI_MAX_BUDGET_USD = 2.00
+# asyncio.StreamReader default limit is 64KB — Claude CLI JSON lines routinely
+# exceed that when tool_result blocks contain file contents or large diffs.
+_SUBPROCESS_LINE_LIMIT = 2 * 1024 * 1024  # 2MB
 
 
 @dataclass
@@ -129,6 +132,10 @@ async def run_cli_turn(
         yield SSEEvent(event="error", data={"message": "Claude Code CLI not found on server. Please install it with: npm install -g @anthropic-ai/claude-code"})
         return
 
+    import os as _os
+    from app.core.config import get_settings as _get_settings
+    _settings = _get_settings()
+
     prompt = _build_prompt(user_message, history)
     system_prompt = _build_system_prompt(scope)
 
@@ -148,7 +155,7 @@ async def run_cli_turn(
         "--model", _settings.ai_assistant_model,
         "--bare",
         "--append-system-prompt", system_prompt,
-        "--allowedTools", "Read,Edit,Glob,Grep",
+        "--allowedTools", "Read,Edit,Write,Glob,Grep",
         "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
     ]
 
@@ -186,7 +193,7 @@ async def run_cli_turn(
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_root,
             env=env,
-            limit=2 * 1024 * 1024,
+            limit=_SUBPROCESS_LINE_LIMIT,
         )
     except Exception as exc:
         logger.exception("Failed to start Claude CLI: binary=%s cwd=%s", claude_bin, workspace_root)
@@ -209,6 +216,9 @@ async def run_cli_turn(
             overall_timeout=CLI_TIMEOUT_SECONDS,
             idle_timeout=CLI_IDLE_TIMEOUT_SECONDS,
         ):
+            if raw_line == _KEEPALIVE_SENTINEL:
+                yield SSEEvent(event="keepalive", data={"ts": int(asyncio.get_event_loop().time())})
+                continue
             line = raw_line.strip()
             if not line:
                 continue
@@ -259,8 +269,9 @@ async def run_cli_turn(
                         tool_name = block.get("name", "unknown")
                         tool_input = block.get("input", {}) or {}
                         file_path = tool_input.get("file_path") or tool_input.get("path") or ""
-                        if tool_name == "Edit" and file_path:
-                            files_modified.append(file_path)
+                        if tool_name in ("Edit", "Write") and file_path:
+                            if file_path not in files_modified:
+                                files_modified.append(file_path)
                             yield SSEEvent(event="file_modified", data={
                                 "tool": tool_name,
                                 "file": file_path,
@@ -308,6 +319,13 @@ async def run_cli_turn(
         pass
 
 
+# Sentinel value yielded by the line reader to tell the SSE loop to emit
+# a keepalive comment — prevents browser/proxy idle disconnects during
+# long thinking stretches.
+_KEEPALIVE_SENTINEL = "\x00__keepalive__\n"
+_KEEPALIVE_INTERVAL = 30  # seconds between heartbeats
+
+
 async def _read_lines_with_timeout(
     stream: asyncio.StreamReader,
     *,
@@ -316,20 +334,32 @@ async def _read_lines_with_timeout(
 ) -> AsyncGenerator[str, None]:
     """Read lines from *stream* with both a per-line idle timeout and an overall cap.
 
-    The idle timeout catches real hangs while allowing long chain-of-thought
-    reasoning between stdout writes. The overall timeout is a hard safety cap
-    so a runaway CLI can't hold a connection forever.
+    While waiting for the next line, emits a keepalive sentinel every
+    _KEEPALIVE_INTERVAL seconds so the SSE connection stays alive during
+    long chain-of-thought reasoning.  The overall timeout is a hard safety
+    cap so a runaway CLI can't hold a connection forever.
     """
     deadline = asyncio.get_event_loop().time() + overall_timeout
     while True:
         remaining_overall = deadline - asyncio.get_event_loop().time()
         if remaining_overall <= 0:
             raise asyncio.TimeoutError()
-        per_read_timeout = min(idle_timeout, remaining_overall)
-        try:
-            line = await asyncio.wait_for(stream.readline(), timeout=per_read_timeout)
-        except asyncio.TimeoutError:
-            raise
+        # Try reading in KEEPALIVE_INTERVAL chunks so we can emit heartbeats
+        elapsed_idle = 0.0
+        line: bytes | None = None
+        while elapsed_idle < idle_timeout and elapsed_idle < remaining_overall:
+            chunk_wait = min(_KEEPALIVE_INTERVAL, idle_timeout - elapsed_idle, remaining_overall - elapsed_idle)
+            try:
+                line = await asyncio.wait_for(stream.readline(), timeout=chunk_wait)
+                break  # got a line
+            except asyncio.TimeoutError:
+                elapsed_idle += chunk_wait
+                if elapsed_idle < idle_timeout:
+                    yield _KEEPALIVE_SENTINEL
+                    continue
+                raise  # true idle timeout
+        if line is None:
+            raise asyncio.TimeoutError()
         if not line:
             break  # EOF
         yield line.decode("utf-8", errors="replace")
