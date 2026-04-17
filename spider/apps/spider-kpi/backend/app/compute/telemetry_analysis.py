@@ -531,11 +531,26 @@ def generate_report(
     # Build a json_schema the API accepts: every object must have
     # additionalProperties=false. Pydantic's default schema doesn't set it, so
     # we walk the tree and add it.
-    def _strict(schema: dict) -> dict:
+    def _strict(schema: Any) -> Any:
+        """Shape the schema for the API's json_schema output format:
+          * every object must set additionalProperties=false
+          * array constraints minItems>1 / maxLength / etc. that aren't
+            supported by the API are stripped — we still enforce them
+            downstream via Pydantic's own validation on the returned JSON.
+        """
         if isinstance(schema, dict):
             if schema.get("type") == "object" and "additionalProperties" not in schema:
                 schema["additionalProperties"] = False
-            for v in schema.values():
+            if schema.get("type") == "array":
+                mi = schema.get("minItems")
+                if isinstance(mi, int) and mi > 1:
+                    schema["minItems"] = 1
+                schema.pop("maxItems", None)
+            schema.pop("maxLength", None)
+            schema.pop("minLength", None)
+            schema.pop("exclusiveMinimum", None)
+            schema.pop("exclusiveMaximum", None)
+            for v in list(schema.values()):
                 if isinstance(v, (dict, list)):
                     _strict(v)
         elif isinstance(schema, list):
