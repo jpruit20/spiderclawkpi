@@ -142,38 +142,62 @@ def _extract_mentions(text: str | None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def discover_channels(db: Session) -> dict[str, int]:
-    """Pull public + private channels the bot is in; upsert SlackChannel rows."""
-    stats = {"channels_seen": 0, "channels_inserted": 0, "channels_updated": 0}
-    cursor = ""
-    while True:
-        params = {"limit": 200, "types": "public_channel,private_channel", "exclude_archived": False}
-        if cursor:
-            params["cursor"] = cursor
-        data = _call("conversations.list", params)
-        for ch in data.get("channels") or []:
-            stats["channels_seen"] += 1
-            row = db.execute(select(SlackChannel).where(SlackChannel.channel_id == ch["id"])).scalars().first()
-            if row is None:
-                row = SlackChannel(channel_id=ch["id"])
-                db.add(row)
-                stats["channels_inserted"] += 1
-            else:
-                stats["channels_updated"] += 1
-            row.name = ch.get("name")
-            row.is_private = bool(ch.get("is_private"))
-            row.is_archived = bool(ch.get("is_archived"))
-            row.is_member = bool(ch.get("is_member"))
-            topic = (ch.get("topic") or {}).get("value") if isinstance(ch.get("topic"), dict) else None
-            purpose = (ch.get("purpose") or {}).get("value") if isinstance(ch.get("purpose"), dict) else None
-            row.topic = topic
-            row.purpose = purpose
-            row.num_members = ch.get("num_members")
-            row.created_at_source = _ts_to_dt(str(ch.get("created"))) if ch.get("created") else None
-            row.last_synced_at = datetime.now(timezone.utc)
-            row.raw_payload = ch
-        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
-        if not cursor:
-            break
+    """Pull public + private channels the bot is in; upsert SlackChannel rows.
+
+    Calls ``conversations.list`` once per type so a missing scope on one type
+    (typically ``groups:read`` for private channels when it wasn't installed)
+    doesn't block discovery of the other. Scope-denied types are recorded
+    but do not error the whole sync.
+    """
+    stats = {"channels_seen": 0, "channels_inserted": 0, "channels_updated": 0, "scopes_missing": []}
+
+    def _pull(channel_type: str) -> None:
+        cursor = ""
+        while True:
+            params = {"limit": 200, "types": channel_type, "exclude_archived": False}
+            if cursor:
+                params["cursor"] = cursor
+            data = _call("conversations.list", params)
+            if not data.get("ok"):
+                err = data.get("error") or "unknown"
+                if err == "missing_scope":
+                    needed = data.get("needed") or ""
+                    logger.warning(
+                        "slack conversations.list %s failed: missing scope %s — "
+                        "install the app with this scope to enable %s channel visibility",
+                        channel_type, needed, channel_type,
+                    )
+                    stats["scopes_missing"].append({"type": channel_type, "needed": needed})
+                else:
+                    logger.warning("slack conversations.list %s failed: %s", channel_type, err)
+                return
+            for ch in data.get("channels") or []:
+                stats["channels_seen"] += 1
+                row = db.execute(select(SlackChannel).where(SlackChannel.channel_id == ch["id"])).scalars().first()
+                if row is None:
+                    row = SlackChannel(channel_id=ch["id"])
+                    db.add(row)
+                    stats["channels_inserted"] += 1
+                else:
+                    stats["channels_updated"] += 1
+                row.name = ch.get("name")
+                row.is_private = bool(ch.get("is_private"))
+                row.is_archived = bool(ch.get("is_archived"))
+                row.is_member = bool(ch.get("is_member"))
+                topic = (ch.get("topic") or {}).get("value") if isinstance(ch.get("topic"), dict) else None
+                purpose = (ch.get("purpose") or {}).get("value") if isinstance(ch.get("purpose"), dict) else None
+                row.topic = topic
+                row.purpose = purpose
+                row.num_members = ch.get("num_members")
+                row.created_at_source = _ts_to_dt(str(ch.get("created"))) if ch.get("created") else None
+                row.last_synced_at = datetime.now(timezone.utc)
+                row.raw_payload = ch
+            cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+            if not cursor:
+                return
+
+    _pull("public_channel")
+    _pull("private_channel")
     db.flush()
     return stats
 
