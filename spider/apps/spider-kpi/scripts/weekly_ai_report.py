@@ -86,6 +86,83 @@ def _get_ai_commits(since_days: int = 7) -> list[dict]:
     return commits
 
 
+def _get_slack_digest(since_days: int = 7) -> list[dict]:
+    """Per-channel activity summary from the Slack archive — top N most-active
+    channels with headline metrics and the most-reacted-to message of the week.
+
+    DB access is lazy so this module still imports cleanly even when Slack
+    isn't configured or the backend venv isn't primed for alembic use.
+    """
+    try:
+        # Path in so the script can import the backend package.
+        backend = Path(__file__).resolve().parents[1] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+        from app.db.session import SessionLocal
+        from app.models import SlackActivityDaily, SlackMessage, SlackUser
+        from sqlalchemy import desc, select, func
+    except Exception:
+        return []
+
+    digest: list[dict] = []
+    cutoff_date = (datetime.now(BUSINESS_TZ) - timedelta(days=since_days)).date()
+    cutoff_dt = datetime.now(BUSINESS_TZ) - timedelta(days=since_days)
+
+    db = SessionLocal()
+    try:
+        # Aggregate per channel over the window
+        rows = db.execute(
+            select(
+                SlackActivityDaily.channel_id,
+                SlackActivityDaily.channel_name,
+                func.sum(SlackActivityDaily.message_count).label("messages"),
+                func.sum(SlackActivityDaily.unique_users).label("users"),
+                func.sum(SlackActivityDaily.reaction_count).label("reactions"),
+                func.sum(SlackActivityDaily.file_count).label("files"),
+            )
+            .where(SlackActivityDaily.business_date >= cutoff_date)
+            .group_by(SlackActivityDaily.channel_id, SlackActivityDaily.channel_name)
+            .order_by(desc(func.sum(SlackActivityDaily.message_count)))
+            .limit(8)
+        ).all()
+
+        for r in rows:
+            # Most-reacted message in this channel this week
+            top_msg = db.execute(
+                select(SlackMessage)
+                .where(
+                    SlackMessage.channel_id == r.channel_id,
+                    SlackMessage.ts_dt >= cutoff_dt,
+                    SlackMessage.is_deleted == False,  # noqa: E712
+                )
+                .order_by(desc(SlackMessage.reaction_count))
+                .limit(1)
+            ).scalars().first()
+            top_user_name = None
+            if top_msg and top_msg.user_id:
+                u = db.execute(select(SlackUser).where(SlackUser.user_id == top_msg.user_id)).scalars().first()
+                if u:
+                    top_user_name = u.display_name or u.real_name or u.name
+            digest.append({
+                "channel_id": r.channel_id,
+                "channel_name": r.channel_name,
+                "messages": int(r.messages or 0),
+                "users": int(r.users or 0),
+                "reactions": int(r.reactions or 0),
+                "files": int(r.files or 0),
+                "top_message": {
+                    "user": top_user_name,
+                    "text": (top_msg.text or "")[:200] if top_msg else None,
+                    "reactions": int(top_msg.reaction_count) if top_msg else 0,
+                } if top_msg else None,
+            })
+        return digest
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
 def _get_escalations(since_days: int = 7) -> list[dict]:
     """Parse journalctl for escalation email events in the last N days."""
     since = (datetime.now(BUSINESS_TZ) - timedelta(days=since_days)).strftime("%Y-%m-%d")
@@ -115,8 +192,9 @@ def _get_escalations(since_days: int = 7) -> list[dict]:
     return escalations
 
 
-def _build_report(commits: list[dict], escalations: list[dict]) -> tuple[str, str]:
+def _build_report(commits: list[dict], escalations: list[dict], slack_digest: list[dict] | None = None) -> tuple[str, str]:
     """Build plain-text and HTML versions of the weekly report."""
+    slack_digest = slack_digest or []
     now = datetime.now(BUSINESS_TZ)
     week_start = (now - timedelta(days=7)).strftime("%b %d")
     week_end = now.strftime("%b %d, %Y")
@@ -133,8 +211,8 @@ def _build_report(commits: list[dict], escalations: list[dict]) -> tuple[str, st
         f"{'=' * 50}\n",
     ]
 
-    if not commits and not escalations:
-        text_parts.append("Quiet week — no AI edits or escalation requests.\n")
+    if not commits and not escalations and not slack_digest:
+        text_parts.append("Quiet week — no AI edits, escalations, or Slack activity.\n")
     else:
         text_parts.append(f"DASHBOARD CHANGES ({len(commits)} total)\n")
         if commits:
@@ -152,6 +230,22 @@ def _build_report(commits: list[dict], escalations: list[dict]) -> tuple[str, st
                 text_parts.append(f"  {e['timestamp']}  from {e['from']}")
         else:
             text_parts.append("  None this week.")
+
+        if slack_digest:
+            total_msgs = sum(d["messages"] for d in slack_digest)
+            text_parts.append(f"\nSLACK ACTIVITY ({total_msgs} messages across {len(slack_digest)} channels)\n")
+            for d in slack_digest:
+                ch = d["channel_name"] or d["channel_id"]
+                text_parts.append(
+                    f"  #{ch}: {d['messages']} msgs · {d['users']} users · "
+                    f"{d['reactions']} reactions · {d['files']} files"
+                )
+                if d.get("top_message") and d["top_message"].get("text"):
+                    tm = d["top_message"]
+                    text_parts.append(
+                        f"    ★ Top (reactions={tm['reactions']}) {tm['user'] or '?'}: "
+                        f"{tm['text'][:140].strip()}"
+                    )
 
     body_text = "\n".join(text_parts)
 
@@ -203,6 +297,32 @@ def _build_report(commits: list[dict], escalations: list[dict]) -> tuple[str, st
         else:
             html_parts.append('<p style="color:#6b7280">None this week.</p>')
 
+        # Slack activity section
+        if slack_digest:
+            total_msgs = sum(d["messages"] for d in slack_digest)
+            html_parts.append(
+                f'<h3 style="color:#111827;border-bottom:2px solid #4a154b;padding-bottom:6px">'
+                f'Slack Activity ({total_msgs} msgs · {len(slack_digest)} channels)</h3>'
+            )
+            for d in slack_digest:
+                ch = d["channel_name"] or d["channel_id"]
+                html_parts.append(
+                    f'<div style="margin:10px 0;padding:8px 12px;background:#faf7fb;border-left:3px solid #4a154b;border-radius:4px">'
+                    f'<strong style="color:#374151">#{_escape(ch)}</strong>'
+                    f' <span style="color:#6b7280;font-size:12px">'
+                    f'{d["messages"]} msgs · {d["users"]} users · {d["reactions"]} reactions · {d["files"]} files'
+                    f'</span>'
+                )
+                tm = d.get("top_message") or {}
+                if tm.get("text"):
+                    html_parts.append(
+                        f'<div style="margin-top:6px;padding:6px 8px;background:#fff;border-radius:3px;font-size:12px;color:#374151">'
+                        f'<span style="color:#6b7280">★ Top (reactions={tm.get("reactions", 0)})</span> '
+                        f'<strong>{_escape(tm.get("user") or "?")}</strong>: {_escape(tm["text"][:200])}'
+                        f'</div>'
+                    )
+                html_parts.append('</div>')
+
     html_parts.append(
         '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">'
         '<p style="color:#9ca3af;font-size:11px;text-align:center">Auto-generated weekly report from the KPI dashboard AI system.</p>'
@@ -220,7 +340,8 @@ def _escape(text: str) -> str:
 def send_report() -> None:
     commits = _get_ai_commits(since_days=7)
     escalations = _get_escalations(since_days=7)
-    body_text, body_html = _build_report(commits, escalations)
+    slack_digest = _get_slack_digest(since_days=7)
+    body_text, body_html = _build_report(commits, escalations, slack_digest)
 
     now = datetime.now(BUSINESS_TZ)
     week_end = now.strftime("%b %d")

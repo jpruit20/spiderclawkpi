@@ -1,5 +1,6 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { SlackPulseCard } from '../components/SlackPulseCard'
 
 export function OperationsDivision() {
   return (
@@ -41,6 +42,11 @@ export function OperationsDivision() {
           title="ClickUp tasks — Operations"
           subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize). A real ops feed will supplement, not replace, this."
           defaultFilter={{ limit: 30 }}
+        />
+        <SlackPulseCard
+          title="Slack pulse — Inventory / Wholesale"
+          subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
+          defaultChannelName="inventory-updates"
         />
       </div>
     </>

@@ -153,6 +153,17 @@ class Settings(BaseSettings):
     app_backend_sync_interval_minutes: int = 30
     app_backend_lookback_days: int = 120
 
+    # Slack — Spider Grills workspace listener.
+    # Bot token + signing secret come from https://api.slack.com/apps (the Spider KPI Bot app).
+    # Channels are auto-discovered; no channel list needs to live here.
+    slack_bot_token: Optional[str] = None
+    slack_signing_secret: Optional[str] = None
+    slack_app_id: Optional[str] = None
+    slack_team_id: Optional[str] = None
+    slack_backfill_days: int = 30
+    slack_message_retention_days: int = 180
+    slack_discovery_interval_minutes: int = 60
+
     aws_telemetry_url: Optional[str] = None
     aws_telemetry_local_path: Optional[str] = None
     aws_telemetry_api_token: Optional[str] = None

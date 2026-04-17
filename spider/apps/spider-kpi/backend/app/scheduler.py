@@ -13,6 +13,7 @@ from app.ingestion.connectors.clickup import sync_clickup
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
+from app.ingestion.connectors.slack import sync_slack
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceConfig, SourceSyncRun
 from app.services.seed import seed_from_prototype_files
@@ -150,6 +151,19 @@ def run_syncs() -> None:
         )
         if clickup_due and not _already_running(db, "clickup"):
             any_success = _successful_result(sync_clickup(db)) or any_success
+        latest_slack_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "slack")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        slack_due = (
+            latest_slack_run is None
+            or latest_slack_run.started_at is None
+            or latest_slack_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.slack_discovery_interval_minutes)
+        )
+        if slack_due and not _already_running(db, "slack"):
+            any_success = _successful_result(sync_slack(db)) or any_success
         latest_youtube_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "youtube")

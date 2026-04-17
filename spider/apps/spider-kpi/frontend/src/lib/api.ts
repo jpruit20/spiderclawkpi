@@ -7,6 +7,9 @@ import type {
   ClickUpTaskFilter,
   ClickUpTaskListResponse,
   DeciClickUpLink,
+  SlackChannelsResponse,
+  SlackMessagesResponse,
+  SlackPulseResponse,
   AuthStatusResponse,
   ClarityPageMetric,
   ClusterTicketDetail,
@@ -351,6 +354,27 @@ export const api = {
     }).then(r => r.json() as Promise<DeciClickUpLink>),
   clickupSyncNow: (full?: boolean) =>
     fetch(`${API_BASE}/api/clickup/sync-now${full ? '?full=true' : ''}`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json()),
+  // Slack ----------------------------------------------------------------
+  slackChannels: (signal?: AbortSignal) =>
+    request<SlackChannelsResponse>('/api/slack/channels', { signal }),
+  slackPulse: (channel_id?: string, days?: number, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (channel_id) p.set('channel_id', channel_id)
+    if (days) p.set('days', String(days))
+    const qs = p.toString()
+    return request<SlackPulseResponse>(`/api/slack/pulse${qs ? `?${qs}` : ''}`, { signal })
+  },
+  slackMessages: (opts?: { channel_id?: string; thread_ts?: string; q?: string; since_days?: number; limit?: number }, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (opts) for (const [k, v] of Object.entries(opts)) { if (v != null && v !== '') p.set(k, String(v)) }
+    const qs = p.toString()
+    return request<SlackMessagesResponse>(`/api/slack/messages${qs ? `?${qs}` : ''}`, { signal })
+  },
+  slackFileProxyUrl: (file_id: string) => `${API_BASE}/api/slack/files/${encodeURIComponent(file_id)}`,
+  slackSyncNow: (full?: boolean) =>
+    fetch(`${API_BASE}/api/slack/sync-now${full ? '?full=true' : ''}`, {
       method: 'POST', credentials: 'include',
     }).then(r => r.json()),
   appSideFleet: (days?: number, signal?: AbortSignal, start?: string, end?: string) => {

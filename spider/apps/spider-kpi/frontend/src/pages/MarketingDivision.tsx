@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
@@ -635,6 +636,13 @@ export function MarketingDivision() {
             title="ClickUp tasks — Marketing"
             subtitle="Marketing space: campaigns, content, website, ambassadors, graphic design."
             defaultFilter={{ space_id: '901310388813', limit: 30 }}
+          />
+
+          {/* Slack pulse — marketing-customer-service + general-news */}
+          <SlackPulseCard
+            title="Slack pulse — Marketing"
+            subtitle="Campaign conversation + customer-facing channel activity."
+            defaultChannelName="marketing-customer-service"
           />
 
           {/* ---- Navigation Tiles ---- */}

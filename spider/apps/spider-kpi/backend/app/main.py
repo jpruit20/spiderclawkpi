@@ -17,6 +17,7 @@ from app.api.routes.clickup import router as clickup_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.health import router as health_router
 from app.api.routes.overview import router as overview_router
+from app.api.routes.slack import router as slack_router, webhook_router as slack_webhook_router
 from app.core.config import get_settings
 from app.ingestion.connectors.ga4 import ga4_debug_self_check
 from app.scheduler import build_scheduler
@@ -84,6 +85,8 @@ app.include_router(deci_router)
 app.include_router(ai_router)
 app.include_router(app_side_router)
 app.include_router(clickup_router)
+app.include_router(slack_router)
+app.include_router(slack_webhook_router)
 app.include_router(shopify_webhook_router)
 
 if FRONTEND_ASSETS_DIR.exists():

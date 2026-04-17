@@ -6,6 +6,7 @@ import { TruthBadge, type TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { SlackPulseCard } from '../components/SlackPulseCard'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
 import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
@@ -1174,6 +1175,13 @@ export function ProductEngineeringDivision() {
                 title="ClickUp tasks — Product / Engineering"
                 subtitle="Product Development space: continuous improvement, firmware, NPD. Non-GitHub engineering work lives here."
                 defaultFilter={{ space_id: '901313726772', limit: 30 }}
+              />
+
+              {/* Slack pulse — product-dev channel */}
+              <SlackPulseCard
+                title="Slack pulse — Product / Engineering"
+                subtitle="Engineering conversation in #product-dev. Issue-shaped messages auto-surface on Issue Radar."
+                defaultChannelName="product-dev"
               />
 
               {/* GitHub Issues + Product Clusters */}

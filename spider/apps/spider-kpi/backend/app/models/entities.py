@@ -425,6 +425,157 @@ class ClickUpTasksDaily(TimestampMixin, Base):
     assignee_breakdown: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
+class SlackChannel(TimestampMixin, Base):
+    """Spider Grills Slack workspace channel. Auto-discovered on a schedule and
+    via ``channel_created`` events. Archived/renamed channels stay here with
+    flags flipped so historical references don't break.
+    """
+    __tablename__ = "slack_channels"
+    __table_args__ = (
+        UniqueConstraint("channel_id", name="uq_slack_channels_channel_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_member: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    topic: Mapped[Optional[str]] = mapped_column(Text)
+    purpose: Mapped[Optional[str]] = mapped_column(Text)
+    num_members: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at_source: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class SlackUser(TimestampMixin, Base):
+    __tablename__ = "slack_users"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_slack_users_user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(128))  # legacy handle
+    real_name: Mapped[Optional[str]] = mapped_column(String(128))
+    display_name: Mapped[Optional[str]] = mapped_column(String(128))
+    email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    tz: Mapped[Optional[str]] = mapped_column(String(64))
+    title: Mapped[Optional[str]] = mapped_column(String(128))
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_app_user: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class SlackMessage(TimestampMixin, Base):
+    """Per-message archive. Natural key is (channel_id, ts) — Slack's ts is
+    unique within a channel and looks like ``1729442135.123456``.
+    """
+    __tablename__ = "slack_messages"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "ts", name="uq_slack_messages_channel_ts"),
+        Index("ix_slack_messages_channel_ts", "channel_id", "ts"),
+        Index("ix_slack_messages_thread_ts", "thread_ts"),
+        Index("ix_slack_messages_user_id", "user_id"),
+        Index("ix_slack_messages_ts_ordered", "ts"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    ts: Mapped[str] = mapped_column(String(32), nullable=False)  # Slack timestamp
+    ts_dt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    thread_ts: Mapped[Optional[str]] = mapped_column(String(32))
+    parent_user_id: Mapped[Optional[str]] = mapped_column(String(32))
+    user_id: Mapped[Optional[str]] = mapped_column(String(32))
+    bot_id: Mapped[Optional[str]] = mapped_column(String(32))
+    subtype: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    text: Mapped[Optional[str]] = mapped_column(Text)
+    edited_user_id: Mapped[Optional[str]] = mapped_column(String(32))
+    edited_ts: Mapped[Optional[str]] = mapped_column(String(32))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_files: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reaction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    mentions_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class SlackReaction(TimestampMixin, Base):
+    __tablename__ = "slack_reactions"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "message_ts", "user_id", "name", name="uq_slack_reactions_natural"),
+        Index("ix_slack_reactions_msg", "channel_id", "message_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    message_ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    reacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class SlackFile(TimestampMixin, Base):
+    """Metadata for Slack-hosted files (images / videos / docs) attached to
+    messages. The file bytes are NOT stored here — we stream them on demand
+    via ``/api/slack/files/{file_id}`` using the bot token. Slack remains the
+    source of truth; deletion on their side propagates via ``file_deleted``.
+    """
+    __tablename__ = "slack_files"
+    __table_args__ = (
+        UniqueConstraint("file_id", name="uq_slack_files_file_id"),
+        Index("ix_slack_files_message", "channel_id", "message_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel_id: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    message_ts: Mapped[Optional[str]] = mapped_column(String(32))
+    user_id: Mapped[Optional[str]] = mapped_column(String(32))
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    title: Mapped[Optional[str]] = mapped_column(String(255))
+    mimetype: Mapped[Optional[str]] = mapped_column(String(128))
+    filetype: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    size: Mapped[Optional[int]] = mapped_column(Integer)
+    url_private: Mapped[Optional[str]] = mapped_column(Text)
+    url_private_download: Mapped[Optional[str]] = mapped_column(Text)
+    thumb_url: Mapped[Optional[str]] = mapped_column(Text)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at_source: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class SlackActivityDaily(TimestampMixin, Base):
+    """Per-(business_date, channel_id) rollup for the pulse cards and weekly
+    AI summary. Hour-of-day histogram lives in ``hour_histogram`` JSONB
+    so the card can render a sparkline without extra queries.
+    """
+    __tablename__ = "slack_activity_daily"
+    __table_args__ = (
+        UniqueConstraint("business_date", "channel_id", name="uq_slack_activity_daily_date_channel"),
+        Index("ix_slack_activity_daily_date", "business_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel_name: Mapped[Optional[str]] = mapped_column(String(128))
+    message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unique_users: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reaction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    thread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    peak_hour: Mapped[Optional[int]] = mapped_column(Integer)
+    hour_histogram: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    top_users_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+
+
 class TelemetryStreamEvent(TimestampMixin, Base):
     __tablename__ = "telemetry_stream_events"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_stream_events_source_event_id"),)

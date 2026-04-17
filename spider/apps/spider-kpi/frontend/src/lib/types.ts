@@ -1003,6 +1003,72 @@ export interface AppSideOverlap {
   users_only_app_backend?: number
 }
 
+/* Slack ------------------------------------------------------------------ */
+
+export interface SlackChannelSummary {
+  channel_id: string
+  name: string | null
+  is_private: boolean
+  is_archived: boolean
+  is_member: boolean
+  num_members: number | null
+  topic: string | null
+  purpose: string | null
+}
+
+export interface SlackChannelsResponse {
+  channels: SlackChannelSummary[]
+  configured: boolean
+}
+
+export interface SlackDailyRow {
+  business_date: string
+  channel_id: string
+  channel_name: string | null
+  message_count: number
+  unique_users: number
+  reaction_count: number
+  thread_count: number
+  reply_count: number
+  file_count: number
+  peak_hour: number | null
+}
+
+export interface SlackMessageSummary {
+  channel_id: string
+  ts: string
+  ts_dt: string | null
+  thread_ts: string | null
+  user_id: string | null
+  user_name: string | null
+  subtype: string | null
+  text: string | null
+  has_files: boolean
+  file_count: number
+  reaction_count: number
+  reply_count: number
+  is_deleted: boolean
+}
+
+export interface SlackPulseResponse {
+  window: { start: string; end: string; days: number }
+  channel: SlackChannelSummary | null
+  totals: {
+    messages: number
+    reactions: number
+    files: number
+    replies: number
+    unique_users_seen: number
+  }
+  daily: SlackDailyRow[]
+  latest_message: SlackMessageSummary | null
+  configured: boolean
+}
+
+export interface SlackMessagesResponse {
+  messages: SlackMessageSummary[]
+}
+
 /* ClickUp ---------------------------------------------------------------- */
 
 export interface ClickUpAssignee {
