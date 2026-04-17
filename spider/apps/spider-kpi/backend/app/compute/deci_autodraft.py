@@ -163,7 +163,20 @@ def _department_hint(signal: IssueSignal, db: Session) -> Optional[str]:
     return None
 
 
+def _ai_payload(signal: IssueSignal) -> dict[str, Any]:
+    """Return signal.metadata_json['ai'] if present, else empty dict."""
+    meta = signal.metadata_json or {}
+    ai = meta.get("ai") if isinstance(meta, dict) else None
+    return ai if isinstance(ai, dict) else {}
+
+
 def _render_title(signal: IssueSignal) -> str:
+    # AI-generated titles are clean one-liners written in product-manager voice.
+    # Prefer them when available.
+    ai = _ai_payload(signal)
+    ai_title = (ai.get("title") or "").strip()
+    if ai_title:
+        return ai_title[:250]
     prefix = TITLE_PREFIX.get(signal.signal_type, f"Auto-detected: {signal.signal_type}")
     summary = (signal.title or signal.summary or "")[:80].strip()
     if summary:
@@ -173,7 +186,14 @@ def _render_title(signal: IssueSignal) -> str:
 
 def _render_description(signal: IssueSignal) -> str:
     meta = signal.metadata_json or {}
-    lines = [signal.summary or ""]
+    ai = _ai_payload(signal)
+    ai_summary = (ai.get("summary") or "").strip()
+    lines = []
+    if ai_summary:
+        lines.append(ai_summary)
+        lines.append("")
+        lines.append("_Original:_")
+    lines.append(signal.summary or "")
     lines.append("")
     lines.append(f"Source: {signal.source}")
     lines.append(f"Signal: {signal.signal_type}  (severity: {signal.severity})")
@@ -220,6 +240,13 @@ def process_signal(db: Session, signal: IssueSignal) -> tuple[str, Optional[str]
     if signal.signal_type not in AUTO_DRAFT_SIGNAL_TYPES:
         return "skipped", None
 
+    # AI veto: if the classifier explicitly marked this as not draft-worthy
+    # (team_chatter, pending question, false positive), skip. The rule-based
+    # keyword matcher is intentionally broad; AI provides the filter.
+    ai = _ai_payload(signal)
+    if ai and ai.get("is_draft_worthy") is False:
+        return "skipped", None
+
     context_key = _context_key_for_signal(signal)
     if context_key is None:
         return "skipped", None
@@ -256,7 +283,8 @@ def process_signal(db: Session, signal: IssueSignal) -> tuple[str, Optional[str]
     import uuid
     did = str(uuid.uuid4())
     priority = SEVERITY_TO_PRIORITY.get((signal.severity or "").lower(), "medium")
-    dept = _department_hint(signal, db)
+    # AI's department suggestion overrides the keyword-based channel-name guess.
+    dept = (ai.get("suggested_department") if ai else None) or _department_hint(signal, db)
     now = datetime.now(timezone.utc)
     decision = DeciDecision(
         id=did,

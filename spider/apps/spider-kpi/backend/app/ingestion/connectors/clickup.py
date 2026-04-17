@@ -618,7 +618,20 @@ def scan_tasks_for_issues(db: Session, since: datetime | None = None) -> int:
                 continue
             bd = (t.date_updated or t.date_created)
             bd = bd.astimezone(timezone.utc).date() if bd else None
-            db.add(IssueSignal(
+            signal_meta = {
+                "task_id": t.task_id,
+                "custom_id": t.custom_id,
+                "url": t.url,
+                "list_id": t.list_id,
+                "list_name": t.list_name,
+                "space_id": t.space_id,
+                "space_name": t.space_name,
+                "status": t.status,
+                "priority": t.priority,
+                "pattern": name,
+                "assignees": t.assignees_json,
+            }
+            new_signal = IssueSignal(
                 business_date=bd,
                 signal_type=f"clickup.{name}",
                 severity=severity,
@@ -626,20 +639,26 @@ def scan_tasks_for_issues(db: Session, since: datetime | None = None) -> int:
                 source="clickup",
                 title=(t.name or "")[:120] or f"ClickUp {name}",
                 summary=(text or "")[:500],
-                metadata_json={
-                    "task_id": t.task_id,
-                    "custom_id": t.custom_id,
-                    "url": t.url,
-                    "list_id": t.list_id,
-                    "list_name": t.list_name,
-                    "space_id": t.space_id,
-                    "space_name": t.space_name,
-                    "status": t.status,
-                    "priority": t.priority,
-                    "pattern": name,
-                    "assignees": t.assignees_json,
-                },
-            ))
+                metadata_json=signal_meta,
+            )
+            try:
+                from app.services.ai_classifier import classify_signal, classification_to_metadata
+                ai = classify_signal({
+                    "source": "clickup",
+                    "signal_type": new_signal.signal_type,
+                    "severity": new_signal.severity,
+                    "title": new_signal.title,
+                    "summary": new_signal.summary,
+                    "metadata_json": signal_meta,
+                })
+                if ai is not None:
+                    new_signal.metadata_json = {**signal_meta, "ai": classification_to_metadata(ai)}
+                    new_signal.severity = ai.severity
+                    new_signal.confidence = ai.confidence
+            except Exception:
+                logger.exception("AI classification threw (non-fatal)")
+
+            db.add(new_signal)
             inserted += 1
             break  # one signal per task is enough
 

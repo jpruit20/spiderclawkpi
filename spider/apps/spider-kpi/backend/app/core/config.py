@@ -153,6 +153,14 @@ class Settings(BaseSettings):
     app_backend_sync_interval_minutes: int = 30
     app_backend_lookback_days: int = 120
 
+    # Anthropic Claude — AI classification layer for Slack / ClickUp signals.
+    # When ANTHROPIC_API_KEY is missing, the classifier short-circuits and the
+    # rule-based detection + autodraft pipeline keeps working unchanged.
+    anthropic_api_key: Optional[str] = None
+    anthropic_classifier_model: str = "claude-haiku-4-5"
+    anthropic_classifier_max_tokens: int = 512
+    anthropic_classifier_timeout_seconds: float = 8.0
+
     # Slack — Spider Grills workspace listener.
     # Bot token + signing secret come from https://api.slack.com/apps (the Spider KPI Bot app).
     # Channels are auto-discovered; no channel list needs to live here.

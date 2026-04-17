@@ -552,22 +552,44 @@ def scan_messages_for_issues(db: Session, since: datetime | None = None, pattern
             )).scalars().first()
             if existing is not None:
                 continue
-            db.add(IssueSignal(
+            signal_meta = {
+                "channel_id": m.channel_id,
+                "message_ts": m.ts,
+                "user_id": m.user_id,
+                "pattern": name,
+                "thread_ts": m.thread_ts,
+            }
+            new_signal = IssueSignal(
                 business_date=_business_date(m.ts_dt),
                 signal_type=f"slack.{name}",
                 severity=severity,
-                confidence=0.6,  # keyword-based; bump when we add AI classification
+                confidence=0.6,  # keyword-based baseline; AI bumps/drops below.
                 source=SOURCE_NAME,
                 title=(m.text or "")[:120] or f"Slack {name}",
                 summary=(m.text or "")[:500],
-                metadata_json={
-                    "channel_id": m.channel_id,
-                    "message_ts": m.ts,
-                    "user_id": m.user_id,
-                    "pattern": name,
-                    "thread_ts": m.thread_ts,
-                },
-            ))
+                metadata_json=signal_meta,
+            )
+            # AI classification — enriches metadata with a clean title, refined
+            # severity, and a draft-worthiness verdict. Fails silent if unconfigured.
+            try:
+                from app.services.ai_classifier import classify_signal, classification_to_metadata
+                ai = classify_signal({
+                    "source": SOURCE_NAME,
+                    "signal_type": new_signal.signal_type,
+                    "severity": new_signal.severity,
+                    "title": new_signal.title,
+                    "summary": new_signal.summary,
+                    "metadata_json": signal_meta,
+                })
+                if ai is not None:
+                    new_signal.metadata_json = {**signal_meta, "ai": classification_to_metadata(ai)}
+                    # Refine severity + confidence in-place when AI has a strong read.
+                    new_signal.severity = ai.severity
+                    new_signal.confidence = ai.confidence
+            except Exception:
+                logger.exception("AI classification threw (non-fatal)")
+
+            db.add(new_signal)
             inserted += 1
             break  # one signal per message is enough
 
