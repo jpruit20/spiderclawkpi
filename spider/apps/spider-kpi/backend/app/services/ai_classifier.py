@@ -76,7 +76,7 @@ class AIClassification(BaseModel):
         description="Clean one-line title for a DECI draft (no quoting, no ellipses).",
     )
     summary: str = Field(
-        max_length=280,
+        max_length=600,
         description="One or two sentence plain-English summary of what's happening.",
     )
     suggested_department: Optional[Department] = Field(
