@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -1181,6 +1182,27 @@ export function ProductEngineeringDivision() {
                 title="Team velocity — Product Development space"
                 subtitle="Throughput, cycle time, and who's closing what this week."
                 spaceId="901313726772"
+              />
+
+              {/* Firmware releases / engineering closes overlaid on cook-success-rate.
+                  Vertical markers = firmware-keyword ClickUp tasks completing. */}
+              <ClickUpOverlayChart
+                title="Firmware releases ↔ Cook success rate"
+                subtitle="Daily cook-success rate with firmware-keyword ClickUp task completions as vertical markers. Did a firmware release move the success line?"
+                primarySeries={rangedHistory.map(r => ({
+                  date: r.business_date,
+                  value: (r.session_count || 0) > 0
+                    ? Math.round(((r.successful_sessions || 0) / (r.session_count || 1)) * 10000) / 100
+                    : 0,
+                }))}
+                primaryLabel="Cook success %"
+                primaryColor="var(--green)"
+                clickupFilter={{
+                  space_id: '901313726772',
+                  keyword: 'firmware',
+                  event_types: 'completed',
+                  days: 90,
+                }}
               />
 
               {/* Slack pulse — product-dev channel */}

@@ -494,6 +494,9 @@ def sync_clickup(db: Session, full: bool = False) -> dict[str, Any]:
             since=datetime.now(timezone.utc) - timedelta(days=settings.clickup_task_lookback_days),
         )
         stats["issue_signals_inserted"] = issues
+        # Stale-task scan — flags urgent/high/normal priority tasks overdue
+        # without movement. Runs every sync; dedup is per-day-per-task.
+        stats["stale_signals_inserted"] = scan_stale_tasks(db)
         db.commit()
 
         # Feed the DECI auto-draft engine.
@@ -696,6 +699,90 @@ def add_task_comment(task_id: str, comment: str) -> dict[str, Any]:
     )
     r.raise_for_status()
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Stale-task scanner — flags urgent/high tasks overdue without movement
+# ---------------------------------------------------------------------------
+
+# (severity, signal suffix, priorities-to-match, days-past-due threshold)
+_STALE_TIERS: list[tuple[str, str, list[str | None], int]] = [
+    ("critical", "stale_urgent", ["urgent"], 2),
+    ("warning",  "stale_high",   ["high"], 5),
+    ("info",     "stale_normal", ["normal", "low", None], 14),
+]
+
+
+def scan_stale_tasks(db: Session) -> int:
+    """Find open tasks past due date and emit an IssueSignal per task per day
+    at the severity matching the task's priority tier.
+
+    Dedup rule: one signal per ``(task_id, signal_type, day)`` — the autodraft
+    engine consolidates across days by ``(signal_type, context_key=task_id)``
+    so a stale task has one draft that grows with log entries over time.
+    """
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    inserted = 0
+
+    for severity, suffix, priorities, threshold_days in _STALE_TIERS:
+        cutoff_due = now - timedelta(days=threshold_days)
+        stmt = select(ClickUpTask).where(
+            ClickUpTask.archived == False,  # noqa: E712
+            or_(ClickUpTask.status_type.is_(None), ClickUpTask.status_type != "closed"),
+            ClickUpTask.due_date.isnot(None),
+            ClickUpTask.due_date < cutoff_due,
+        )
+        # Priority filter — include None via ORM `in_(priorities)` with is None handling.
+        if None in priorities:
+            non_null = [p for p in priorities if p is not None]
+            if non_null:
+                stmt = stmt.where(or_(ClickUpTask.priority.in_(non_null), ClickUpTask.priority.is_(None)))
+            else:
+                stmt = stmt.where(ClickUpTask.priority.is_(None))
+        else:
+            stmt = stmt.where(ClickUpTask.priority.in_(priorities))
+
+        for t in db.execute(stmt).scalars().all():
+            # One signal per task per day per tier.
+            today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+            existing = db.execute(select(IssueSignal).where(
+                IssueSignal.source == "clickup",
+                IssueSignal.signal_type == f"clickup.{suffix}",
+                IssueSignal.metadata_json["task_id"].astext == t.task_id,
+                IssueSignal.created_at >= today_start,
+            )).scalars().first()
+            if existing is not None:
+                continue
+
+            days_overdue = max(0, int((now - t.due_date).total_seconds() // 86400))
+            db.add(IssueSignal(
+                business_date=today,
+                signal_type=f"clickup.{suffix}",
+                severity=severity,
+                confidence=0.95,
+                source="clickup",
+                title=f"{(t.priority or 'normal').title()} task overdue {days_overdue}d: {(t.name or '')[:80]}",
+                summary=(t.description or t.name or "")[:500],
+                metadata_json={
+                    "task_id": t.task_id,
+                    "url": t.url,
+                    "priority": t.priority,
+                    "status": t.status,
+                    "days_overdue": days_overdue,
+                    "due_date": t.due_date.isoformat() if t.due_date else None,
+                    "list_id": t.list_id,
+                    "list_name": t.list_name,
+                    "space_id": t.space_id,
+                    "space_name": t.space_name,
+                    "assignees": t.assignees_json,
+                    "pattern": suffix,
+                },
+            ))
+            inserted += 1
+
+    db.flush()
+    return inserted
 
 
 # ---------------------------------------------------------------------------

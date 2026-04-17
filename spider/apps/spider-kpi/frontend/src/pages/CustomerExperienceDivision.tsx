@@ -5,6 +5,7 @@ import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -1406,6 +1407,24 @@ export function CustomerExperienceDivision() {
           <ClickUpVelocityCard
             title="Team velocity — all CX tasks"
             subtitle="Throughput, cycle time, and who's closing what this week."
+          />
+
+          {/* CX ticket volume overlaid with ClickUp task completions — did
+              closing the engineering/ops task actually reduce ticket load? */}
+          <ClickUpOverlayChart
+            title="Support tickets ↔ CX-related task completions"
+            subtitle="Daily Freshdesk tickets with ClickUp task completions containing 'customer', 'support', or 'CX' as vertical markers. After a related task closes, does ticket volume fall?"
+            primarySeries={((supportOverview?.rows || []) as KPIDaily[]).map(r => ({
+              date: r.business_date,
+              value: Number(r.tickets_created) || 0,
+            }))}
+            primaryLabel="Tickets created"
+            primaryColor="var(--orange)"
+            clickupFilter={{
+              keyword: 'customer',
+              event_types: 'completed',
+              days: 90,
+            }}
           />
 
           {/* Slack pulse — #marketing-customer-service */}

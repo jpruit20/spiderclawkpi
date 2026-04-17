@@ -633,6 +633,112 @@ def webhook_unregister(db: Session = Depends(db_session)) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Timeline — task events (due dates + completions) for overlay charts
+# ---------------------------------------------------------------------------
+
+@router.get("/timeline")
+def clickup_timeline(
+    space_id: Optional[str] = None,
+    keyword: Optional[str] = None,
+    event_types: str = "due,completed",
+    priorities: Optional[str] = None,  # csv e.g. "urgent,high"
+    days: int = 90,
+    limit: int = 200,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Return ClickUp task events for overlay on business-metric charts.
+
+    - ``due``: task.due_date as an event (good for "campaign launch date").
+    - ``completed``: task.date_done as an event (good for "firmware shipped",
+      "engineering fix merged").
+
+    Each event includes a priority tier so the UI can color-map.
+    """
+    days = max(1, min(days, 365))
+    limit = max(1, min(limit, 1000))
+    types = {t.strip() for t in (event_types or "").split(",") if t.strip()}
+    pris = None
+    if priorities:
+        pris = {p.strip().lower() for p in priorities.split(",") if p.strip()}
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+
+    base = select(ClickUpTask).where(ClickUpTask.archived == False)  # noqa: E712
+    if space_id:
+        base = base.where(ClickUpTask.space_id == space_id)
+    if keyword:
+        like = f"%{keyword}%"
+        base = base.where(or_(
+            ClickUpTask.name.ilike(like),
+            ClickUpTask.description.ilike(like),
+            ClickUpTask.list_name.ilike(like),
+        ))
+    if pris:
+        base = base.where(ClickUpTask.priority.in_(pris))
+
+    events: list[dict[str, Any]] = []
+
+    if "due" in types:
+        stmt = base.where(
+            ClickUpTask.due_date.isnot(None),
+            ClickUpTask.due_date >= window_start,
+        ).order_by(desc(ClickUpTask.due_date)).limit(limit)
+        for t in db.execute(stmt).scalars().all():
+            if not t.due_date:
+                continue
+            events.append({
+                "event_type": "due",
+                "date": t.due_date.isoformat(),
+                "business_date": t.due_date.date().isoformat(),
+                "task_id": t.task_id,
+                "title": t.name,
+                "url": t.url,
+                "priority": t.priority,
+                "status": t.status,
+                "space_name": t.space_name,
+                "list_name": t.list_name,
+            })
+
+    if "completed" in types:
+        stmt = base.where(
+            ClickUpTask.date_done.isnot(None),
+            ClickUpTask.date_done >= window_start,
+        ).order_by(desc(ClickUpTask.date_done)).limit(limit)
+        for t in db.execute(stmt).scalars().all():
+            if not t.date_done:
+                continue
+            events.append({
+                "event_type": "completed",
+                "date": t.date_done.isoformat(),
+                "business_date": t.date_done.date().isoformat(),
+                "task_id": t.task_id,
+                "title": t.name,
+                "url": t.url,
+                "priority": t.priority,
+                "status": t.status,
+                "space_name": t.space_name,
+                "list_name": t.list_name,
+            })
+
+    # Sort chronologically and cap.
+    events.sort(key=lambda e: e["date"])
+    events = events[-limit:]
+
+    return {
+        "window": {"start": window_start.date().isoformat(), "end": now.date().isoformat(), "days": days},
+        "filters": {
+            "space_id": space_id,
+            "keyword": keyword,
+            "event_types": sorted(types),
+            "priorities": sorted(pris) if pris else None,
+        },
+        "events": events,
+        "count": len(events),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Velocity — throughput + cycle time per space
 # ---------------------------------------------------------------------------
 

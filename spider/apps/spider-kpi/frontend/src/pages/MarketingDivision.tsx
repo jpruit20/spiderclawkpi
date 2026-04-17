@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
+import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -642,6 +643,18 @@ export function MarketingDivision() {
             title="Team velocity — Marketing space"
             subtitle="Throughput, cycle time, and who's closing what this week."
             spaceId="901310388813"
+          />
+
+          {/* Campaign launches overlaid on the daily revenue line.
+              Vertical markers = ClickUp Marketing-space task due dates
+              (campaign launch schedule). Hover the line to read revenue. */}
+          <ClickUpOverlayChart
+            title="Campaign launches ↔ Revenue"
+            subtitle="ClickUp Marketing-space task due dates as vertical markers on the daily revenue line. Does a campaign launch correlate with a revenue bump the day-of or day-after?"
+            primarySeries={rows.map(r => ({ date: r.business_date, value: Number(r.revenue) || 0 }))}
+            primaryLabel="Revenue"
+            primaryColor="var(--green)"
+            clickupFilter={{ space_id: '901310388813', event_types: 'due', days: 90 }}
           />
 
           {/* Slack pulse — marketing-customer-service + general-news */}

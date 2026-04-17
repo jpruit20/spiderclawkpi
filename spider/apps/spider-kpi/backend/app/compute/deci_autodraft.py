@@ -79,6 +79,9 @@ TITLE_PREFIX = {
     "clickup.firmware_concern": "ClickUp: firmware concern",
     "clickup.customer_complaint": "ClickUp: customer complaint",
     "clickup.urgent_ping": "ClickUp: urgent flagged",
+    "clickup.stale_urgent": "Urgent task overdue",
+    "clickup.stale_high": "High-priority task overdue",
+    "clickup.stale_normal": "Task overdue",
 }
 
 
@@ -97,6 +100,10 @@ AUTO_DRAFT_SIGNAL_TYPES: frozenset[str] = frozenset({
     "clickup.refund_request",
     "clickup.customer_complaint",
     "clickup.firmware_concern",
+    # Stale-task escalations: urgent + high get drafts. Normal stays in
+    # Issue Radar only — too noisy to draft automatically.
+    "clickup.stale_urgent",
+    "clickup.stale_high",
 })
 
 
@@ -110,6 +117,11 @@ def _context_key_for_signal(signal: IssueSignal) -> Optional[str]:
         ch = meta.get("channel_id")
         return f"slack:channel:{ch}" if ch else None
     if signal.source == "clickup":
+        # Stale-task signals consolidate per-TASK so a long-overdue task has
+        # ONE growing draft — not a new draft every time the tier fires.
+        if (signal.signal_type or "").startswith("clickup.stale_"):
+            tid = meta.get("task_id")
+            return f"clickup:task:{tid}" if tid else None
         lst = meta.get("list_id")
         space = meta.get("space_id")
         if lst:

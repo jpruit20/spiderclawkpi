@@ -1198,6 +1198,31 @@ export interface ClickUpVelocityResponse {
   top_closers: { user: string; completed: number }[]
 }
 
+export interface ClickUpTimelineEvent {
+  event_type: 'due' | 'completed'
+  date: string
+  business_date: string
+  task_id: string
+  title: string | null
+  url: string | null
+  priority: string | null
+  status: string | null
+  space_name: string | null
+  list_name: string | null
+}
+
+export interface ClickUpTimelineResponse {
+  window: { start: string; end: string; days: number }
+  filters: {
+    space_id: string | null
+    keyword: string | null
+    event_types: string[]
+    priorities: string[] | null
+  }
+  events: ClickUpTimelineEvent[]
+  count: number
+}
+
 export interface ClickUpWebhookStatus {
   registered: boolean
   webhook_id: string | null

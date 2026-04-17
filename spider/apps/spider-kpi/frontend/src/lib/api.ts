@@ -6,6 +6,7 @@ import type {
   ClickUpSpacesResponse,
   ClickUpTaskFilter,
   ClickUpTaskListResponse,
+  ClickUpTimelineResponse,
   ClickUpVelocityResponse,
   ClickUpWebhookStatus,
   DeciClickUpLink,
@@ -370,6 +371,19 @@ export const api = {
     fetch(`${API_BASE}/api/clickup/sync-now${full ? '?full=true' : ''}`, {
       method: 'POST', credentials: 'include',
     }).then(r => r.json()),
+  clickupTimeline: (
+    opts?: { space_id?: string; keyword?: string; event_types?: string; priorities?: string; days?: number; limit?: number },
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts) {
+      for (const [k, v] of Object.entries(opts)) {
+        if (v != null && v !== '') p.set(k, String(v))
+      }
+    }
+    const qs = p.toString()
+    return request<ClickUpTimelineResponse>(`/api/clickup/timeline${qs ? `?${qs}` : ''}`, { signal })
+  },
   clickupVelocity: (space_id?: string, days?: number, signal?: AbortSignal) => {
     const p = new URLSearchParams()
     if (space_id) p.set('space_id', space_id)
