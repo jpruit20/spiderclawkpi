@@ -25,6 +25,7 @@ from app.models import (
     SlackMessage,
     SlackUser,
     TelemetryHistoryDaily,
+    TelemetryReport,
 )
 
 
@@ -319,6 +320,69 @@ def list_insights(
             for r in rows
         ],
     }
+
+
+def _report_payload(r: TelemetryReport, full_body: bool) -> dict[str, Any]:
+    out = {
+        "id": r.id,
+        "report_date": r.report_date.isoformat(),
+        "report_type": r.report_type,
+        "window_start": r.window_start.isoformat(),
+        "window_end": r.window_end.isoformat(),
+        "title": r.title,
+        "summary": r.summary,
+        "sections": r.sections_json or [],
+        "benchmarks": r.benchmarks_json or {},
+        "key_findings": r.key_findings_json or [],
+        "recommendations": r.recommendations_json or [],
+        "sources_used": r.sources_used or [],
+        "model": r.model,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+    if full_body:
+        out["body_markdown"] = r.body_markdown
+    return out
+
+
+@router.get("/telemetry-reports")
+def list_telemetry_reports(
+    limit: int = 10,
+    type: Optional[str] = None,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    q = select(TelemetryReport).where(TelemetryReport.status == "published")
+    if type:
+        q = q.where(TelemetryReport.report_type == type)
+    q = q.order_by(TelemetryReport.report_date.desc(), TelemetryReport.id.desc()).limit(limit)
+    rows = db.execute(q).scalars().all()
+    return {"count": len(rows), "reports": [_report_payload(r, full_body=False) for r in rows]}
+
+
+@router.get("/telemetry-reports/latest")
+def latest_telemetry_report(
+    type: str = "comprehensive",
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    r = db.execute(
+        select(TelemetryReport)
+        .where(TelemetryReport.status == "published", TelemetryReport.report_type == type)
+        .order_by(TelemetryReport.report_date.desc(), TelemetryReport.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if r is None:
+        return {"ok": False, "reason": "no_report_of_type"}
+    return {"ok": True, "report": _report_payload(r, full_body=True)}
+
+
+@router.get("/telemetry-reports/{report_id}")
+def get_telemetry_report(
+    report_id: int,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    r = db.get(TelemetryReport, report_id)
+    if r is None:
+        return {"ok": False, "reason": "not_found"}
+    return {"ok": True, "report": _report_payload(r, full_body=True)}
 
 
 @router.post("/insights/{insight_id}/dismiss")

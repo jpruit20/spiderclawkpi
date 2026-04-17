@@ -1127,6 +1127,49 @@ export interface InsightsListResponse {
   insights: AIInsight[]
 }
 
+export interface TelemetryReportFinding {
+  title: string
+  detail: string
+  urgency: 'high' | 'medium' | 'low'
+  category: string
+}
+
+export interface TelemetryReportRecommendation {
+  title: string
+  detail: string
+  category: string
+  effort: 'small' | 'medium' | 'large'
+}
+
+export interface TelemetryReportSection {
+  title: string
+  body_markdown: string
+}
+
+export interface TelemetryReport {
+  id: number
+  report_date: string
+  report_type: 'comprehensive' | 'monthly'
+  window_start: string
+  window_end: string
+  title: string
+  summary: string
+  sections: TelemetryReportSection[]
+  benchmarks: Record<string, { value: string; interpretation: string }>
+  key_findings: TelemetryReportFinding[]
+  recommendations: TelemetryReportRecommendation[]
+  sources_used: string[]
+  model: string | null
+  body_markdown?: string
+  created_at: string | null
+}
+
+export interface LatestTelemetryReportResponse {
+  ok: boolean
+  reason?: string
+  report?: TelemetryReport
+}
+
 /* Slack ------------------------------------------------------------------ */
 
 export interface SlackChannelSummary {

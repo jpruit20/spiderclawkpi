@@ -14,6 +14,7 @@ import type {
   DeciDraft,
   DeciDraftsResponse,
   InsightsListResponse,
+  LatestTelemetryReportResponse,
   MorningBriefResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
@@ -433,6 +434,9 @@ export const api = {
     const qs = p.toString()
     return request<InsightsListResponse>(`/api/executive/insights${qs ? `?${qs}` : ''}`, { signal })
   },
+  latestTelemetryReport: (type: 'comprehensive' | 'monthly' = 'comprehensive', signal?: AbortSignal) =>
+    request<LatestTelemetryReportResponse>(`/api/executive/telemetry-reports/latest?type=${type}`, { signal }),
+
   dismissInsight: (id: number, reason?: string) =>
     fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {
       method: 'POST', credentials: 'include',

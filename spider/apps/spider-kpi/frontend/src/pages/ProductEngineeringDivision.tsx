@@ -10,6 +10,7 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
 import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
@@ -570,6 +571,9 @@ export function ProductEngineeringDivision() {
           </div>
         </div>
       </div>
+
+      {/* AI-written telemetry analysis — comprehensive baseline + future monthly reports */}
+      <TelemetryReportCard reportType="comprehensive" />
 
       {loading ? <Card title="Product Hub"><div className="state-message">Loading product data...</div></Card> : null}
       {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}
