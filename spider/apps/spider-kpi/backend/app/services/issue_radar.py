@@ -371,7 +371,11 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
         upsert_source_config(db, source, configured=False, enabled=False, sync_mode="stub", config_json={"source_type": "connector", "issue_radar_live": False})
     db.commit()
 
-    db.execute(delete(IssueSignal))
+    # Preserve Slack-source signals across rebuilds — they're produced by the
+    # Slack connector's scan_messages_for_issues and keyed on message_ts, so
+    # they're already idempotent and shouldn't be wiped when the Freshdesk /
+    # telemetry derivation logic re-runs.
+    db.execute(delete(IssueSignal).where(IssueSignal.source != "slack"))
     db.execute(delete(IssueCluster))
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
