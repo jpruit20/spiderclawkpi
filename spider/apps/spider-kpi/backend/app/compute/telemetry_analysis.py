@@ -527,6 +527,24 @@ def generate_report(
     )
 
     model_id = "claude-opus-4-7"
+
+    # Build a json_schema the API accepts: every object must have
+    # additionalProperties=false. Pydantic's default schema doesn't set it, so
+    # we walk the tree and add it.
+    def _strict(schema: dict) -> dict:
+        if isinstance(schema, dict):
+            if schema.get("type") == "object" and "additionalProperties" not in schema:
+                schema["additionalProperties"] = False
+            for v in schema.values():
+                if isinstance(v, (dict, list)):
+                    _strict(v)
+        elif isinstance(schema, list):
+            for v in schema:
+                _strict(v)
+        return schema
+
+    strict_schema = _strict(ReportBundle.model_json_schema())
+
     # Use streaming (per SDK guidance for long outputs) and the final-message
     # helper, then validate into ReportBundle ourselves. max_tokens=64000
     # gives the model plenty of room for thinking + a 10-15 page report.
@@ -538,7 +556,7 @@ def generate_report(
             output_config={"effort": "max", "format": {
                 "type": "json_schema",
                 "name": "ReportBundle",
-                "schema": ReportBundle.model_json_schema(),
+                "schema": strict_schema,
             }},
             system=[{
                 "type": "text",
