@@ -1080,6 +1080,21 @@ export interface MorningSlackHot {
   ts_dt: string | null
 }
 
+export interface AIInsight {
+  id: number
+  business_date: string
+  title: string
+  observation: string
+  confidence: number
+  urgency: 'high' | 'medium' | 'low'
+  evidence: string[]
+  suggested_action: string | null
+  sources_used: string[]
+  status: string
+  model?: string | null
+  created_at?: string | null
+}
+
 export interface MorningBriefResponse {
   generated_at: string
   business_date: string
@@ -1089,6 +1104,8 @@ export interface MorningBriefResponse {
     overdue_urgent_or_high: number
     revenue_wow_pct: number | null
     clickup_wow_delta: number
+    insights_count: number
+    insights_high_urgency: number
   }
   drafts: MorningDraft[]
   critical_signals: MorningCriticalSignal[]
@@ -1102,6 +1119,12 @@ export interface MorningBriefResponse {
   telemetry: MorningTelemetry | null
   compliance: MorningCompliance | null
   slack_hot: MorningSlackHot | null
+  insights: AIInsight[]
+}
+
+export interface InsightsListResponse {
+  count: number
+  insights: AIInsight[]
 }
 
 /* Slack ------------------------------------------------------------------ */

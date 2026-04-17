@@ -79,6 +79,58 @@ export function CommandCenter() {
         </div>
       </section>
 
+      {data.insights && data.insights.length > 0 && (
+        <section className="card" style={{ borderLeft: '3px solid var(--purple, #b88bff)' }}>
+          <div className="venom-panel-head">
+            <strong>AI insights — cross-source observations ({data.insights.length})</strong>
+            <span className="venom-panel-hint">Claude Opus · {data.insights[0]?.business_date}</span>
+          </div>
+          <div className="stack-list compact">
+            {data.insights.map(ins => {
+              const urgencyClass =
+                ins.urgency === 'high' ? 'status-bad' :
+                ins.urgency === 'medium' ? 'status-warn' : 'status-neutral'
+              const urgencyBadge =
+                ins.urgency === 'high' ? 'badge-bad' :
+                ins.urgency === 'medium' ? 'badge-warn' : 'badge-muted'
+              return (
+                <div key={ins.id} className={`list-item ${urgencyClass}`}>
+                  <div className="item-head">
+                    <strong style={{ fontSize: 13 }}>{ins.title}</strong>
+                    <div className="inline-badges">
+                      <span className={`badge ${urgencyBadge}`} style={{ fontSize: 10 }}>{ins.urgency}</span>
+                      <span className="badge badge-muted" style={{ fontSize: 10 }}>
+                        {Math.round(ins.confidence * 100)}% conf
+                      </span>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 12, lineHeight: 1.5 }}>{ins.observation}</p>
+                  {ins.evidence && ins.evidence.length > 0 && (
+                    <ul style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0 0', paddingLeft: 18 }}>
+                      {ins.evidence.slice(0, 4).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {ins.suggested_action && (
+                    <p style={{ fontSize: 11, marginTop: 6, color: 'var(--blue)' }}>
+                      <strong>Suggested:</strong> {ins.suggested_action}
+                    </p>
+                  )}
+                  {ins.sources_used && ins.sources_used.length > 0 && (
+                    <div className="inline-badges" style={{ marginTop: 6 }}>
+                      {ins.sources_used.map(src => (
+                        <span key={src} className="badge badge-muted" style={{ fontSize: 9 }}>{src}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       {data.drafts.length > 0 && (
         <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
           <div className="venom-panel-head">

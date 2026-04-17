@@ -1,4 +1,5 @@
 from app.models.entities import (
+    AIInsight,
     Alert,
     AppSideDaily,
     AppSideDeviceObservation,
@@ -54,6 +55,7 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AIInsight",
     "Alert",
     "AppSideDaily",
     "AppSideDeviceObservation",

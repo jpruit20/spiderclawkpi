@@ -576,6 +576,33 @@ class SlackActivityDaily(TimestampMixin, Base):
     top_users_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
 
 
+class AIInsight(TimestampMixin, Base):
+    """Cross-source daily observations written by the insight engine.
+
+    Each row is one "non-obvious" observation — usually a correlation or
+    causation across multiple sources (telemetry + support + sales + social)
+    that wouldn't jump out from any single-source view. Evidence, urgency,
+    and suggested_action are populated by Claude Opus at generation time.
+    """
+    __tablename__ = "ai_insights"
+    __table_args__ = (
+        Index("ix_ai_insights_business_date", "business_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    observation: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    urgency: Mapped[str] = mapped_column(String(16), default="medium", nullable=False, index=True)
+    evidence_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    suggested_action: Mapped[Optional[str]] = mapped_column(Text)
+    sources_used: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="new", nullable=False, index=True)  # new | acknowledged | dismissed
+    dismissed_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+
 class NotificationSend(TimestampMixin, Base):
     """Log of every push alert (Slack DM, email) we've sent.
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate Spider KPI cross-source AI insights at 6am ET (before morning email)
+Requires=spider-kpi-daily-insights.service
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 America/New_York
+Persistent=true
+Unit=spider-kpi-daily-insights.service
+
+[Install]
+WantedBy=timers.target

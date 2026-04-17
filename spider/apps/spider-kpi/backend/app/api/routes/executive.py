@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
 from app.models import (
+    AIInsight,
     ClickUpTask,
     DeciDecision,
     IssueSignal,
@@ -232,6 +233,34 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
             "ts_dt": hot_msg.ts_dt.isoformat() if hot_msg.ts_dt else None,
         }
 
+    # --- AI Insights (latest cross-source observations) ------------------
+    insights_rows = db.execute(
+        select(AIInsight)
+        .where(AIInsight.status != "dismissed")
+        .order_by(AIInsight.business_date.desc(), AIInsight.confidence.desc(), AIInsight.id.desc())
+        .limit(8)
+    ).scalars().all()
+    # Keep only the most recent business_date worth, up to 5
+    insights_payload: list[dict[str, Any]] = []
+    latest_date = insights_rows[0].business_date if insights_rows else None
+    for r in insights_rows:
+        if latest_date is not None and r.business_date < latest_date - timedelta(days=2):
+            continue
+        insights_payload.append({
+            "id": r.id,
+            "business_date": r.business_date.isoformat(),
+            "title": r.title,
+            "observation": r.observation,
+            "confidence": float(r.confidence or 0),
+            "urgency": r.urgency,
+            "evidence": r.evidence_json or [],
+            "suggested_action": r.suggested_action,
+            "sources_used": r.sources_used or [],
+            "status": r.status,
+        })
+        if len(insights_payload) >= 5:
+            break
+
     # --- Headline counts at a glance -------------------------------------
     headline = {
         "drafts_awaiting_review": total_drafts,
@@ -239,6 +268,8 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "overdue_urgent_or_high": len(stale_payload),
         "revenue_wow_pct": revenue_payload["wow_pct"],
         "clickup_wow_delta": clickup_velocity["wow_delta"],
+        "insights_count": len(insights_payload),
+        "insights_high_urgency": sum(1 for i in insights_payload if i["urgency"] == "high"),
     }
 
     return {
@@ -253,4 +284,54 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "telemetry": telemetry_payload,
         "compliance": compliance_payload,
         "slack_hot": slack_hot,
+        "insights": insights_payload,
     }
+
+
+@router.get("/insights")
+def list_insights(
+    limit: int = 20,
+    include_dismissed: bool = False,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """All recent AI insights, newest first. Used by the Insights detail view."""
+    q = select(AIInsight).order_by(AIInsight.business_date.desc(), AIInsight.id.desc())
+    if not include_dismissed:
+        q = q.where(AIInsight.status != "dismissed")
+    rows = db.execute(q.limit(limit)).scalars().all()
+    return {
+        "count": len(rows),
+        "insights": [
+            {
+                "id": r.id,
+                "business_date": r.business_date.isoformat(),
+                "title": r.title,
+                "observation": r.observation,
+                "confidence": float(r.confidence or 0),
+                "urgency": r.urgency,
+                "evidence": r.evidence_json or [],
+                "suggested_action": r.suggested_action,
+                "sources_used": r.sources_used or [],
+                "status": r.status,
+                "model": r.model,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/insights/{insight_id}/dismiss")
+def dismiss_insight(
+    insight_id: int,
+    reason: Optional[str] = None,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    row = db.get(AIInsight, insight_id)
+    if row is None:
+        return {"ok": False, "reason": "not_found"}
+    row.status = "dismissed"
+    if reason:
+        row.dismissed_reason = reason[:2000]
+    db.commit()
+    return {"ok": True, "id": insight_id}

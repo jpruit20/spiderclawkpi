@@ -122,6 +122,46 @@ def _render_html(brief: dict) -> str:
         )
     parts.append('</tr></table>')
 
+    # AI Insights — cross-source observations (top of fold, below KPI strip)
+    insights = brief.get("insights") or []
+    if insights:
+        parts.append(f'<h3 style="color:#111827;border-bottom:2px solid #b88bff;padding-bottom:6px;margin-top:20px">AI insights — cross-source observations ({len(insights)})</h3>')
+        for ins in insights:
+            urgency = (ins.get("urgency") or "medium").lower()
+            bg = "#fef2f2" if urgency == "high" else "#fffbeb" if urgency == "medium" else "#f8fafc"
+            accent = "#b91c1c" if urgency == "high" else "#f59e0b" if urgency == "medium" else "#6b7280"
+            conf_pct = int(round(float(ins.get("confidence") or 0) * 100))
+            evidence = ins.get("evidence") or []
+            sources = ins.get("sources_used") or []
+            sug = ins.get("suggested_action")
+            ev_html = ""
+            if evidence:
+                ev_items = "".join(f"<li>{_escape(e)}</li>" for e in evidence[:4])
+                ev_html = f'<ul style="margin:6px 0 0;padding-left:18px;color:#4b5563;font-size:11px">{ev_items}</ul>'
+            sug_html = (
+                f'<div style="color:#1f2937;font-size:11px;margin-top:6px"><strong style="color:#4a7aff">Suggested:</strong> {_escape(sug)}</div>'
+                if sug else ""
+            )
+            src_html = ""
+            if sources:
+                src_html = (
+                    '<div style="margin-top:6px;font-size:10px;color:#6b7280">' +
+                    " · ".join(_escape(s) for s in sources) +
+                    '</div>'
+                )
+            parts.append(
+                f'<div style="padding:10px 12px;background:{bg};border-left:3px solid {accent};border-radius:4px;margin-bottom:10px">'
+                f'<div><strong style="color:#111827;font-size:13px">{_escape(ins.get("title") or "")}</strong>'
+                f' <span style="color:{accent};font-size:11px;margin-left:6px;font-weight:600;text-transform:uppercase">{_escape(urgency)}</span>'
+                f' <span style="color:#6b7280;font-size:11px;margin-left:6px">{conf_pct}% conf</span>'
+                f'</div>'
+                f'<p style="color:#374151;font-size:12px;margin:6px 0 0">{_escape(ins.get("observation") or "")}</p>'
+                f'{ev_html}'
+                f'{sug_html}'
+                f'{src_html}'
+                f'</div>'
+            )
+
     # Drafts
     drafts = brief.get("drafts") or []
     if drafts:
@@ -235,6 +275,12 @@ def _render_text(brief: dict) -> str:
         lines.append(f"  Revenue {'+' if rev_wow >= 0 else ''}{rev_wow:.0f}% WoW")
     lines.append(f"  Tasks closed WoW: {'+' if h.get('clickup_wow_delta', 0) >= 0 else ''}{h.get('clickup_wow_delta', 0)}")
     lines.append("")
+    insights = brief.get("insights") or []
+    if insights:
+        lines.append(f"AI insights ({len(insights)}):")
+        for ins in insights:
+            lines.append(f"  [{(ins.get('urgency') or '?').upper()}] {ins.get('title') or ''}")
+        lines.append("")
     lines.append("Open: https://kpi.spidergrills.com/")
     return "\n".join(lines)
 
@@ -269,6 +315,8 @@ def send_morning_email() -> None:
 
         h = brief.get("headline", {})
         flags = []
+        if h.get("insights_high_urgency", 0):
+            flags.append(f"{h['insights_high_urgency']} high-urgency insights")
         if h.get("critical_signals_24h", 0):
             flags.append(f"{h['critical_signals_24h']} critical")
         if h.get("overdue_urgent_or_high", 0):

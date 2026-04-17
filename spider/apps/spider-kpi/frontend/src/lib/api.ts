@@ -13,6 +13,7 @@ import type {
   DeciClickUpLink,
   DeciDraft,
   DeciDraftsResponse,
+  InsightsListResponse,
   MorningBriefResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
@@ -425,6 +426,17 @@ export const api = {
   // Executive ------------------------------------------------------------
   morningBrief: (signal?: AbortSignal) =>
     request<MorningBriefResponse>('/api/executive/morning', { signal }),
+  executiveInsights: (opts?: { limit?: number; include_dismissed?: boolean }, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (opts?.limit) p.set('limit', String(opts.limit))
+    if (opts?.include_dismissed) p.set('include_dismissed', 'true')
+    const qs = p.toString()
+    return request<InsightsListResponse>(`/api/executive/insights${qs ? `?${qs}` : ''}`, { signal })
+  },
+  dismissInsight: (id: number, reason?: string) =>
+    fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json()),
 
   // Slack ----------------------------------------------------------------
   slackChannels: (signal?: AbortSignal) =>
