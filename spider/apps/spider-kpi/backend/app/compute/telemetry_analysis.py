@@ -522,32 +522,47 @@ def generate_report(
 
     client = anthropic.Anthropic(
         api_key=settings.anthropic_api_key,
-        timeout=900,  # comprehensive can take 5+ minutes on Opus with max effort
+        timeout=1800,  # comprehensive with adaptive thinking + max effort can take 10+ min
         max_retries=1,
     )
 
     model_id = "claude-opus-4-7"
+    # Use streaming (per SDK guidance for long outputs) and the final-message
+    # helper, then validate into ReportBundle ourselves. max_tokens=64000
+    # gives the model plenty of room for thinking + a 10-15 page report.
     try:
-        response = client.messages.parse(
+        with client.messages.stream(
             model=model_id,
-            max_tokens=32000,  # 10-15 page report can be 20-30K output tokens
+            max_tokens=64000,
             thinking={"type": "adaptive"},
-            output_config={"effort": "max"},
+            output_config={"effort": "max", "format": {
+                "type": "json_schema",
+                "name": "ReportBundle",
+                "schema": ReportBundle.model_json_schema(),
+            }},
             system=[{
                 "type": "text",
                 "text": system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }],
             messages=[{"role": "user", "content": context}],
-            output_format=ReportBundle,
-        )
+        ) as stream:
+            final = stream.get_final_message()
     except Exception as exc:
         logger.exception("Opus report call failed")
         return {"ok": False, "reason": f"api_error: {exc}"}
 
-    bundle: Optional[ReportBundle] = response.parsed_output
-    if bundle is None:
-        return {"ok": False, "reason": "parsed_output is None"}
+    # Extract the text from the final message (all text blocks joined)
+    raw_text = "".join(
+        (b.text for b in final.content if getattr(b, "type", None) == "text" and getattr(b, "text", None)),
+    )
+    if not raw_text:
+        return {"ok": False, "reason": "empty_response_text"}
+    try:
+        bundle = ReportBundle.model_validate_json(raw_text)
+    except Exception as exc:
+        logger.exception("ReportBundle parse failed; raw_text head=%s", raw_text[:400])
+        return {"ok": False, "reason": f"parse_error: {exc}", "raw_head": raw_text[:400], "raw_tail": raw_text[-400:]}
 
     # Assemble full markdown body
     body_parts: list[str] = [f"# {bundle.title}", "", f"*Generated {today.isoformat()} by Claude Opus 4.7. Window: {meta['window_start']} → {meta['window_end']}.*", ""]
@@ -580,7 +595,7 @@ def generate_report(
     body_markdown = "\n".join(body_parts)
 
     duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
-    usage = getattr(response, "usage", None)
+    usage = getattr(final, "usage", None)
     usage_dict = {}
     if usage is not None:
         usage_dict = {
