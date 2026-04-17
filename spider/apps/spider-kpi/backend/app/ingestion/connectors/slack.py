@@ -393,6 +393,11 @@ def backfill_channel(db: Session, channel_id: str, lookback_days: int | None = N
             _, inserted = upsert_message(db, channel_id, msg)
             if inserted:
                 stats["messages_inserted"] += 1
+            # Flush so the next select-before-insert in upsert_message sees
+            # this row — Slack's replies endpoint can return a message we
+            # already inserted from the history page, and pending Session.add
+            # rows aren't visible to further selects until flush.
+            db.flush()
             # Thread roots -> pull replies
             if msg.get("thread_ts") and msg.get("reply_count"):
                 for reply in _iter_thread_replies(channel_id, msg["thread_ts"]):
@@ -400,6 +405,7 @@ def backfill_channel(db: Session, channel_id: str, lookback_days: int | None = N
                     _, r_inserted = upsert_message(db, channel_id, reply)
                     if r_inserted:
                         stats["messages_inserted"] += 1
+                    db.flush()
         cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
             break
