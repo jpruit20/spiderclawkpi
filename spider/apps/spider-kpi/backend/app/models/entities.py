@@ -603,6 +603,39 @@ class AIInsight(TimestampMixin, Base):
     dismissed_reason: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class TelemetryReport(TimestampMixin, Base):
+    """Comprehensive AI-generated telemetry analysis.
+
+    The first report is a full 2+ year retrospective; subsequent reports
+    (monthly on the 1st) compare the most-recent window to the historical
+    baseline. Body is multi-page markdown written by Claude Opus 4.7.
+    """
+    __tablename__ = "telemetry_reports"
+    __table_args__ = (
+        UniqueConstraint("report_date", "report_type", name="uq_telemetry_report_date_type"),
+        Index("ix_telemetry_reports_date", "report_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False)
+    report_type: Mapped[str] = mapped_column(String(32), nullable=False)  # comprehensive | monthly
+    window_start: Mapped[date] = mapped_column(Date, nullable=False)
+    window_end: Mapped[date] = mapped_column(Date, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)  # short executive summary
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)  # full multi-page report
+    sections_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)  # [{title, body}] for UI navigation
+    benchmarks_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)  # {metric: {value, interpretation}}
+    key_findings_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)  # [{title, detail, urgency}]
+    recommendations_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)  # [{title, detail, category}]
+    model: Mapped[Optional[str]] = mapped_column(String(64))
+    sources_used: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    context_chars: Mapped[Optional[int]] = mapped_column(Integer)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    usage_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="published", nullable=False)  # published | superseded
+
+
 class NotificationSend(TimestampMixin, Base):
     """Log of every push alert (Slack DM, email) we've sent.
 

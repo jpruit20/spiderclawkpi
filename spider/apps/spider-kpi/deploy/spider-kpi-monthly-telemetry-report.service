@@ -1,0 +1,13 @@
+[Unit]
+Description=Spider KPI monthly telemetry analysis report (Claude Opus 4.7)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/generate_telemetry_report.py --type monthly
+ExecStartPost=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/email_telemetry_report.py --type monthly
+StandardOutput=append:/var/log/spider-kpi-monthly-telemetry-report.log
+StandardError=append:/var/log/spider-kpi-monthly-telemetry-report.log

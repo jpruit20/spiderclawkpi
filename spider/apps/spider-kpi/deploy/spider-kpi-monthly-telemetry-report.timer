@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Spider KPI monthly telemetry report on the 1st at 5am ET
+Requires=spider-kpi-monthly-telemetry-report.service
+
+[Timer]
+OnCalendar=*-*-01 05:00:00 America/New_York
+Persistent=true
+Unit=spider-kpi-monthly-telemetry-report.service
+
+[Install]
+WantedBy=timers.target
