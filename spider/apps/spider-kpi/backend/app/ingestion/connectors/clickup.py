@@ -18,7 +18,7 @@ from typing import Any, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 import requests
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
