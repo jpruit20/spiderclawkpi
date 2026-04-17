@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
@@ -1181,6 +1182,11 @@ export function ProductEngineeringDivision() {
               <ClickUpVelocityCard
                 title="Team velocity — Product Development space"
                 subtitle="Throughput, cycle time, and who's closing what this week."
+                spaceId="901313726772"
+              />
+              <ClickUpComplianceCard
+                title="Tagging compliance — Product Development space"
+                subtitle="Closed firmware / hardware / NPD tasks carrying Division + Category. Precision here makes the firmware-overlay chart credible."
                 spaceId="901313726772"
               />
 

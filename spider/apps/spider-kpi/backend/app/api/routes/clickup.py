@@ -633,6 +633,198 @@ def webhook_unregister(db: Session = Depends(db_session)) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Tagging compliance — grades tasks against the required-field taxonomy
+# ---------------------------------------------------------------------------
+
+# Case-insensitive field names the dashboard expects. Keep in sync with
+# deploy/CLICKUP_TAGGING_SETUP.md. Value lists are the *allowed* values;
+# any non-empty dropdown selection that matches (case-insensitive) counts
+# as compliant. Unexpected values are recorded in metrics but don't fail.
+REQUIRED_FIELD_DEFS: list[dict[str, Any]] = [
+    {
+        "name": "Division",
+        "values": ["CX", "Ops", "Marketing", "Product/Engineering", "Finance", "GA"],
+    },
+    {
+        "name": "Customer Impact",
+        "values": ["Direct", "Indirect", "Internal only"],
+    },
+    {
+        "name": "Category",
+        "values": ["Firmware", "Hardware", "Website", "Campaign", "Fulfillment", "Returns", "Support", "Other"],
+    },
+]
+
+
+def _task_field_value(task: ClickUpTask, field_name: str) -> Any:
+    """Return the value set on a task for a custom field matched by name
+    (case-insensitive). Returns None if the field isn't attached to the task
+    or isn't set. Handles ClickUp's dropdown shape where ``value`` is the
+    option id and the label lives under ``type_config.options[...].name``.
+    """
+    target = (field_name or "").strip().lower()
+    for f in (task.custom_fields_json or []):
+        if not isinstance(f, dict):
+            continue
+        if (f.get("name") or "").strip().lower() != target:
+            continue
+        value = f.get("value")
+        if value in (None, "", [], {}):
+            return None
+        # Dropdown → value is an option id or index. Resolve to label.
+        type_cfg = f.get("type_config") or {}
+        options = type_cfg.get("options") or []
+        if isinstance(options, list) and options:
+            if isinstance(value, int):
+                if 0 <= value < len(options):
+                    return options[value].get("name") or options[value].get("label")
+            if isinstance(value, str):
+                for opt in options:
+                    if isinstance(opt, dict) and (opt.get("id") == value or opt.get("orderindex") == value):
+                        return opt.get("name") or opt.get("label") or value
+        return value
+    return None
+
+
+def _score_task(task: ClickUpTask) -> dict[str, Any]:
+    missing = []
+    present = {}
+    for spec in REQUIRED_FIELD_DEFS:
+        v = _task_field_value(task, spec["name"])
+        if v in (None, "", [], {}):
+            missing.append(spec["name"])
+        else:
+            present[spec["name"]] = v
+    return {"compliant": not missing, "missing": missing, "present": present}
+
+
+@router.get("/compliance")
+def clickup_compliance(
+    days: int = 14,
+    space_id: Optional[str] = None,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Grade tasks against the required-field taxonomy.
+
+    Two cohorts:
+      - **closed_in_window**: tasks whose ``date_done`` fell in the window.
+        This is the cohort the "required on close" enforcement applies to
+        and is the primary compliance metric.
+      - **open_now**: all currently-open tasks (regardless of window) —
+        a softer metric so the team can see how much existing drift remains.
+    """
+    days = max(1, min(days, 90))
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+    prior_start = now - timedelta(days=days * 2)
+
+    base_stmt = select(ClickUpTask).where(ClickUpTask.archived == False)  # noqa: E712
+    if space_id:
+        base_stmt = base_stmt.where(ClickUpTask.space_id == space_id)
+
+    # Cohort: closed in window
+    closed_stmt = base_stmt.where(
+        ClickUpTask.date_done.isnot(None),
+        ClickUpTask.date_done >= window_start,
+    )
+    closed_tasks = db.execute(closed_stmt).scalars().all()
+
+    # Cohort: closed in PRIOR window (for week-over-week trend)
+    prior_stmt = base_stmt.where(
+        ClickUpTask.date_done.isnot(None),
+        ClickUpTask.date_done >= prior_start,
+        ClickUpTask.date_done < window_start,
+    )
+    prior_tasks = db.execute(prior_stmt).scalars().all()
+
+    # Cohort: open right now
+    open_stmt = base_stmt.where(
+        or_(ClickUpTask.status_type.is_(None), ClickUpTask.status_type != "closed"),
+    )
+    open_tasks = db.execute(open_stmt).scalars().all()
+
+    def _grade_cohort(tasks: list[ClickUpTask]) -> dict[str, Any]:
+        by_assignee: dict[str, dict[str, int]] = {}
+        by_missing_field: dict[str, int] = {fd["name"]: 0 for fd in REQUIRED_FIELD_DEFS}
+        offender_rows: list[dict[str, Any]] = []
+        compliant = 0
+        for t in tasks:
+            score = _score_task(t)
+            if score["compliant"]:
+                compliant += 1
+            for f in score["missing"]:
+                by_missing_field[f] = by_missing_field.get(f, 0) + 1
+            assignees = t.assignees_json or []
+            names = [((a or {}).get("username") or (a or {}).get("email") or "Unassigned") for a in assignees] or ["Unassigned"]
+            for n in names:
+                slot = by_assignee.setdefault(n, {"total": 0, "compliant": 0})
+                slot["total"] += 1
+                if score["compliant"]:
+                    slot["compliant"] += 1
+            if not score["compliant"]:
+                offender_rows.append({
+                    "task_id": t.task_id,
+                    "name": t.name,
+                    "url": t.url,
+                    "space_name": t.space_name,
+                    "list_name": t.list_name,
+                    "status": t.status,
+                    "missing": score["missing"],
+                    "assignees": [((a or {}).get("username") or (a or {}).get("email")) for a in assignees],
+                    "date_done": t.date_done.isoformat() if t.date_done else None,
+                })
+        total = len(tasks)
+        return {
+            "total": total,
+            "compliant": compliant,
+            "rate": (compliant / total) if total else None,
+            "by_assignee": [
+                {
+                    "user": name,
+                    "total": slot["total"],
+                    "compliant": slot["compliant"],
+                    "rate": (slot["compliant"] / slot["total"]) if slot["total"] else None,
+                }
+                for name, slot in sorted(by_assignee.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+            ],
+            "by_missing_field": by_missing_field,
+            "non_compliant": sorted(offender_rows, key=lambda r: r.get("date_done") or "", reverse=True)[:30],
+        }
+
+    closed_grade = _grade_cohort(closed_tasks)
+    prior_grade = _grade_cohort(prior_tasks)
+    open_grade = _grade_cohort(open_tasks)
+
+    # Taxonomy detection: has *any* task ever carried each required field?
+    # If not, the setup isn't complete yet and the UI shows a config-prompt state.
+    all_tasks = db.execute(base_stmt.limit(2000)).scalars().all()
+    field_presence: dict[str, int] = {fd["name"]: 0 for fd in REQUIRED_FIELD_DEFS}
+    for t in all_tasks:
+        for spec in REQUIRED_FIELD_DEFS:
+            for f in (t.custom_fields_json or []):
+                if isinstance(f, dict) and (f.get("name") or "").strip().lower() == spec["name"].lower():
+                    field_presence[spec["name"]] += 1
+                    break
+    taxonomy_configured = all(v > 0 for v in field_presence.values())
+
+    wow_delta = None
+    if closed_grade["rate"] is not None and prior_grade["rate"] is not None:
+        wow_delta = closed_grade["rate"] - prior_grade["rate"]
+
+    return {
+        "window": {"start": window_start.date().isoformat(), "end": now.date().isoformat(), "days": days},
+        "space_id": space_id,
+        "required_fields": [{"name": fd["name"], "allowed_values": fd["values"]} for fd in REQUIRED_FIELD_DEFS],
+        "taxonomy_configured": taxonomy_configured,
+        "taxonomy_field_presence": field_presence,
+        "closed_in_window": closed_grade,
+        "open_now": open_grade,
+        "prior_window": {"total": prior_grade["total"], "rate": prior_grade["rate"]},
+        "wow_delta_rate": wow_delta,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Timeline — task events (due dates + completions) for overlay charts
 # ---------------------------------------------------------------------------
 

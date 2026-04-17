@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
+import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
@@ -642,6 +643,11 @@ export function MarketingDivision() {
           <ClickUpVelocityCard
             title="Team velocity — Marketing space"
             subtitle="Throughput, cycle time, and who's closing what this week."
+            spaceId="901310388813"
+          />
+          <ClickUpComplianceCard
+            title="Tagging compliance — Marketing space"
+            subtitle="Are closed marketing tasks carrying Division + Category so campaign attribution stays precise?"
             spaceId="901310388813"
           />
 

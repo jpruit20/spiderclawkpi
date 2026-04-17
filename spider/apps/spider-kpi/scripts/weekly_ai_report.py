@@ -257,6 +257,50 @@ def _get_clickup_digest(since_days: int = 7) -> list[dict]:
         db.close()
 
 
+def _get_clickup_compliance(since_days: int = 7) -> dict:
+    """Compliance grade for ClickUp tasks closed in the last N days against
+    the required-field taxonomy (Division / Customer Impact / Category).
+
+    Returns an empty ``{}`` when the taxonomy isn't configured yet so the
+    email section hides cleanly.
+    """
+    try:
+        backend = Path(__file__).resolve().parents[1] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+        from app.db.session import SessionLocal
+        from app.api.routes.clickup import clickup_compliance
+    except Exception:
+        return {}
+
+    db = SessionLocal()
+    try:
+        resp = clickup_compliance(days=since_days, space_id=None, db=db)
+        if not resp.get("taxonomy_configured"):
+            return {"taxonomy_configured": False, "field_presence": resp.get("taxonomy_field_presence") or {}}
+        closed = resp.get("closed_in_window") or {}
+        # Compact payload for the email — headline stats + top offenders + top compliers
+        return {
+            "taxonomy_configured": True,
+            "total": closed.get("total", 0),
+            "compliant": closed.get("compliant", 0),
+            "rate": closed.get("rate"),
+            "wow_delta_rate": resp.get("wow_delta_rate"),
+            "open_rate": (resp.get("open_now") or {}).get("rate"),
+            "by_missing_field": closed.get("by_missing_field") or {},
+            "top_compliers": [r for r in (closed.get("by_assignee") or []) if (r.get("rate") or 0) >= 0.9][:5],
+            "top_offenders": sorted(
+                [r for r in (closed.get("by_assignee") or []) if r.get("total", 0) > 0 and (r.get("rate") or 0) < 0.9],
+                key=lambda r: r.get("rate") or 0,
+            )[:5],
+            "non_compliant": (closed.get("non_compliant") or [])[:5],
+        }
+    except Exception:
+        return {}
+    finally:
+        db.close()
+
+
 def _get_escalations(since_days: int = 7) -> list[dict]:
     """Parse journalctl for escalation email events in the last N days."""
     since = (datetime.now(BUSINESS_TZ) - timedelta(days=since_days)).strftime("%Y-%m-%d")
@@ -291,10 +335,12 @@ def _build_report(
     escalations: list[dict],
     slack_digest: list[dict] | None = None,
     clickup_digest: list[dict] | None = None,
+    clickup_compliance: dict | None = None,
 ) -> tuple[str, str]:
     """Build plain-text and HTML versions of the weekly report."""
     slack_digest = slack_digest or []
     clickup_digest = clickup_digest or []
+    clickup_compliance = clickup_compliance or {}
     now = datetime.now(BUSINESS_TZ)
     week_start = (now - timedelta(days=7)).strftime("%b %d")
     week_end = now.strftime("%b %d, %Y")
@@ -346,6 +392,39 @@ def _build_report(
                         f"    ★ Top (reactions={tm['reactions']}) {tm['user'] or '?'}: "
                         f"{tm['text'][:140].strip()}"
                     )
+
+        if clickup_compliance:
+            if not clickup_compliance.get("taxonomy_configured"):
+                missing_fields = [k for k, v in (clickup_compliance.get("field_presence") or {}).items() if not v]
+                if missing_fields:
+                    text_parts.append("\nCLICKUP TAGGING COMPLIANCE\n")
+                    text_parts.append(f"  Taxonomy not yet detected in any task. Missing fields: {', '.join(missing_fields)}")
+                    text_parts.append("  Setup runbook: deploy/CLICKUP_TAGGING_SETUP.md")
+            else:
+                rate = clickup_compliance.get("rate")
+                wow = clickup_compliance.get("wow_delta_rate")
+                rate_pct = f"{rate * 100:.0f}%" if rate is not None else "—"
+                wow_pct = ""
+                if wow is not None:
+                    wow_pct = f" ({'+' if wow >= 0 else ''}{wow * 100:.0f}pp vs prior)"
+                text_parts.append(
+                    f"\nCLICKUP TAGGING COMPLIANCE  {rate_pct}{wow_pct}  "
+                    f"({clickup_compliance.get('compliant', 0)}/{clickup_compliance.get('total', 0)} closed tasks tagged)"
+                )
+                missed = clickup_compliance.get("by_missing_field") or {}
+                top_missed = [(k, v) for k, v in missed.items() if v > 0]
+                if top_missed:
+                    text_parts.append(
+                        "  Most-missed: " +
+                        ", ".join(f"{k} ({v})" for k, v in sorted(top_missed, key=lambda kv: -kv[1])[:3])
+                    )
+                if clickup_compliance.get("top_offenders"):
+                    text_parts.append("  Offenders:")
+                    for o in clickup_compliance["top_offenders"]:
+                        r = o.get("rate") or 0
+                        text_parts.append(f"    {o.get('user', '?')}: {r * 100:.0f}% ({o.get('compliant', 0)}/{o.get('total', 0)})")
+                if clickup_compliance.get("top_compliers"):
+                    text_parts.append("  100% club: " + ", ".join(c.get("user", "?") for c in clickup_compliance["top_compliers"]))
 
         if clickup_digest:
             total_closed = sum(d["completed"] for d in clickup_digest)
@@ -413,6 +492,58 @@ def _build_report(
                 )
         else:
             html_parts.append('<p style="color:#6b7280">None this week.</p>')
+
+        # ClickUp tagging compliance
+        if clickup_compliance:
+            if not clickup_compliance.get("taxonomy_configured"):
+                missing_fields = [k for k, v in (clickup_compliance.get("field_presence") or {}).items() if not v]
+                if missing_fields:
+                    html_parts.append(
+                        '<h3 style="color:#111827;border-bottom:2px solid #b91c1c;padding-bottom:6px">'
+                        'ClickUp Tagging Compliance</h3>'
+                    )
+                    html_parts.append(
+                        f'<div style="padding:10px 12px;background:#fef2f2;border-left:3px solid #b91c1c;border-radius:4px;font-size:13px">'
+                        f'Taxonomy not yet detected. Missing fields: <strong>{_escape(", ".join(missing_fields))}</strong>.'
+                        f' See <code>deploy/CLICKUP_TAGGING_SETUP.md</code> for setup steps.'
+                        f'</div>'
+                    )
+            else:
+                rate = clickup_compliance.get("rate")
+                wow = clickup_compliance.get("wow_delta_rate")
+                rate_pct = f"{rate * 100:.0f}%" if rate is not None else "—"
+                rate_color = "#16a34a" if (rate or 0) >= 0.9 else ("#f59e0b" if (rate or 0) >= 0.7 else "#b91c1c")
+                wow_badge = ""
+                if wow is not None:
+                    color = "#16a34a" if wow >= 0 else "#b91c1c"
+                    wow_badge = f'<span style="color:{color};font-size:12px;margin-left:8px">{"+" if wow >= 0 else ""}{wow * 100:.0f}pp vs prior</span>'
+                html_parts.append(
+                    f'<h3 style="color:#111827;border-bottom:2px solid {rate_color};padding-bottom:6px">'
+                    f'ClickUp Tagging Compliance <span style="color:{rate_color}">{rate_pct}</span>'
+                    f'{wow_badge}</h3>'
+                )
+                html_parts.append(
+                    f'<p style="font-size:12px;color:#6b7280;margin:2px 0 10px">'
+                    f'{clickup_compliance.get("compliant", 0)}/{clickup_compliance.get("total", 0)} tasks closed this week with required taxonomy.'
+                    f'</p>'
+                )
+                missed = [(k, v) for k, v in (clickup_compliance.get("by_missing_field") or {}).items() if v > 0]
+                if missed:
+                    missed_html = ", ".join(f'<strong>{_escape(k)}</strong> ({v})' for k, v in sorted(missed, key=lambda kv: -kv[1])[:3])
+                    html_parts.append(f'<div style="font-size:12px;color:#4b5563;margin-bottom:6px">Most-missed: {missed_html}</div>')
+                if clickup_compliance.get("top_offenders"):
+                    html_parts.append('<div style="font-size:12px;color:#4b5563;margin-bottom:4px">Offenders:</div>')
+                    html_parts.append('<ul style="margin:0 0 8px;padding-left:18px;font-size:12px;color:#374151">')
+                    for o in clickup_compliance["top_offenders"]:
+                        r = o.get("rate") or 0
+                        html_parts.append(
+                            f'<li>{_escape(o.get("user", "?"))}: <strong>{r * 100:.0f}%</strong> '
+                            f'({o.get("compliant", 0)}/{o.get("total", 0)})</li>'
+                        )
+                    html_parts.append('</ul>')
+                if clickup_compliance.get("top_compliers"):
+                    compliers = ", ".join(f'<strong>{_escape(c.get("user", "?"))}</strong>' for c in clickup_compliance["top_compliers"])
+                    html_parts.append(f'<div style="font-size:12px;color:#16a34a;margin-bottom:8px">100% club: {compliers}</div>')
 
         # ClickUp throughput section
         if clickup_digest:
@@ -495,7 +626,8 @@ def send_report() -> None:
     escalations = _get_escalations(since_days=7)
     slack_digest = _get_slack_digest(since_days=7)
     clickup_digest = _get_clickup_digest(since_days=7)
-    body_text, body_html = _build_report(commits, escalations, slack_digest, clickup_digest)
+    clickup_compliance = _get_clickup_compliance(since_days=7)
+    body_text, body_html = _build_report(commits, escalations, slack_digest, clickup_digest, clickup_compliance)
 
     now = datetime.now(BUSINESS_TZ)
     week_end = now.strftime("%b %d")

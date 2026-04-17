@@ -1198,6 +1198,46 @@ export interface ClickUpVelocityResponse {
   top_closers: { user: string; completed: number }[]
 }
 
+export interface ClickUpComplianceAssignee {
+  user: string
+  total: number
+  compliant: number
+  rate: number | null
+}
+
+export interface ClickUpComplianceTaskOffender {
+  task_id: string
+  name: string | null
+  url: string | null
+  space_name: string | null
+  list_name: string | null
+  status: string | null
+  missing: string[]
+  assignees: (string | null)[]
+  date_done: string | null
+}
+
+export interface ClickUpComplianceCohort {
+  total: number
+  compliant: number
+  rate: number | null
+  by_assignee: ClickUpComplianceAssignee[]
+  by_missing_field: Record<string, number>
+  non_compliant: ClickUpComplianceTaskOffender[]
+}
+
+export interface ClickUpComplianceResponse {
+  window: { start: string; end: string; days: number }
+  space_id: string | null
+  required_fields: { name: string; allowed_values: string[] }[]
+  taxonomy_configured: boolean
+  taxonomy_field_presence: Record<string, number>
+  closed_in_window: ClickUpComplianceCohort
+  open_now: ClickUpComplianceCohort
+  prior_window: { total: number; rate: number | null }
+  wow_delta_rate: number | null
+}
+
 export interface ClickUpTimelineEvent {
   event_type: 'due' | 'completed'
   date: string

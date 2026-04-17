@@ -5,6 +5,7 @@ import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
@@ -1407,6 +1408,10 @@ export function CustomerExperienceDivision() {
           <ClickUpVelocityCard
             title="Team velocity — all CX tasks"
             subtitle="Throughput, cycle time, and who's closing what this week."
+          />
+          <ClickUpComplianceCard
+            title="Tagging compliance — CX view"
+            subtitle="Grades every closed task against the required taxonomy (Division, Customer Impact, Category)."
           />
 
           {/* CX ticket volume overlaid with ClickUp task completions — did

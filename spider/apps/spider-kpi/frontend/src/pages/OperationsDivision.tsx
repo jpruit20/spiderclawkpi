@@ -1,4 +1,5 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
+import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -47,6 +48,10 @@ export function OperationsDivision() {
         <ClickUpVelocityCard
           title="Team velocity — all ClickUp"
           subtitle="Throughput + cycle time across every space until an Ops space is stood up."
+        />
+        <ClickUpComplianceCard
+          title="Tagging compliance — all ClickUp"
+          subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
         />
         <SlackPulseCard
           title="Slack pulse — Inventory / Wholesale"

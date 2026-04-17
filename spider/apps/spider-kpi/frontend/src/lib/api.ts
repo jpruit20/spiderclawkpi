@@ -6,6 +6,7 @@ import type {
   ClickUpSpacesResponse,
   ClickUpTaskFilter,
   ClickUpTaskListResponse,
+  ClickUpComplianceResponse,
   ClickUpTimelineResponse,
   ClickUpVelocityResponse,
   ClickUpWebhookStatus,
@@ -383,6 +384,13 @@ export const api = {
     }
     const qs = p.toString()
     return request<ClickUpTimelineResponse>(`/api/clickup/timeline${qs ? `?${qs}` : ''}`, { signal })
+  },
+  clickupCompliance: (space_id?: string, days?: number, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (space_id) p.set('space_id', space_id)
+    if (days) p.set('days', String(days))
+    const qs = p.toString()
+    return request<ClickUpComplianceResponse>(`/api/clickup/compliance${qs ? `?${qs}` : ''}`, { signal })
   },
   clickupVelocity: (space_id?: string, days?: number, signal?: AbortSignal) => {
     const p = new URLSearchParams()
