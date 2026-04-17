@@ -570,7 +570,6 @@ def generate_report(
             thinking={"type": "adaptive"},
             output_config={"effort": "max", "format": {
                 "type": "json_schema",
-                "name": "ReportBundle",
                 "schema": strict_schema,
             }},
             system=[{
