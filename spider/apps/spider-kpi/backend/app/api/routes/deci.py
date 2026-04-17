@@ -922,6 +922,86 @@ def update_decision(
     return _enrich_decision(decision, assignments, member_names)
 
 
+@router.get("/drafts")
+def list_drafts(limit: int = 50, db: Session = Depends(db_session)):
+    """Auto-generated DECI drafts awaiting Joseph's review.
+
+    Drafts come from the auto-draft engine (slack/clickup signal → draft).
+    Each row carries ``origin_signal_type`` + ``origin_context_key`` so the
+    UI can group related drafts and show their provenance.
+    """
+    limit = max(1, min(limit, 200))
+    rows = db.execute(
+        select(DeciDecision)
+        .where(DeciDecision.status == "draft")
+        .order_by(DeciDecision.auto_drafted_at.desc().nulls_last(), DeciDecision.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+    member_names = _member_name_map(db)
+    out = []
+    for d in rows:
+        assignments = db.execute(select(DeciAssignment).where(DeciAssignment.decision_id == d.id)).scalars().all()
+        logs = db.execute(
+            select(DeciDecisionLog)
+            .where(DeciDecisionLog.decision_id == d.id)
+            .order_by(DeciDecisionLog.created_at.desc())
+            .limit(3)
+        ).scalars().all()
+        payload = _enrich_decision(d, assignments, member_names)
+        payload["origin_signal_type"] = d.origin_signal_type
+        payload["origin_context_key"] = d.origin_context_key
+        payload["auto_drafted_at"] = d.auto_drafted_at.isoformat() if d.auto_drafted_at else None
+        payload["recent_logs"] = [
+            {"decision_text": l.decision_text, "made_by": l.made_by, "created_at": l.created_at.isoformat() if l.created_at else None}
+            for l in logs
+        ]
+        out.append(payload)
+    return {"drafts": out, "count": len(out)}
+
+
+@router.post("/drafts/{decision_id}/promote")
+def promote_draft(decision_id: str, db: Session = Depends(db_session)):
+    """Promote a draft to a real not-yet-started decision."""
+    decision = db.execute(select(DeciDecision).where(DeciDecision.id == decision_id)).scalar_one_or_none()
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if decision.status != "draft":
+        raise HTTPException(status_code=409, detail=f"Decision is not a draft (status={decision.status})")
+    decision.status = "not_started"
+    db.add(DeciDecisionLog(
+        decision_id=decision.id,
+        decision_text="Promoted from auto-draft to active decision",
+        made_by="system:autodraft",
+        notes=None,
+    ))
+    db.commit()
+    assignments = db.execute(select(DeciAssignment).where(DeciAssignment.decision_id == decision.id)).scalars().all()
+    member_names = _member_name_map(db)
+    return _enrich_decision(decision, assignments, member_names)
+
+
+@router.post("/drafts/{decision_id}/dismiss")
+def dismiss_draft(decision_id: str, db: Session = Depends(db_session)):
+    """Mark a draft as dismissed (not actionable). Kept in the DB with
+    ``status='dismissed'`` so future matching signals don't re-create it
+    until it either ages out or is explicitly deleted.
+    """
+    decision = db.execute(select(DeciDecision).where(DeciDecision.id == decision_id)).scalar_one_or_none()
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if decision.status != "draft":
+        raise HTTPException(status_code=409, detail=f"Decision is not a draft (status={decision.status})")
+    decision.status = "dismissed"
+    db.add(DeciDecisionLog(
+        decision_id=decision.id,
+        decision_text="Dismissed auto-draft as not actionable",
+        made_by="system:autodraft",
+        notes=None,
+    ))
+    db.commit()
+    return {"ok": True, "id": decision.id, "status": "dismissed"}
+
+
 @router.delete("/decisions/{decision_id}", status_code=204)
 def delete_decision(decision_id: str, db: Session = Depends(db_session)):
     decision = db.execute(

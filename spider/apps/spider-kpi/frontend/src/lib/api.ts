@@ -7,6 +7,8 @@ import type {
   ClickUpTaskFilter,
   ClickUpTaskListResponse,
   DeciClickUpLink,
+  DeciDraft,
+  DeciDraftsResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
   SlackPulseResponse,
@@ -275,6 +277,16 @@ export const api = {
     }).then(r => r.json()),
   deciOverview: (signal?: AbortSignal) =>
     request<DeciOverview>('/api/deci/overview', { signal }),
+  deciDrafts: (signal?: AbortSignal) =>
+    request<DeciDraftsResponse>('/api/deci/drafts', { signal }),
+  deciPromoteDraft: (id: string) =>
+    fetch(`${API_BASE}/api/deci/drafts/${id}/promote`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<DeciDraft>),
+  deciDismissDraft: (id: string) =>
+    fetch(`${API_BASE}/api/deci/drafts/${id}/dismiss`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json() as Promise<{ ok: boolean; id: string; status: string }>),
   // DECI Domains
   deciDomains: (signal?: AbortSignal) =>
     request<DeciDomain[]>('/api/deci/domains', { signal }),

@@ -26,8 +26,11 @@ from app.models import (
     ClickUpTask,
     ClickUpTaskEvent,
     ClickUpTasksDaily,
+    IssueSignal,
 )
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+
+import re as _re_for_scanner
 
 
 settings = get_settings()
@@ -485,6 +488,26 @@ def sync_clickup(db: Session, full: bool = False) -> dict[str, Any]:
         rollup_rows = rebuild_clickup_daily(db, window_start, window_end)
         stats["rollup_rows_written"] = rollup_rows
 
+        # Scan tasks for issue-shaped language and urgent priority flags.
+        issues = scan_tasks_for_issues(
+            db,
+            since=datetime.now(timezone.utc) - timedelta(days=settings.clickup_task_lookback_days),
+        )
+        stats["issue_signals_inserted"] = issues
+        db.commit()
+
+        # Feed the DECI auto-draft engine.
+        try:
+            from app.compute.deci_autodraft import autodraft_from_signals
+            stats["autodraft"] = autodraft_from_signals(
+                db,
+                since=datetime.now(timezone.utc) - timedelta(days=settings.clickup_task_lookback_days),
+            )
+            db.commit()
+        except Exception:
+            logger.exception("clickup autodraft failed (non-fatal)")
+            db.rollback()
+
         duration_ms = int((time.monotonic() - started) * 1000)
         run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms}
         finish_sync_run(db, run, status="success", records_processed=stats["tasks_fetched"])
@@ -551,6 +574,115 @@ def fetch_task_comments(task_id: str) -> list[dict[str, Any]]:
     if r.status_code >= 400:
         return []
     return r.json().get("comments", []) or []
+
+
+def scan_tasks_for_issues(db: Session, since: datetime | None = None) -> int:
+    """Scan ClickUp tasks updated since ``since`` for issue-shaped language.
+
+    Writes matching rows into ``issue_signals`` with ``source='clickup'``
+    using the same pattern set as the Slack scanner (so both streams feed
+    Issue Radar + the DECI auto-draft engine under a unified vocabulary).
+    Idempotent — dedups on (source, signal_type, metadata.task_id).
+    """
+    # Reuse the same pattern list as Slack to keep vocabulary consistent.
+    from app.ingestion.connectors.slack import DEFAULT_ISSUE_PATTERNS
+    compiled = [(p["name"], p["severity"], _re_for_scanner.compile(p["regex"], _re_for_scanner.IGNORECASE))
+                for p in DEFAULT_ISSUE_PATTERNS]
+
+    if since is None:
+        since = datetime.now(timezone.utc) - timedelta(days=2)
+
+    tasks = db.execute(
+        select(ClickUpTask).where(ClickUpTask.date_updated >= since)
+    ).scalars().all()
+
+    inserted = 0
+    for t in tasks:
+        # Combined text surface: task name + description. Comments aren't
+        # polled per-task today (cheaper to treat them as a later tick).
+        text = " ".join(filter(None, [t.name or "", t.description or ""]))
+        if not text.strip():
+            continue
+        for name, severity, rx in compiled:
+            if not rx.search(text):
+                continue
+            existing = db.execute(select(IssueSignal).where(
+                IssueSignal.source == "clickup",
+                IssueSignal.signal_type == f"clickup.{name}",
+                IssueSignal.metadata_json["task_id"].astext == t.task_id,
+            )).scalars().first()
+            if existing is not None:
+                continue
+            bd = (t.date_updated or t.date_created)
+            bd = bd.astimezone(timezone.utc).date() if bd else None
+            db.add(IssueSignal(
+                business_date=bd,
+                signal_type=f"clickup.{name}",
+                severity=severity,
+                confidence=0.6,
+                source="clickup",
+                title=(t.name or "")[:120] or f"ClickUp {name}",
+                summary=(text or "")[:500],
+                metadata_json={
+                    "task_id": t.task_id,
+                    "custom_id": t.custom_id,
+                    "url": t.url,
+                    "list_id": t.list_id,
+                    "list_name": t.list_name,
+                    "space_id": t.space_id,
+                    "space_name": t.space_name,
+                    "status": t.status,
+                    "priority": t.priority,
+                    "pattern": name,
+                    "assignees": t.assignees_json,
+                },
+            ))
+            inserted += 1
+            break  # one signal per task is enough
+
+    # Also flag any task whose ClickUp priority is 'urgent' — first-class
+    # signal that bypasses keyword match (Joseph/team already said it's hot).
+    urgent_tasks = db.execute(
+        select(ClickUpTask).where(
+            ClickUpTask.date_updated >= since,
+            ClickUpTask.priority == "urgent",
+        )
+    ).scalars().all()
+    for t in urgent_tasks:
+        existing = db.execute(select(IssueSignal).where(
+            IssueSignal.source == "clickup",
+            IssueSignal.signal_type == "clickup.urgent_priority",
+            IssueSignal.metadata_json["task_id"].astext == t.task_id,
+        )).scalars().first()
+        if existing is not None:
+            continue
+        bd = (t.date_updated or t.date_created)
+        bd = bd.astimezone(timezone.utc).date() if bd else None
+        db.add(IssueSignal(
+            business_date=bd,
+            signal_type="clickup.urgent_priority",
+            severity="critical",
+            confidence=0.8,
+            source="clickup",
+            title=f"Urgent ClickUp task: {(t.name or '')[:100]}",
+            summary=((t.description or t.name or "") or "")[:500],
+            metadata_json={
+                "task_id": t.task_id,
+                "url": t.url,
+                "list_id": t.list_id,
+                "list_name": t.list_name,
+                "space_id": t.space_id,
+                "space_name": t.space_name,
+                "priority": t.priority,
+                "status": t.status,
+                "pattern": "urgent_priority",
+                "assignees": t.assignees_json,
+            },
+        ))
+        inserted += 1
+
+    db.flush()
+    return inserted
 
 
 def add_task_comment(task_id: str, comment: str) -> dict[str, Any]:

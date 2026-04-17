@@ -1142,6 +1142,32 @@ export interface ClickUpListsResponse {
   lists: ClickUpListItem[]
 }
 
+export interface DeciDraftRecentLog {
+  decision_text: string
+  made_by: string
+  created_at: string | null
+}
+
+export interface DeciDraft {
+  id: string
+  title: string
+  description?: string | null
+  status: string
+  priority: string
+  type: string
+  department?: string | null
+  origin_signal_type: string | null
+  origin_context_key: string | null
+  auto_drafted_at: string | null
+  recent_logs: DeciDraftRecentLog[]
+  [k: string]: unknown
+}
+
+export interface DeciDraftsResponse {
+  drafts: DeciDraft[]
+  count: number
+}
+
 export interface DeciClickUpLink {
   id: string
   title: string

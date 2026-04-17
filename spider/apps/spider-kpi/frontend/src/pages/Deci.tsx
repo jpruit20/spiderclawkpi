@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../components/AuthGate'
 import { Card } from '../components/Card'
+import { DeciDraftsCard } from '../components/DeciDraftsCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { ApiError, api } from '../lib/api'
@@ -339,6 +340,9 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
           </button>
         </section>
       ) : null}
+
+      {/* Auto-drafted decisions awaiting review (Slack + ClickUp signals) */}
+      <DeciDraftsCard onChange={onReload} />
 
       {/* Create Decision */}
       <section className="card">

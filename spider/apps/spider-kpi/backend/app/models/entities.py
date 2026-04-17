@@ -924,6 +924,13 @@ class DeciDecision(TimestampMixin, Base):
     clickup_status_cached: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     clickup_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     clickup_last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Auto-draft provenance — populated when a decision is auto-created from
+    # Slack or ClickUp activity. (origin_signal_type, origin_context_key) is
+    # the soft dedup key: the next matching IssueSignal updates this decision
+    # rather than spawning a new draft.
+    origin_signal_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    origin_context_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    auto_drafted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class DeciAssignment(TimestampMixin, Base):

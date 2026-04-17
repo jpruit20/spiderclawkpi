@@ -624,6 +624,19 @@ def sync_slack(db: Session, full: bool = False) -> dict[str, Any]:
         stats["issue_signals_inserted"] = issues
         db.commit()
 
+        # Feed the DECI auto-draft engine so new/updated signals flow into
+        # draft decisions or update-logs on already-open ones.
+        try:
+            from app.compute.deci_autodraft import autodraft_from_signals
+            stats["autodraft"] = autodraft_from_signals(
+                db,
+                since=datetime.now(timezone.utc) - timedelta(days=settings.slack_backfill_days),
+            )
+            db.commit()
+        except Exception:
+            logger.exception("slack autodraft failed (non-fatal)")
+            db.rollback()
+
         duration_ms = int((time.monotonic() - started) * 1000)
         run = db.merge(run)
         run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms}
