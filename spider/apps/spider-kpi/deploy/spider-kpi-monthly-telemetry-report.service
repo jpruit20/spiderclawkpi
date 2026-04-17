@@ -1,6 +1,7 @@
 [Unit]
 Description=Spider KPI monthly telemetry analysis report (Claude Opus 4.7)
 After=network-online.target
+OnFailure=spider-kpi-job-failure@%n.service
 
 [Service]
 Type=oneshot

@@ -1,0 +1,15 @@
+[Unit]
+Description=Send a Slack DM + fallback email when %i fails
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+# systemd expands %i to the escaped unit name (e.g. spider-kpi-daily-insights.service).
+# We pass it through as the first argument; the notifier reads journalctl for it.
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python \
+    /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/notify_job_failure.py %i
+StandardOutput=append:/var/log/spider-kpi-job-failure.log
+StandardError=append:/var/log/spider-kpi-job-failure.log
