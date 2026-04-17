@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -310,27 +311,36 @@ def upsert_message(db: Session, channel_id: str, event: dict[str, Any]) -> tuple
     row.mentions_json = _extract_mentions(event.get("text"))
     row.raw_payload = event
 
-    # Fan out file metadata
+    # Fan out file metadata. Use Postgres INSERT ... ON CONFLICT because a
+    # single backfill often re-references the same file across multiple
+    # messages in the same flush (e.g. a recurring inventory spreadsheet),
+    # and Session.add() within the same transaction can't rely on the
+    # previous INSERT being visible until flush.
     for f in event.get("files") or []:
         if not isinstance(f, dict) or not f.get("id"):
             continue
-        file_row = db.execute(select(SlackFile).where(SlackFile.file_id == f["id"])).scalars().first()
-        if file_row is None:
-            file_row = SlackFile(file_id=f["id"])
-            db.add(file_row)
-        file_row.channel_id = channel_id
-        file_row.message_ts = ts
-        file_row.user_id = f.get("user")
-        file_row.name = f.get("name")
-        file_row.title = f.get("title")
-        file_row.mimetype = f.get("mimetype")
-        file_row.filetype = f.get("filetype")
-        file_row.size = f.get("size")
-        file_row.url_private = f.get("url_private")
-        file_row.url_private_download = f.get("url_private_download")
-        file_row.thumb_url = f.get("thumb_360") or f.get("thumb_720")
-        file_row.created_at_source = _ts_to_dt(str(f.get("created"))) if f.get("created") else None
-        file_row.raw_payload = f
+        payload = {
+            "file_id": f["id"],
+            "channel_id": channel_id,
+            "message_ts": ts,
+            "user_id": f.get("user"),
+            "name": f.get("name"),
+            "title": f.get("title"),
+            "mimetype": f.get("mimetype"),
+            "filetype": f.get("filetype"),
+            "size": f.get("size"),
+            "url_private": f.get("url_private"),
+            "url_private_download": f.get("url_private_download"),
+            "thumb_url": f.get("thumb_360") or f.get("thumb_720"),
+            "created_at_source": _ts_to_dt(str(f.get("created"))) if f.get("created") else None,
+            "raw_payload": f,
+        }
+        stmt = pg_insert(SlackFile).values(**payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[SlackFile.file_id],
+            set_={k: v for k, v in payload.items() if k != "file_id"},
+        )
+        db.execute(stmt)
 
     return row, inserted
 
