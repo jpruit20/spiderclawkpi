@@ -1,0 +1,20 @@
+[Unit]
+Description=Spider KPI persistent SSH tunnel to app-backend DB
+Documentation=https://github.com/jpruit20/spiderclawkpi/blob/master/apps/spider-kpi/deploy/APP_BACKEND_TUNNEL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+# autossh keeps an SSH connection open with a local-port forward into the
+# remote (firewalled) app database. All app-backend queries go through
+# 127.0.0.1:${APP_BACKEND_TUNNEL_LOCAL_PORT} on the KPI droplet.
+Environment=AUTOSSH_GATETIME=0
+ExecStart=/usr/bin/autossh -M 0 -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/known_hosts -i /root/.ssh/spider_tunnel_key -L ${APP_BACKEND_TUNNEL_LOCAL_PORT}:${APP_BACKEND_DB_HOST}:${APP_BACKEND_DB_PORT} -p ${APP_BACKEND_SSH_PORT} ${APP_BACKEND_SSH_USER}@${APP_BACKEND_SSH_HOST}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

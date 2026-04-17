@@ -139,6 +139,20 @@ class Settings(BaseSettings):
     clickup_sync_interval_minutes: int = 15
     clickup_task_lookback_days: int = 120
 
+    # App backend (spidergrills.app) — read-only sync via persistent SSH tunnel.
+    # DB connection is always routed through 127.0.0.1:APP_BACKEND_TUNNEL_LOCAL_PORT,
+    # which the autossh service forwards to APP_BACKEND_DB_HOST:APP_BACKEND_DB_PORT
+    # on the remote side. Credentials live in the droplet .env only.
+    app_backend_ssh_host: Optional[str] = None
+    app_backend_ssh_user: str = "spider_tunnel"
+    app_backend_ssh_port: int = 22
+    app_backend_db_host: str = "127.0.0.1"
+    app_backend_db_port: int = 5432
+    app_backend_tunnel_local_port: int = 15432
+    app_backend_db_url: Optional[str] = None  # e.g. postgresql+psycopg://user:pass@127.0.0.1:15432/dbname
+    app_backend_sync_interval_minutes: int = 30
+    app_backend_lookback_days: int = 120
+
     aws_telemetry_url: Optional[str] = None
     aws_telemetry_local_path: Optional[str] = None
     aws_telemetry_api_token: Optional[str] = None
