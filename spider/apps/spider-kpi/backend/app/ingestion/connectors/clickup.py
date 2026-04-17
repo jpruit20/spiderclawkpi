@@ -696,3 +696,59 @@ def add_task_comment(task_id: str, comment: str) -> dict[str, Any]:
     )
     r.raise_for_status()
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Webhook registration (one-time per droplet)
+# ---------------------------------------------------------------------------
+
+# Events we subscribe to. Covers full task lifecycle + list/folder changes so
+# the dashboard state stays fresh without polling.
+WEBHOOK_EVENTS = [
+    "taskCreated", "taskUpdated", "taskDeleted",
+    "taskStatusUpdated", "taskPriorityUpdated", "taskAssigneeUpdated",
+    "taskDueDateUpdated", "taskMoved",
+    "taskCommentPosted", "taskCommentUpdated",
+    "listCreated", "listUpdated", "listDeleted",
+    "folderCreated", "folderUpdated",
+]
+
+
+def register_webhook(endpoint_url: str) -> dict[str, Any]:
+    """Create a webhook on ClickUp pointing at our public endpoint."""
+    if not _configured():
+        raise RuntimeError("ClickUp not configured")
+    team_id = settings.clickup_team_id
+    payload = {"endpoint": endpoint_url, "events": WEBHOOK_EVENTS}
+    r = requests.post(
+        f"{settings.clickup_base_url}/team/{team_id}/webhook",
+        headers=_headers(),
+        json=payload,
+        timeout=TIMEOUT_SECONDS,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def list_webhooks() -> list[dict[str, Any]]:
+    if not _configured():
+        return []
+    team_id = settings.clickup_team_id
+    r = requests.get(
+        f"{settings.clickup_base_url}/team/{team_id}/webhook",
+        headers=_headers(),
+        timeout=TIMEOUT_SECONDS,
+    )
+    r.raise_for_status()
+    return (r.json() or {}).get("webhooks", [])
+
+
+def delete_webhook(webhook_id: str) -> bool:
+    if not _configured():
+        return False
+    r = requests.delete(
+        f"{settings.clickup_base_url}/webhook/{webhook_id}",
+        headers=_headers(),
+        timeout=TIMEOUT_SECONDS,
+    )
+    return r.status_code < 400

@@ -1168,6 +1168,44 @@ export interface DeciDraftsResponse {
   count: number
 }
 
+export interface ClickUpVelocityDailyRow {
+  date: string
+  created: number
+  completed: number
+  open_pit: number
+  overdue_pit: number
+}
+
+export interface ClickUpVelocityResponse {
+  window: { start: string; end: string; days: number }
+  space_id: string | null
+  throughput: ClickUpVelocityDailyRow[]
+  totals: {
+    closed_last_7: number
+    closed_prior_7: number
+    wow_delta: number
+    wow_pct: number | null
+    open_now: number
+    overdue_now: number
+  }
+  cycle_time: {
+    median_seconds: number | null
+    median_days: number | null
+    p90_seconds: number | null
+    p90_days: number | null
+    sample_size: number
+  }
+  top_closers: { user: string; completed: number }[]
+}
+
+export interface ClickUpWebhookStatus {
+  registered: boolean
+  webhook_id: string | null
+  endpoint_url: string | null
+  configured_at: string | null
+  events: string[]
+}
+
 export interface DeciClickUpLink {
   id: string
   title: string

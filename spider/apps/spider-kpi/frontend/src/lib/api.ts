@@ -6,6 +6,8 @@ import type {
   ClickUpSpacesResponse,
   ClickUpTaskFilter,
   ClickUpTaskListResponse,
+  ClickUpVelocityResponse,
+  ClickUpWebhookStatus,
   DeciClickUpLink,
   DeciDraft,
   DeciDraftsResponse,
@@ -366,6 +368,25 @@ export const api = {
     }).then(r => r.json() as Promise<DeciClickUpLink>),
   clickupSyncNow: (full?: boolean) =>
     fetch(`${API_BASE}/api/clickup/sync-now${full ? '?full=true' : ''}`, {
+      method: 'POST', credentials: 'include',
+    }).then(r => r.json()),
+  clickupVelocity: (space_id?: string, days?: number, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (space_id) p.set('space_id', space_id)
+    if (days) p.set('days', String(days))
+    const qs = p.toString()
+    return request<ClickUpVelocityResponse>(`/api/clickup/velocity${qs ? `?${qs}` : ''}`, { signal })
+  },
+  clickupWebhookStatus: (signal?: AbortSignal) =>
+    request<ClickUpWebhookStatus>('/api/clickup/webhook/status', { signal }),
+  clickupWebhookRegister: (endpoint_url: string) =>
+    fetch(`${API_BASE}/api/clickup/webhook/register`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint_url }),
+    }).then(r => r.json()),
+  clickupWebhookUnregister: () =>
+    fetch(`${API_BASE}/api/clickup/webhook/unregister`, {
       method: 'POST', credentials: 'include',
     }).then(r => r.json()),
   // Slack ----------------------------------------------------------------

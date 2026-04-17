@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { RangeToolbar } from '../components/RangeToolbar'
@@ -631,11 +632,16 @@ export function MarketingDivision() {
             )}
           </section>
 
-          {/* ClickUp tasks — Marketing space (campaigns, content, website) */}
+          {/* ClickUp tasks + velocity — Marketing space */}
           <ClickUpTasksCard
             title="ClickUp tasks — Marketing"
             subtitle="Marketing space: campaigns, content, website, ambassadors, graphic design."
             defaultFilter={{ space_id: '901310388813', limit: 30 }}
+          />
+          <ClickUpVelocityCard
+            title="Team velocity — Marketing space"
+            subtitle="Throughput, cycle time, and who's closing what this week."
+            spaceId="901310388813"
           />
 
           {/* Slack pulse — marketing-customer-service + general-news */}

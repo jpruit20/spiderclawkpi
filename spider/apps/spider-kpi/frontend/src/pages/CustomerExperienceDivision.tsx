@@ -6,6 +6,7 @@ import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { ApiError, api } from '../lib/api'
@@ -1396,11 +1397,15 @@ export function CustomerExperienceDivision() {
             )}
           </section>
 
-          {/* ClickUp tasks relevant to CX */}
+          {/* ClickUp tasks + team velocity for CX */}
           <ClickUpTasksCard
             title="ClickUp tasks — Customer Experience"
             subtitle="Tasks tagged for CX work across ClickUp. Filter scope with the chips; link to open in ClickUp."
             defaultFilter={{ limit: 30 }}
+          />
+          <ClickUpVelocityCard
+            title="Team velocity — all CX tasks"
+            subtitle="Throughput, cycle time, and who's closing what this week."
           />
 
           {/* Slack pulse — #marketing-customer-service */}

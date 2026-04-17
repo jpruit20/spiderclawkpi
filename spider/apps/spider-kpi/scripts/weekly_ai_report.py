@@ -163,6 +163,100 @@ def _get_slack_digest(since_days: int = 7) -> list[dict]:
         db.close()
 
 
+def _get_clickup_digest(since_days: int = 7) -> list[dict]:
+    """Per-space throughput digest from ClickUp: tasks closed this week, top
+    closers, cycle time, and a headline completed task.
+    """
+    try:
+        backend = Path(__file__).resolve().parents[1] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+        from app.db.session import SessionLocal
+        from app.models import ClickUpTask, ClickUpTasksDaily
+        from sqlalchemy import desc, select, func
+    except Exception:
+        return []
+
+    digest: list[dict] = []
+    cutoff_date = (datetime.now(BUSINESS_TZ) - timedelta(days=since_days)).date()
+    cutoff_dt = datetime.now(BUSINESS_TZ) - timedelta(days=since_days)
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(
+                ClickUpTasksDaily.space_id,
+                ClickUpTasksDaily.space_name,
+                func.sum(ClickUpTasksDaily.tasks_created).label("created"),
+                func.sum(ClickUpTasksDaily.tasks_completed).label("completed"),
+            )
+            .where(ClickUpTasksDaily.business_date >= cutoff_date)
+            .group_by(ClickUpTasksDaily.space_id, ClickUpTasksDaily.space_name)
+            .order_by(desc(func.sum(ClickUpTasksDaily.tasks_completed)))
+        ).all()
+
+        for r in rows:
+            if not r.space_id:
+                continue
+            # Cycle-time sample + top closers from the raw tasks table
+            tasks_window = db.execute(
+                select(ClickUpTask)
+                .where(
+                    ClickUpTask.space_id == r.space_id,
+                    ClickUpTask.date_done.isnot(None),
+                    ClickUpTask.date_done >= cutoff_dt,
+                    ClickUpTask.date_created.isnot(None),
+                )
+            ).scalars().all()
+
+            durations = []
+            closer_counts: dict[str, int] = {}
+            for t in tasks_window:
+                try:
+                    d = (t.date_done - t.date_created).total_seconds()
+                    if d > 0:
+                        durations.append(d)
+                except Exception:
+                    pass
+                for a in (t.assignees_json or []):
+                    n = (a or {}).get("username") or (a or {}).get("email")
+                    if n:
+                        closer_counts[n] = closer_counts.get(n, 0) + 1
+
+            median_days = None
+            if durations:
+                s = sorted(durations)
+                median_days = s[len(s) // 2] / 86400.0
+
+            top_closers = sorted(closer_counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+
+            headline_task = None
+            if tasks_window:
+                headline = max(tasks_window, key=lambda t: (t.priority == "urgent", t.priority == "high"))
+                headline_task = {
+                    "name": headline.name,
+                    "url": headline.url,
+                    "priority": headline.priority,
+                    "list": headline.list_name,
+                }
+
+            digest.append({
+                "space_id": r.space_id,
+                "space_name": r.space_name,
+                "created": int(r.created or 0),
+                "completed": int(r.completed or 0),
+                "cycle_time_median_days": round(median_days, 1) if median_days is not None else None,
+                "top_closers": [{"user": u, "count": c} for u, c in top_closers],
+                "headline_task": headline_task,
+            })
+
+        return digest
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
 def _get_escalations(since_days: int = 7) -> list[dict]:
     """Parse journalctl for escalation email events in the last N days."""
     since = (datetime.now(BUSINESS_TZ) - timedelta(days=since_days)).strftime("%Y-%m-%d")
@@ -192,9 +286,15 @@ def _get_escalations(since_days: int = 7) -> list[dict]:
     return escalations
 
 
-def _build_report(commits: list[dict], escalations: list[dict], slack_digest: list[dict] | None = None) -> tuple[str, str]:
+def _build_report(
+    commits: list[dict],
+    escalations: list[dict],
+    slack_digest: list[dict] | None = None,
+    clickup_digest: list[dict] | None = None,
+) -> tuple[str, str]:
     """Build plain-text and HTML versions of the weekly report."""
     slack_digest = slack_digest or []
+    clickup_digest = clickup_digest or []
     now = datetime.now(BUSINESS_TZ)
     week_start = (now - timedelta(days=7)).strftime("%b %d")
     week_end = now.strftime("%b %d, %Y")
@@ -211,8 +311,8 @@ def _build_report(commits: list[dict], escalations: list[dict], slack_digest: li
         f"{'=' * 50}\n",
     ]
 
-    if not commits and not escalations and not slack_digest:
-        text_parts.append("Quiet week — no AI edits, escalations, or Slack activity.\n")
+    if not commits and not escalations and not slack_digest and not clickup_digest:
+        text_parts.append("Quiet week — no AI edits, escalations, Slack, or ClickUp activity.\n")
     else:
         text_parts.append(f"DASHBOARD CHANGES ({len(commits)} total)\n")
         if commits:
@@ -246,6 +346,23 @@ def _build_report(commits: list[dict], escalations: list[dict], slack_digest: li
                         f"    ★ Top (reactions={tm['reactions']}) {tm['user'] or '?'}: "
                         f"{tm['text'][:140].strip()}"
                     )
+
+        if clickup_digest:
+            total_closed = sum(d["completed"] for d in clickup_digest)
+            text_parts.append(f"\nCLICKUP THROUGHPUT ({total_closed} closed across {len(clickup_digest)} spaces)\n")
+            for d in clickup_digest:
+                name = d["space_name"] or d["space_id"]
+                cycle = f" · median cycle {d['cycle_time_median_days']}d" if d.get("cycle_time_median_days") is not None else ""
+                text_parts.append(
+                    f"  {name}: {d['completed']} closed · {d['created']} opened{cycle}"
+                )
+                if d.get("top_closers"):
+                    closers = ", ".join(f"{c['user']} ({c['count']})" for c in d["top_closers"])
+                    text_parts.append(f"    Top closers: {closers}")
+                ht = d.get("headline_task")
+                if ht and ht.get("name"):
+                    priority = f" [{ht['priority']}]" if ht.get("priority") else ""
+                    text_parts.append(f"    ★ {ht['name'][:140]}{priority}  {ht.get('url') or ''}")
 
     body_text = "\n".join(text_parts)
 
@@ -297,6 +414,42 @@ def _build_report(commits: list[dict], escalations: list[dict], slack_digest: li
         else:
             html_parts.append('<p style="color:#6b7280">None this week.</p>')
 
+        # ClickUp throughput section
+        if clickup_digest:
+            total_closed = sum(d["completed"] for d in clickup_digest)
+            html_parts.append(
+                f'<h3 style="color:#111827;border-bottom:2px solid #7b68ee;padding-bottom:6px">'
+                f'ClickUp Throughput ({total_closed} closed · {len(clickup_digest)} spaces)</h3>'
+            )
+            for d in clickup_digest:
+                name = d["space_name"] or d["space_id"] or "(unnamed)"
+                cycle_bit = ""
+                if d.get("cycle_time_median_days") is not None:
+                    cycle_bit = f" · median cycle {d['cycle_time_median_days']}d"
+                html_parts.append(
+                    f'<div style="margin:10px 0;padding:8px 12px;background:#f7f5ff;border-left:3px solid #7b68ee;border-radius:4px">'
+                    f'<strong style="color:#374151">{_escape(name)}</strong>'
+                    f' <span style="color:#6b7280;font-size:12px">'
+                    f'{d["completed"]} closed · {d["created"]} opened{cycle_bit}'
+                    f'</span>'
+                )
+                if d.get("top_closers"):
+                    closers_str = ", ".join(f'<strong>{_escape(c["user"])}</strong> ({c["count"]})' for c in d["top_closers"])
+                    html_parts.append(
+                        f'<div style="margin-top:4px;font-size:12px;color:#4b5563">Top closers: {closers_str}</div>'
+                    )
+                ht = d.get("headline_task")
+                if ht and ht.get("name"):
+                    priority = f' <span style="color:#b91c1c;font-weight:600">[{_escape(ht["priority"])}]</span>' if ht.get("priority") else ""
+                    url = ht.get("url")
+                    link = f'<a href="{_escape(url)}" style="color:#4338ca" target="_blank">{_escape(ht["name"][:140])}</a>' if url else _escape(ht["name"][:140])
+                    html_parts.append(
+                        f'<div style="margin-top:6px;padding:6px 8px;background:#fff;border-radius:3px;font-size:12px;color:#374151">'
+                        f'<span style="color:#6b7280">★ Notable:</span> {link}{priority}'
+                        f'</div>'
+                    )
+                html_parts.append('</div>')
+
         # Slack activity section
         if slack_digest:
             total_msgs = sum(d["messages"] for d in slack_digest)
@@ -341,7 +494,8 @@ def send_report() -> None:
     commits = _get_ai_commits(since_days=7)
     escalations = _get_escalations(since_days=7)
     slack_digest = _get_slack_digest(since_days=7)
-    body_text, body_html = _build_report(commits, escalations, slack_digest)
+    clickup_digest = _get_clickup_digest(since_days=7)
+    body_text, body_html = _build_report(commits, escalations, slack_digest, clickup_digest)
 
     now = datetime.now(BUSINESS_TZ)
     week_end = now.strftime("%b %d")

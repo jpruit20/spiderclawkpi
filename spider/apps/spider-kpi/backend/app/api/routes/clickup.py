@@ -21,26 +21,42 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import hashlib
+import hmac
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
 from app.core.config import get_settings
 from app.ingestion.connectors.clickup import (
+    _append_event,
+    _upsert_task,
     add_task_comment,
     create_task_in_list,
+    delete_webhook as delete_clickup_webhook,
     fetch_task,
     fetch_task_comments,
     list_spaces,
+    list_webhooks as list_clickup_webhooks,
+    register_webhook as register_clickup_webhook,
+    scan_tasks_for_issues,
     sync_clickup,
 )
 from app.models import (
     ClickUpTask,
+    ClickUpTasksDaily,
     DeciDecision,
     DeciDecisionLog,
+    SourceConfig,
 )
+from app.services.source_health import upsert_source_config
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -49,7 +65,94 @@ router = APIRouter(
     dependencies=[Depends(require_dashboard_session)],
 )
 
+# Public webhook router — signature is the auth, no dashboard cookie required.
+webhook_router = APIRouter(prefix="/api/webhooks/clickup", tags=["clickup_webhook"])
+
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Webhook receiver
+# ---------------------------------------------------------------------------
+
+def _get_webhook_config(db: Session) -> dict[str, Any]:
+    cfg = db.execute(select(SourceConfig).where(SourceConfig.source_name == "clickup_webhook")).scalars().first()
+    return (cfg.config_json or {}) if cfg else {}
+
+
+def _verify_clickup_signature(secret: str, body: bytes, signature: str) -> bool:
+    if not secret or not signature:
+        return False
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, signature)
+
+
+def _handle_task_event(db: Session, event_type: str, task_id: str, webhook_payload: dict[str, Any]) -> None:
+    if event_type == "taskDeleted":
+        row = db.execute(select(ClickUpTask).where(ClickUpTask.task_id == task_id)).scalars().first()
+        if row is not None:
+            row.archived = True
+            _append_event(db, task_id, "webhook.taskDeleted", datetime.now(timezone.utc),
+                          webhook_payload, {"event": event_type})
+        return
+    try:
+        task = fetch_task(task_id)
+    except Exception:
+        logger.warning("clickup webhook: failed to fetch task %s", task_id)
+        return
+    space = task.get("space") or {}
+    list_meta = task.get("list") or {}
+    folder = task.get("folder") or {}
+    list_meta_with_folder = {
+        **list_meta,
+        "_folder_id": folder.get("id") if folder else None,
+        "_folder_name": folder.get("name") if folder else None,
+    }
+    row, inserted, status_changed = _upsert_task(db, task, space, list_meta_with_folder)
+    _append_event(db, row.task_id, f"webhook.{event_type}",
+                  row.date_updated or datetime.now(timezone.utc),
+                  webhook_payload, {
+                      "status": row.status, "priority": row.priority,
+                      "list_id": row.list_id, "space_id": row.space_id,
+                      "inserted": inserted, "status_changed": status_changed,
+                  })
+    try:
+        # Bounded scan — last hour — to pick up this task's new signal state.
+        scan_tasks_for_issues(db, since=datetime.now(timezone.utc) - timedelta(hours=1))
+        from app.compute.deci_autodraft import autodraft_from_signals
+        autodraft_from_signals(db, since=datetime.now(timezone.utc) - timedelta(hours=1))
+    except Exception:
+        logger.exception("clickup webhook: scanner/autodraft failed (non-fatal)")
+
+
+@webhook_router.post("/events")
+async def clickup_events(request: Request, db: Session = Depends(db_session)) -> Response:
+    body = await request.body()
+    signature = request.headers.get("X-Signature", "")
+
+    cfg = _get_webhook_config(db)
+    secret = cfg.get("webhook_secret") or ""
+    if not _verify_clickup_signature(secret, body, signature):
+        raise HTTPException(status_code=401, detail="Invalid ClickUp signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    event_type = payload.get("event")
+    task_id = payload.get("task_id")
+
+    try:
+        if task_id and event_type and event_type.startswith("task"):
+            _handle_task_event(db, event_type, task_id, payload)
+        else:
+            logger.info("clickup webhook non-task event: %s", event_type)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("clickup webhook processing failed: %s", event_type)
+    return Response(status_code=200)
 
 
 def _task_to_dict(t: ClickUpTask) -> dict[str, Any]:
@@ -415,3 +518,237 @@ def deci_list_clickup_comments(decision_id: str, db: Session = Depends(db_sessio
 @router.post("/sync-now")
 def sync_now(full: bool = False, db: Session = Depends(db_session)) -> dict[str, Any]:
     return sync_clickup(db, full=full)
+
+
+# ---------------------------------------------------------------------------
+# Webhook registration (one-time setup; idempotent)
+# ---------------------------------------------------------------------------
+
+class WebhookRegisterIn(BaseModel):
+    endpoint_url: str  # public HTTPS URL of /api/webhooks/clickup/events
+
+
+@router.get("/webhook/status")
+def webhook_status(db: Session = Depends(db_session)) -> dict[str, Any]:
+    cfg = _get_webhook_config(db)
+    return {
+        "registered": bool(cfg.get("webhook_id")),
+        "webhook_id": cfg.get("webhook_id"),
+        "endpoint_url": cfg.get("endpoint_url"),
+        "configured_at": cfg.get("configured_at"),
+        "events": cfg.get("events") or [],
+    }
+
+
+@router.post("/webhook/register")
+def webhook_register(body: WebhookRegisterIn, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Create a ClickUp webhook subscription pointing at our public endpoint.
+    Stores the returned secret in ``source_configs['clickup_webhook']`` so the
+    receiver can verify incoming payloads.
+
+    Idempotent: if a webhook already exists on the ClickUp side at this URL,
+    we leave it and only re-store the secret from the fresh call.
+    """
+    if not (settings.clickup_api_token and settings.clickup_team_id):
+        raise HTTPException(status_code=503, detail="ClickUp not configured")
+
+    existing_cfg = _get_webhook_config(db)
+    existing_id = existing_cfg.get("webhook_id")
+
+    # If ClickUp already has a webhook at this URL (from a prior register),
+    # surface that rather than duplicating.
+    try:
+        hooks = list_clickup_webhooks()
+    except Exception:
+        hooks = []
+    duplicate = next((h for h in hooks if h.get("endpoint") == body.endpoint_url), None)
+
+    if duplicate and existing_id == duplicate.get("id"):
+        return {
+            "ok": True,
+            "status": "already_registered",
+            "webhook_id": existing_id,
+            "endpoint_url": body.endpoint_url,
+            "events": existing_cfg.get("events") or [],
+        }
+
+    # Create fresh webhook (ClickUp returns a NEW secret each create).
+    resp = register_clickup_webhook(body.endpoint_url)
+    webhook = resp.get("webhook") or {}
+    wid = str(webhook.get("id") or "")
+    secret = webhook.get("secret")
+    if not wid or not secret:
+        raise HTTPException(status_code=502, detail=f"ClickUp webhook create returned unexpected shape: {resp}")
+
+    upsert_source_config(
+        db, "clickup_webhook",
+        configured=True,
+        sync_mode="events",
+        config_json={
+            "webhook_id": wid,
+            "webhook_secret": secret,
+            "endpoint_url": body.endpoint_url,
+            "events": webhook.get("events") or [],
+            "configured_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    db.commit()
+
+    # Best-effort cleanup: if we had a stale webhook_id in our config and it
+    # isn't the one we just created, try to remove it on the ClickUp side.
+    if existing_id and existing_id != wid:
+        try:
+            delete_clickup_webhook(existing_id)
+        except Exception:
+            logger.exception("failed to delete stale ClickUp webhook %s", existing_id)
+
+    return {
+        "ok": True,
+        "status": "registered",
+        "webhook_id": wid,
+        "endpoint_url": body.endpoint_url,
+        "events": webhook.get("events") or [],
+    }
+
+
+@router.post("/webhook/unregister")
+def webhook_unregister(db: Session = Depends(db_session)) -> dict[str, Any]:
+    cfg = _get_webhook_config(db)
+    wid = cfg.get("webhook_id")
+    if not wid:
+        return {"ok": True, "status": "not_registered"}
+    ok = False
+    try:
+        ok = delete_clickup_webhook(wid)
+    except Exception:
+        logger.exception("delete webhook failed")
+    upsert_source_config(
+        db, "clickup_webhook",
+        configured=False,
+        sync_mode="events",
+        config_json={},
+    )
+    db.commit()
+    return {"ok": True, "status": "unregistered" if ok else "delete_failed", "webhook_id": wid}
+
+
+# ---------------------------------------------------------------------------
+# Velocity — throughput + cycle time per space
+# ---------------------------------------------------------------------------
+
+@router.get("/velocity")
+def velocity(space_id: Optional[str] = None, days: int = 30, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Team throughput + cycle time derived from clickup_tasks_daily + clickup_tasks.
+
+    - ``throughput``: closed-per-day over the window, sparkline-shaped
+    - ``week_over_week``: this-7-days vs prior-7-days delta for closed count
+    - ``cycle_time_median_days``: p50 of (date_done - date_created) for
+       tasks closed in the window
+    - ``top_closers``: top 5 usernames who closed the most in the window
+    """
+    days = max(1, min(days, 180))
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+
+    daily_stmt = select(ClickUpTasksDaily).where(
+        ClickUpTasksDaily.business_date >= start_date,
+        ClickUpTasksDaily.business_date <= today,
+    )
+    if space_id:
+        daily_stmt = daily_stmt.where(ClickUpTasksDaily.space_id == space_id)
+    daily_stmt = daily_stmt.order_by(ClickUpTasksDaily.business_date)
+    daily_rows = db.execute(daily_stmt).scalars().all()
+
+    # Daily throughput — sum across spaces if no filter
+    per_day: dict[str, dict[str, int]] = {}
+    for r in daily_rows:
+        k = r.business_date.isoformat()
+        bucket = per_day.setdefault(k, {"created": 0, "completed": 0, "open_pit": 0, "overdue_pit": 0})
+        bucket["created"] += int(r.tasks_created or 0)
+        bucket["completed"] += int(r.tasks_completed or 0)
+        bucket["open_pit"] = int(r.tasks_open or 0)  # last-write-wins is fine for point-in-time fields when unfiltered
+        bucket["overdue_pit"] = int(r.tasks_overdue or 0)
+    throughput = [
+        {"date": d, **per_day[d]}
+        for d in sorted(per_day.keys())
+    ]
+
+    # Week over week — closed count in last 7 days vs prior 7
+    cutoff_this = today - timedelta(days=7)
+    cutoff_prev = today - timedelta(days=14)
+    closed_last_7 = sum(b["completed"] for d, b in per_day.items() if d >= cutoff_this.isoformat())
+    closed_prior_7 = sum(b["completed"] for d, b in per_day.items() if cutoff_prev.isoformat() <= d < cutoff_this.isoformat())
+    wow_delta = closed_last_7 - closed_prior_7
+    wow_pct = (wow_delta / closed_prior_7 * 100.0) if closed_prior_7 else None
+
+    # Cycle time — tasks that completed during the window
+    win_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    tasks_stmt = select(ClickUpTask).where(
+        ClickUpTask.date_done.isnot(None),
+        ClickUpTask.date_done >= win_start,
+        ClickUpTask.date_created.isnot(None),
+    )
+    if space_id:
+        tasks_stmt = tasks_stmt.where(ClickUpTask.space_id == space_id)
+    tasks = db.execute(tasks_stmt).scalars().all()
+    durations = []
+    for t in tasks:
+        try:
+            d = (t.date_done - t.date_created).total_seconds()
+            if d > 0:
+                durations.append(d)
+        except Exception:
+            pass
+    median_sec = None
+    p90_sec = None
+    if durations:
+        s = sorted(durations)
+        median_sec = s[len(s) // 2]
+        p90_sec = s[int(len(s) * 0.9) - 1] if len(s) >= 10 else None
+
+    # Top closers — by assignee username
+    closer_counter: dict[str, int] = {}
+    for t in tasks:
+        for a in (t.assignees_json or []):
+            name = (a or {}).get("username") or (a or {}).get("email")
+            if name:
+                closer_counter[name] = closer_counter.get(name, 0) + 1
+    top_closers = sorted(closer_counter.items(), key=lambda kv: kv[1], reverse=True)[:5]
+
+    # Current open/overdue — computed directly from clickup_tasks for accuracy
+    now_dt = datetime.now(timezone.utc)
+    open_stmt = select(func.count(ClickUpTask.id)).where(
+        or_(ClickUpTask.status_type.is_(None), ClickUpTask.status_type != "closed"),
+        ClickUpTask.archived == False,  # noqa: E712
+    )
+    overdue_stmt = open_stmt.where(
+        ClickUpTask.due_date.isnot(None),
+        ClickUpTask.due_date < now_dt,
+    )
+    if space_id:
+        open_stmt = open_stmt.where(ClickUpTask.space_id == space_id)
+        overdue_stmt = overdue_stmt.where(ClickUpTask.space_id == space_id)
+    open_count = int(db.execute(open_stmt).scalar() or 0)
+    overdue_count = int(db.execute(overdue_stmt).scalar() or 0)
+
+    return {
+        "window": {"start": start_date.isoformat(), "end": today.isoformat(), "days": days},
+        "space_id": space_id,
+        "throughput": throughput,
+        "totals": {
+            "closed_last_7": closed_last_7,
+            "closed_prior_7": closed_prior_7,
+            "wow_delta": wow_delta,
+            "wow_pct": wow_pct,
+            "open_now": open_count,
+            "overdue_now": overdue_count,
+        },
+        "cycle_time": {
+            "median_seconds": median_sec,
+            "median_days": (median_sec / 86400.0) if median_sec else None,
+            "p90_seconds": p90_sec,
+            "p90_days": (p90_sec / 86400.0) if p90_sec else None,
+            "sample_size": len(durations),
+        },
+        "top_closers": [{"user": u, "completed": c} for u, c in top_closers],
+    }

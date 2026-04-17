@@ -1,5 +1,6 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 
 export function OperationsDivision() {
@@ -42,6 +43,10 @@ export function OperationsDivision() {
           title="ClickUp tasks — Operations"
           subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize). A real ops feed will supplement, not replace, this."
           defaultFilter={{ limit: 30 }}
+        />
+        <ClickUpVelocityCard
+          title="Team velocity — all ClickUp"
+          subtitle="Throughput + cycle time across every space until an Ops space is stood up."
         />
         <SlackPulseCard
           title="Slack pulse — Inventory / Wholesale"
