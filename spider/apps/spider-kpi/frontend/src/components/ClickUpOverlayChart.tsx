@@ -39,6 +39,10 @@ type Props = {
   /** Color for reference lines when an event color isn't priority-derived. */
   eventColor?: string
   height?: number
+  /** Optional horizontal benchmark line (e.g. cook-success median). */
+  benchmarkValue?: number
+  benchmarkLabel?: string
+  benchmarkColor?: string
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -62,6 +66,9 @@ export function ClickUpOverlayChart({
   clickupFilter,
   eventColor: fallbackEventColor = 'var(--orange)',
   height = 180,
+  benchmarkValue,
+  benchmarkLabel,
+  benchmarkColor = 'rgba(148, 163, 184, 0.55)',
 }: Props) {
   const [events, setEvents] = useState<ClickUpTimelineEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -134,6 +141,15 @@ export function ClickUpOverlayChart({
                   strokeWidth={1}
                 />
               ))}
+              {benchmarkValue != null && (
+                <ReferenceLine
+                  y={benchmarkValue}
+                  stroke={benchmarkColor}
+                  strokeDasharray="4 3"
+                  strokeWidth={1}
+                  label={benchmarkLabel ? { value: benchmarkLabel, position: 'insideTopLeft', fill: benchmarkColor, fontSize: 10 } : undefined}
+                />
+              )}
               <Line
                 type="monotone"
                 dataKey="value"

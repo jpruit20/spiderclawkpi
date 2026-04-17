@@ -15,8 +15,18 @@ import { ApiError, api } from '../lib/api'
 import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
 import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
 import {
-  BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart, PieChart, Pie, Cell,
+  BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart, PieChart, Pie, Cell, ReferenceLine,
 } from 'recharts'
+
+/* ------------------------------------------------------------------ */
+/*  Analysis-derived benchmarks (from first comprehensive report)     */
+/* ------------------------------------------------------------------ */
+const BENCHMARKS = {
+  COOK_SUCCESS_MEDIAN_PCT: 69,           // 68-70% across 26 months
+  ERROR_RATE_HEALTHY_PCT: 1.3,           // ≤1.3% = healthy; 1.4-1.7% investigate; ≥1.8% incident
+  ERROR_RATE_INCIDENT_PCT: 1.8,
+  LOW_N_SESSION_FLOOR: 50,               // suppress daily cook_success when n < this
+} as const
 
 /* ------------------------------------------------------------------ */
 /*  Sub-view navigation                                               */
@@ -91,6 +101,40 @@ function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
   }
   const raw = Object.entries(totals).sort(([, a], [, b]) => b - a).slice(0, 8).map(([model, events]) => ({ model, events }))
   return mergeModelData(raw)
+}
+
+/** Daily per-model event counts, shaped for a Recharts stacked Area.
+ *  Each row has {date, total, <displayModelName>: N, ...}. Only keeps
+ *  the top-6 models by total events across the window. */
+function buildModelStackedSeries(historyRows: TelemetryHistoryDailyRow[]): { rows: Array<Record<string, number | string>>; keys: string[] } {
+  if (!historyRows.length) return { rows: [], keys: [] }
+  const totals: Record<string, number> = {}
+  for (const row of historyRows) {
+    for (const [raw, count] of Object.entries(row.model_distribution || {})) {
+      const name = displayModelName(raw)
+      totals[name] = (totals[name] || 0) + (count as number)
+    }
+  }
+  const keys = Object.entries(totals)
+    .filter(([, v]) => v > 0)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 6)
+    .map(([k]) => k)
+  const rows = historyRows.map(row => {
+    const perModel: Record<string, number> = {}
+    for (const [raw, count] of Object.entries(row.model_distribution || {})) {
+      const name = displayModelName(raw)
+      if (!keys.includes(name)) continue
+      perModel[name] = (perModel[name] || 0) + (count as number)
+    }
+    return {
+      date: row.business_date.slice(5),
+      business_date: row.business_date,
+      total: row.total_events,
+      ...Object.fromEntries(keys.map(k => [k, perModel[k] || 0])),
+    }
+  })
+  return { rows, keys }
 }
 
 function buildFirmwareBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
@@ -391,6 +435,19 @@ export function ProductEngineeringDivision() {
   const peakHourData = useMemo(() => buildPeakHours(rangedHistory), [rangedHistory])
   const modelData = useMemo(() => buildModelBreakdown(rangedHistory), [rangedHistory])
   const firmwareData = useMemo(() => buildFirmwareBreakdown(rangedHistory), [rangedHistory])
+  const modelStacked = useMemo(() => buildModelStackedSeries(rangedHistory), [rangedHistory])
+
+  // Partial-day detection: the last row in the window is "partial" if its
+  // business_date equals today in ET. We don't yet have all of today's
+  // telemetry, so it can mislead trends (e.g. showing 11 active devices
+  // at noon when yesterday saw 458).
+  const partialLatest = useMemo(() => {
+    if (!rangedHistory.length) return null
+    const last = rangedHistory[rangedHistory.length - 1]
+    const todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    const todayISO = `${todayET.getFullYear()}-${String(todayET.getMonth() + 1).padStart(2, '0')}-${String(todayET.getDate()).padStart(2, '0')}`
+    return last.business_date === todayISO ? last : null
+  }, [rangedHistory])
 
   const historyStats = useMemo(() => {
     if (!rangedHistory.length) return null
@@ -698,10 +755,18 @@ export function ProductEngineeringDivision() {
                         <Area yAxisId="left" type="monotone" name="Active devices" dataKey="active_devices" fill="rgba(110,168,255,0.15)" stroke="var(--blue)" strokeWidth={2} />
                         <Line yAxisId="left" type="monotone" name="Engaged (cooking)" dataKey="engaged_devices" stroke="var(--green)" strokeWidth={2} dot={false} />
                         <Line yAxisId="right" type="monotone" name="Error rate %" dataKey="error_rate" stroke="var(--red)" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+                        {/* Benchmark lines derived from the 28-month analysis. */}
+                        <ReferenceLine yAxisId="right" y={BENCHMARKS.ERROR_RATE_HEALTHY_PCT} stroke="rgba(239,68,68,0.35)" strokeDasharray="2 4" label={{ value: `≤${BENCHMARKS.ERROR_RATE_HEALTHY_PCT}% healthy`, position: 'insideTopRight', fill: 'rgba(239,68,68,0.7)', fontSize: 10 }} />
+                        <ReferenceLine yAxisId="right" y={BENCHMARKS.ERROR_RATE_INCIDENT_PCT} stroke="rgba(239,68,68,0.55)" strokeDasharray="2 4" label={{ value: `≥${BENCHMARKS.ERROR_RATE_INCIDENT_PCT}% incident`, position: 'insideBottomRight', fill: 'rgba(239,68,68,0.8)', fontSize: 10 }} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 ) : <div className="state-message">No historical daily data available for this date range. Run the S3 import to populate fleet history.</div>}
+                {partialLatest && (
+                  <div style={{ marginTop: 6, padding: '6px 10px', fontSize: 11, color: 'var(--muted)', background: 'rgba(245,158,11,0.08)', borderLeft: '3px solid var(--orange)', borderRadius: 4 }}>
+                    <strong style={{ color: 'var(--orange)' }}>⚠ Today ({partialLatest.business_date}) is a partial day.</strong> Only {fmtInt(partialLatest.active_devices)} device{partialLatest.active_devices === 1 ? '' : 's'} have reported shadow state so far; expect this to grow by end of day. Ignore if this is far below yesterday.
+                  </div>
+                )}
                 {historyStats ? (
                   <div className="venom-kpi-strip" style={{ marginTop: 12 }}>
                     <div className="venom-kpi-card">
@@ -751,6 +816,47 @@ export function ProductEngineeringDivision() {
                   </div>
                 ) : null}
               </section>
+
+              {/* Model Mix Over Time — surfaces the Huntsman ramp that was
+                  invisible on the active-devices chart (report finding #3). */}
+              {modelStacked.rows.length > 0 && modelStacked.keys.length > 1 && (
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <div>
+                      <strong>Fleet Composition — Daily Events by Model</strong>
+                      <p className="venom-chart-sub">Stacked event volume per grill model across the selected range. Ramps and SKU shifts show here first.</p>
+                    </div>
+                    <span className="venom-panel-hint">{modelStacked.keys.length} models shown</span>
+                  </div>
+                  <div className="chart-wrap">
+                    <ResponsiveContainer width="100%" height={300}>
+                      <ComposedChart data={modelStacked.rows} stackOffset="none">
+                        <CartesianGrid stroke="rgba(255,255,255,0.08)" />
+                        <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
+                        <YAxis stroke="#9fb0d4" tickFormatter={(v: number) => v >= 1_000_000 ? `${(v/1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v/1_000).toFixed(0)}k` : String(v)} />
+                        <Tooltip formatter={(v: number) => v.toLocaleString()} />
+                        <Legend />
+                        {modelStacked.keys.map((name, i) => (
+                          <Area
+                            key={name}
+                            type="monotone"
+                            dataKey={name}
+                            stackId="1"
+                            name={name}
+                            fill={CHART_COLORS[i % CHART_COLORS.length]}
+                            stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                            fillOpacity={0.55}
+                            strokeWidth={1}
+                          />
+                        ))}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                    Derived from <code>telemetry_history_daily.model_distribution</code>. Kettle22 / W:K:22:1:V / kettle_22 are merged under one display name.
+                  </p>
+                </section>
+              )}
 
               {/* Cook Type Analysis */}
               <section className="card">
@@ -1198,12 +1304,14 @@ export function ProductEngineeringDivision() {
                   Vertical markers = Category=Firmware ClickUp task completions. */}
               <ClickUpOverlayChart
                 title="Firmware releases ↔ Cook success rate"
-                subtitle="Daily cook-success rate with Category=Firmware ClickUp task completions as vertical markers. Precise field-match — did a firmware release move the success line?"
+                subtitle={`Daily cook-success rate with Category=Firmware ClickUp task completions as vertical markers. Days with fewer than ${BENCHMARKS.LOW_N_SESSION_FLOOR} sessions are suppressed (noise, not signal). Baseline = 69% median.`}
                 primarySeries={rangedHistory.map(r => ({
                   date: r.business_date,
-                  value: (r.session_count || 0) > 0
+                  // Suppress low-n days: a daily cook-success of 43% on 39
+                  // sessions is noise; null renders as a gap in the line.
+                  value: (r.session_count || 0) >= BENCHMARKS.LOW_N_SESSION_FLOOR
                     ? Math.round(((r.successful_sessions || 0) / (r.session_count || 1)) * 10000) / 100
-                    : 0,
+                    : (null as unknown as number),
                 }))}
                 primaryLabel="Cook success %"
                 primaryColor="var(--green)"
@@ -1212,6 +1320,8 @@ export function ProductEngineeringDivision() {
                   event_types: 'completed',
                   days: 90,
                 }}
+                benchmarkValue={BENCHMARKS.COOK_SUCCESS_MEDIAN_PCT}
+                benchmarkLabel={`${BENCHMARKS.COOK_SUCCESS_MEDIAN_PCT}% — 28-month median`}
               />
 
               {/* Slack pulse — product-dev channel */}
