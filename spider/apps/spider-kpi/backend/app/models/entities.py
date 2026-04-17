@@ -576,6 +576,32 @@ class SlackActivityDaily(TimestampMixin, Base):
     top_users_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
 
 
+class NotificationSend(TimestampMixin, Base):
+    """Log of every push alert (Slack DM, email) we've sent.
+
+    Primary purpose is **deduplication**: before sending an alert about
+    subject (signal_id, draft_id, etc.), we check whether we've already
+    alerted this recipient about this subject. Secondary purpose is **rate
+    limiting**: count recent sends per recipient to enforce a ceiling.
+    """
+    __tablename__ = "notification_sends"
+    __table_args__ = (
+        Index("ix_notification_sends_recipient_sent", "recipient", "sent_at"),
+        Index("ix_notification_sends_dedup", "channel", "subject_type", "subject_id", "recipient"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)  # 'slack' | 'email'
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)  # slack user_id or email
+    subject_type: Mapped[str] = mapped_column(String(64), nullable=False)  # e.g. 'issue_signal', 'morning_digest'
+    subject_id: Mapped[Optional[str]] = mapped_column(String(128))  # signal id, draft id, or date for digests
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class TelemetryStreamEvent(TimestampMixin, Base):
     __tablename__ = "telemetry_stream_events"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_telemetry_stream_events_source_event_id"),)

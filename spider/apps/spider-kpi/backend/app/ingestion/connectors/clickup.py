@@ -659,6 +659,12 @@ def scan_tasks_for_issues(db: Session, since: datetime | None = None) -> int:
                 logger.exception("AI classification threw (non-fatal)")
 
             db.add(new_signal)
+            db.flush()
+            try:
+                from app.services.push_alerts import push_critical_signal
+                push_critical_signal(db, new_signal)
+            except Exception:
+                logger.exception("push_critical_signal threw (non-fatal)")
             inserted += 1
             break  # one signal per task is enough
 

@@ -590,6 +590,13 @@ def scan_messages_for_issues(db: Session, since: datetime | None = None, pattern
                 logger.exception("AI classification threw (non-fatal)")
 
             db.add(new_signal)
+            db.flush()  # so new_signal.id is populated for push
+            # Real-time push: DM on critical severity (AI can veto).
+            try:
+                from app.services.push_alerts import push_critical_signal
+                push_critical_signal(db, new_signal)
+            except Exception:
+                logger.exception("push_critical_signal threw (non-fatal)")
             inserted += 1
             break  # one signal per message is enough
 

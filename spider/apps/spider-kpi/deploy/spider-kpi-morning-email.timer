@@ -1,0 +1,12 @@
+[Unit]
+Description=Send Spider KPI daily morning brief at 7am ET
+Requires=spider-kpi-morning-email.service
+
+[Timer]
+# 7am America/New_York — systemd handles DST automatically via OnCalendar + Timezone-aware calendar spec
+OnCalendar=*-*-* 07:00:00 America/New_York
+Persistent=true
+Unit=spider-kpi-morning-email.service
+
+[Install]
+WantedBy=timers.target

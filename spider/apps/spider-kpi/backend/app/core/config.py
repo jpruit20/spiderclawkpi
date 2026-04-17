@@ -164,6 +164,14 @@ class Settings(BaseSettings):
     # Slack — Spider Grills workspace listener.
     # Bot token + signing secret come from https://api.slack.com/apps (the Spider KPI Bot app).
     # Channels are auto-discovered; no channel list needs to live here.
+    # Push alerts — real-time Slack DMs + daily morning email.
+    push_alerts_enabled: bool = True
+    push_alerts_recipient_email: str = "joseph@spidergrills.com"
+    push_alerts_slack_recipient_emails: str = "joseph@spidergrills.com"  # csv
+    push_alerts_max_per_hour: int = 8
+    push_alerts_quiet_start_hour: int = 22  # 22:00 ET inclusive
+    push_alerts_quiet_end_hour: int = 7     # 07:00 ET exclusive
+
     slack_bot_token: Optional[str] = None
     slack_signing_secret: Optional[str] = None
     slack_app_id: Optional[str] = None

@@ -1,0 +1,12 @@
+[Unit]
+Description=Spider KPI daily morning brief email
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/daily_morning_email.py
+StandardOutput=append:/var/log/spider-kpi-morning-email.log
+StandardError=append:/var/log/spider-kpi-morning-email.log
