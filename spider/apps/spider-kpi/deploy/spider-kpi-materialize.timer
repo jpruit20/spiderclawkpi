@@ -1,9 +1,11 @@
 [Unit]
-Description=Run Spider KPI daily materializer at 03:00 UTC
+Description=Materialize yesterday's telemetry_history_daily from stream events at 4am ET (before anomaly detection at 5:30am)
+Requires=spider-kpi-materialize.service
 
 [Timer]
-OnCalendar=*-*-* 03:00:00
+OnCalendar=*-*-* 04:00:00 America/New_York
 Persistent=true
+Unit=spider-kpi-materialize.service
 
 [Install]
 WantedBy=timers.target

@@ -1,11 +1,16 @@
 [Unit]
 Description=Spider KPI nightly daily telemetry materializer
-After=spider-kpi.service
+After=network-online.target spider-kpi.service
+OnFailure=spider-kpi-job-failure@%n.service
 
 [Service]
 Type=oneshot
+User=root
 WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
-ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python scripts/materialize_daily.py --days-back 3
-User=spider
-Group=spider
 EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+# --days-back 14 self-heals gaps up to two weeks; the window is capped
+# by the TTL of telemetry_stream_events so anything older has to be
+# caught by the S3 backfill path.
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/materialize_daily.py --days-back 14
+StandardOutput=append:/var/log/spider-kpi-materialize.log
+StandardError=append:/var/log/spider-kpi-materialize.log
