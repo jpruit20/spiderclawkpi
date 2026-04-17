@@ -1,0 +1,11 @@
+[Unit]
+Description=Score yesterday's telemetry anomalies at 5:30am ET (between daily insights at 6am and morning email at 7am)
+Requires=spider-kpi-telemetry-anomalies.service
+
+[Timer]
+OnCalendar=*-*-* 05:30:00 America/New_York
+Persistent=true
+Unit=spider-kpi-telemetry-anomalies.service
+
+[Install]
+WantedBy=timers.target

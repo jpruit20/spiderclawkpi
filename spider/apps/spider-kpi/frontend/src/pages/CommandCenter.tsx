@@ -79,6 +79,33 @@ export function CommandCenter() {
         </div>
       </section>
 
+      {data.anomalies && data.anomalies.length > 0 && (
+        <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
+          <div className="venom-panel-head">
+            <strong>Telemetry anomalies — trailing-14d baseline ({data.anomalies.length})</strong>
+            <span className="venom-panel-hint">Modified z-score (median + MAD)</span>
+          </div>
+          <div className="stack-list compact">
+            {data.anomalies.map(a => {
+              const statusClass = a.severity === 'critical' ? 'status-bad' : a.severity === 'warn' ? 'status-warn' : 'status-neutral'
+              const badgeClass = a.severity === 'critical' ? 'badge-bad' : a.severity === 'warn' ? 'badge-warn' : 'badge-muted'
+              return (
+                <div key={a.id} className={`list-item ${statusClass}`}>
+                  <div className="item-head">
+                    <strong style={{ fontSize: 12 }}>{a.metric.replace(/_/g, ' ')} · {a.direction} on {a.business_date}</strong>
+                    <div className="inline-badges">
+                      <span className={`badge ${badgeClass}`} style={{ fontSize: 10 }}>{a.severity}</span>
+                      <span className="badge badge-muted" style={{ fontSize: 10 }}>z={a.modified_z_score >= 0 ? '+' : ''}{a.modified_z_score.toFixed(1)}</span>
+                    </div>
+                  </div>
+                  {a.summary && <p style={{ fontSize: 11, margin: '4px 0 0' }}>{a.summary}</p>}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       {data.insights && data.insights.length > 0 && (
         <section className="card" style={{ borderLeft: '3px solid var(--purple, #b88bff)' }}>
           <div className="venom-panel-head">

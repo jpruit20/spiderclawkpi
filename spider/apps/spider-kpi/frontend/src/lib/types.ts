@@ -1080,6 +1080,18 @@ export interface MorningSlackHot {
   ts_dt: string | null
 }
 
+export interface TelemetryAnomaly {
+  id: number
+  business_date: string
+  metric: string
+  value: number
+  baseline_median: number
+  modified_z_score: number
+  direction: 'high' | 'low'
+  severity: 'info' | 'warn' | 'critical'
+  summary: string | null
+}
+
 export interface AIInsight {
   id: number
   business_date: string
@@ -1106,6 +1118,8 @@ export interface MorningBriefResponse {
     clickup_wow_delta: number
     insights_count: number
     insights_high_urgency: number
+    anomalies_count: number
+    anomalies_critical: number
   }
   drafts: MorningDraft[]
   critical_signals: MorningCriticalSignal[]
@@ -1120,6 +1134,7 @@ export interface MorningBriefResponse {
   compliance: MorningCompliance | null
   slack_hot: MorningSlackHot | null
   insights: AIInsight[]
+  anomalies: TelemetryAnomaly[]
 }
 
 export interface InsightsListResponse {

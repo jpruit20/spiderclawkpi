@@ -24,6 +24,7 @@ from app.models import (
     KPIDaily,
     SlackMessage,
     SlackUser,
+    TelemetryAnomaly,
     TelemetryHistoryDaily,
     TelemetryReport,
 )
@@ -234,6 +235,28 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
             "ts_dt": hot_msg.ts_dt.isoformat() if hot_msg.ts_dt else None,
         }
 
+    # --- Telemetry anomalies (trailing-14d median/MAD z-score) -----------
+    anomaly_rows = db.execute(
+        select(TelemetryAnomaly)
+        .where(TelemetryAnomaly.status != "dismissed")
+        .order_by(TelemetryAnomaly.business_date.desc(), TelemetryAnomaly.severity.desc(), TelemetryAnomaly.id.desc())
+        .limit(12)
+    ).scalars().all()
+    anomalies_payload = [
+        {
+            "id": a.id,
+            "business_date": a.business_date.isoformat(),
+            "metric": a.metric,
+            "value": float(a.value),
+            "baseline_median": float(a.baseline_median),
+            "modified_z_score": float(a.modified_z_score),
+            "direction": a.direction,
+            "severity": a.severity,
+            "summary": a.summary,
+        }
+        for a in anomaly_rows[:6]
+    ]
+
     # --- AI Insights (latest cross-source observations) ------------------
     insights_rows = db.execute(
         select(AIInsight)
@@ -271,6 +294,8 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "clickup_wow_delta": clickup_velocity["wow_delta"],
         "insights_count": len(insights_payload),
         "insights_high_urgency": sum(1 for i in insights_payload if i["urgency"] == "high"),
+        "anomalies_count": len(anomalies_payload),
+        "anomalies_critical": sum(1 for a in anomalies_payload if a["severity"] == "critical"),
     }
 
     return {
@@ -286,6 +311,7 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "compliance": compliance_payload,
         "slack_hot": slack_hot,
         "insights": insights_payload,
+        "anomalies": anomalies_payload,
     }
 
 

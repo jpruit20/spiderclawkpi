@@ -603,6 +603,36 @@ class AIInsight(TimestampMixin, Base):
     dismissed_reason: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class TelemetryAnomaly(TimestampMixin, Base):
+    """One row per (business_date, metric) when the daily value deviates
+    significantly from its trailing-14-day baseline.
+
+    Uses a *modified* z-score (median + MAD), not mean/stdev — fleet
+    telemetry is heavy-tailed and non-normal (holiday spikes, weekend
+    rhythm, partial days). Rows are idempotent on (business_date, metric).
+    """
+    __tablename__ = "telemetry_anomalies"
+    __table_args__ = (
+        UniqueConstraint("business_date", "metric", name="uq_telemetry_anomalies_date_metric"),
+        Index("ix_telemetry_anomalies_date", "business_date"),
+        Index("ix_telemetry_anomalies_severity", "severity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Observed value for the day + baseline stats over the trailing 14 days.
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    baseline_median: Mapped[float] = mapped_column(Float, nullable=False)
+    baseline_mad: Mapped[float] = mapped_column(Float, nullable=False)
+    modified_z_score: Mapped[float] = mapped_column(Float, nullable=False)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)  # 'high' | 'low'
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # 'info' | 'warn' | 'critical'
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    summary: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="new", nullable=False)  # new | acknowledged | dismissed
+
+
 class TelemetryReport(TimestampMixin, Base):
     """Comprehensive AI-generated telemetry analysis.
 
