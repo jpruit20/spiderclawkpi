@@ -1003,6 +1003,107 @@ export interface AppSideOverlap {
   users_only_app_backend?: number
 }
 
+/* Executive morning brief -------------------------------------------------- */
+
+export interface MorningDraft {
+  id: string
+  title: string
+  priority: string
+  department: string | null
+  origin_signal_type: string | null
+  auto_drafted_at: string | null
+}
+
+export interface MorningCriticalSignal {
+  id: number
+  signal_type: string
+  source: string
+  title: string | null
+  summary: string | null
+  created_at: string | null
+  metadata: {
+    channel_id?: string | null
+    task_id?: string | null
+    url?: string | null
+  }
+}
+
+export interface MorningStaleTask {
+  task_id: string
+  name: string | null
+  url: string | null
+  priority: string | null
+  space_name: string | null
+  list_name: string | null
+  due_date: string | null
+  days_overdue: number
+  assignees: (string | null)[]
+}
+
+export interface MorningRevenuePoint {
+  date: string
+  revenue: number
+}
+
+export interface MorningRevenue {
+  trailing_7: number
+  prior_7: number
+  wow_delta: number
+  wow_pct: number | null
+  sparkline: MorningRevenuePoint[]
+}
+
+export interface MorningTelemetry {
+  business_date: string
+  active_devices: number
+  engaged_devices: number
+  total_events: number
+  error_events: number
+  error_rate: number | null
+  cook_success_rate: number | null
+  session_count: number | null
+}
+
+export interface MorningCompliance {
+  taxonomy_configured: boolean
+  rate_closed_in_window: number | null
+  rate_open_now: number | null
+  wow_delta_rate: number | null
+  total_closed_in_window: number
+}
+
+export interface MorningSlackHot {
+  channel_id: string
+  user_name: string | null
+  reactions: number
+  text: string
+  ts_dt: string | null
+}
+
+export interface MorningBriefResponse {
+  generated_at: string
+  business_date: string
+  headline: {
+    drafts_awaiting_review: number
+    critical_signals_24h: number
+    overdue_urgent_or_high: number
+    revenue_wow_pct: number | null
+    clickup_wow_delta: number
+  }
+  drafts: MorningDraft[]
+  critical_signals: MorningCriticalSignal[]
+  stale_tasks: MorningStaleTask[]
+  revenue: MorningRevenue
+  clickup_velocity: {
+    closed_last_7: number
+    closed_prior_7: number
+    wow_delta: number
+  }
+  telemetry: MorningTelemetry | null
+  compliance: MorningCompliance | null
+  slack_hot: MorningSlackHot | null
+}
+
 /* Slack ------------------------------------------------------------------ */
 
 export interface SlackChannelSummary {

@@ -13,6 +13,7 @@ import type {
   DeciClickUpLink,
   DeciDraft,
   DeciDraftsResponse,
+  MorningBriefResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
   SlackPulseResponse,
@@ -421,6 +422,10 @@ export const api = {
     fetch(`${API_BASE}/api/clickup/webhook/unregister`, {
       method: 'POST', credentials: 'include',
     }).then(r => r.json()),
+  // Executive ------------------------------------------------------------
+  morningBrief: (signal?: AbortSignal) =>
+    request<MorningBriefResponse>('/api/executive/morning', { signal }),
+
   // Slack ----------------------------------------------------------------
   slackChannels: (signal?: AbortSignal) =>
     request<SlackChannelsResponse>('/api/slack/channels', { signal }),

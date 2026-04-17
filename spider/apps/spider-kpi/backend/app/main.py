@@ -14,6 +14,7 @@ from app.api.routes.app_side import router as app_side_router
 from app.api.deps import require_auth
 from app.api.routes.auth import router as auth_router
 from app.api.routes.clickup import router as clickup_router, webhook_router as clickup_webhook_router
+from app.api.routes.executive import router as executive_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.health import router as health_router
 from app.api.routes.overview import router as overview_router
@@ -86,6 +87,7 @@ app.include_router(ai_router)
 app.include_router(app_side_router)
 app.include_router(clickup_router)
 app.include_router(clickup_webhook_router)
+app.include_router(executive_router)
 app.include_router(slack_router)
 app.include_router(slack_webhook_router)
 app.include_router(shopify_webhook_router)
