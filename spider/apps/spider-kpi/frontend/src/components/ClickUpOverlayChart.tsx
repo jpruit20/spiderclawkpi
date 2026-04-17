@@ -31,6 +31,9 @@ type Props = {
     keyword?: string
     event_types?: 'due' | 'completed' | 'due,completed'
     priorities?: string  // csv, e.g. "urgent,high"
+    division?: string           // exact custom-field match, e.g. "Marketing"
+    customer_impact?: string    // exact custom-field match, e.g. "Direct"
+    category?: string           // exact custom-field match, e.g. "Firmware"
     days?: number
   }
   /** Color for reference lines when an event color isn't priority-derived. */

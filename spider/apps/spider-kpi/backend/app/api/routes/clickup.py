@@ -834,6 +834,9 @@ def clickup_timeline(
     keyword: Optional[str] = None,
     event_types: str = "due,completed",
     priorities: Optional[str] = None,  # csv e.g. "urgent,high"
+    division: Optional[str] = None,           # Custom-field exact match
+    customer_impact: Optional[str] = None,    # Custom-field exact match
+    category: Optional[str] = None,           # Custom-field exact match
     days: int = 90,
     limit: int = 200,
     db: Session = Depends(db_session),
@@ -843,6 +846,11 @@ def clickup_timeline(
     - ``due``: task.due_date as an event (good for "campaign launch date").
     - ``completed``: task.date_done as an event (good for "firmware shipped",
       "engineering fix merged").
+
+    Field filters (``division`` / ``customer_impact`` / ``category``) use the
+    custom-field taxonomy and are evaluated in-Python against
+    ``custom_fields_json``. They're precise — unlike keyword matching, a task
+    named "firmware concern" without a Category=Firmware value is excluded.
 
     Each event includes a priority tier so the UI can color-map.
     """
@@ -869,6 +877,26 @@ def clickup_timeline(
     if pris:
         base = base.where(ClickUpTask.priority.in_(pris))
 
+    # Custom-field filter closures — evaluated after SQL fetch because the
+    # dropdown values live as option IDs in JSONB; resolving them in-Python
+    # via _task_field_value reuses the same logic as compliance grading.
+    field_filters: list[tuple[str, str]] = []
+    if division:
+        field_filters.append(("Division", division.strip()))
+    if customer_impact:
+        field_filters.append(("Customer Impact", customer_impact.strip()))
+    if category:
+        field_filters.append(("Category", category.strip()))
+
+    def _passes_field_filters(task: ClickUpTask) -> bool:
+        for fname, expected in field_filters:
+            actual = _task_field_value(task, fname)
+            if actual is None:
+                return False
+            if str(actual).strip().lower() != expected.lower():
+                return False
+        return True
+
     events: list[dict[str, Any]] = []
 
     if "due" in types:
@@ -878,6 +906,8 @@ def clickup_timeline(
         ).order_by(desc(ClickUpTask.due_date)).limit(limit)
         for t in db.execute(stmt).scalars().all():
             if not t.due_date:
+                continue
+            if field_filters and not _passes_field_filters(t):
                 continue
             events.append({
                 "event_type": "due",
@@ -899,6 +929,8 @@ def clickup_timeline(
         ).order_by(desc(ClickUpTask.date_done)).limit(limit)
         for t in db.execute(stmt).scalars().all():
             if not t.date_done:
+                continue
+            if field_filters and not _passes_field_filters(t):
                 continue
             events.append({
                 "event_type": "completed",
@@ -924,6 +956,9 @@ def clickup_timeline(
             "keyword": keyword,
             "event_types": sorted(types),
             "priorities": sorted(pris) if pris else None,
+            "division": division,
+            "customer_impact": customer_impact,
+            "category": category,
         },
         "events": events,
         "count": len(events),

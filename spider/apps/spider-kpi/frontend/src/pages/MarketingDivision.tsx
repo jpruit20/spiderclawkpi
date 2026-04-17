@@ -656,11 +656,16 @@ export function MarketingDivision() {
               (campaign launch schedule). Hover the line to read revenue. */}
           <ClickUpOverlayChart
             title="Campaign launches ↔ Revenue"
-            subtitle="ClickUp Marketing-space task due dates as vertical markers on the daily revenue line. Does a campaign launch correlate with a revenue bump the day-of or day-after?"
+            subtitle="Daily revenue line with Division=Marketing + Category=Campaign due dates as vertical markers. Precise field-match (not keyword) — does a campaign launch correlate with a revenue bump the day-of or day-after?"
             primarySeries={rows.map(r => ({ date: r.business_date, value: Number(r.revenue) || 0 }))}
             primaryLabel="Revenue"
             primaryColor="var(--green)"
-            clickupFilter={{ space_id: '901310388813', event_types: 'due', days: 90 }}
+            clickupFilter={{
+              division: 'Marketing',
+              category: 'Campaign',
+              event_types: 'due',
+              days: 90,
+            }}
           />
 
           {/* Slack pulse — marketing-customer-service + general-news */}

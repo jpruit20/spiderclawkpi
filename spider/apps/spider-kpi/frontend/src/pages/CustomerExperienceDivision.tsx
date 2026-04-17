@@ -1415,10 +1415,10 @@ export function CustomerExperienceDivision() {
           />
 
           {/* CX ticket volume overlaid with ClickUp task completions — did
-              closing the engineering/ops task actually reduce ticket load? */}
+              closing the direct-customer-impact task actually reduce ticket load? */}
           <ClickUpOverlayChart
-            title="Support tickets ↔ CX-related task completions"
-            subtitle="Daily Freshdesk tickets with ClickUp task completions containing 'customer', 'support', or 'CX' as vertical markers. After a related task closes, does ticket volume fall?"
+            title="Support tickets ↔ Customer-facing task completions"
+            subtitle="Daily Freshdesk tickets with Customer Impact=Direct ClickUp task completions as vertical markers. Precise field-match — after a customer-facing task closes, does ticket volume fall?"
             primarySeries={((supportOverview?.rows || []) as KPIDaily[]).map(r => ({
               date: r.business_date,
               value: Number(r.tickets_created) || 0,
@@ -1426,7 +1426,7 @@ export function CustomerExperienceDivision() {
             primaryLabel="Tickets created"
             primaryColor="var(--orange)"
             clickupFilter={{
-              keyword: 'customer',
+              customer_impact: 'Direct',
               event_types: 'completed',
               days: 90,
             }}

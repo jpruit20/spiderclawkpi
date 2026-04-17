@@ -1191,10 +1191,10 @@ export function ProductEngineeringDivision() {
               />
 
               {/* Firmware releases / engineering closes overlaid on cook-success-rate.
-                  Vertical markers = firmware-keyword ClickUp tasks completing. */}
+                  Vertical markers = Category=Firmware ClickUp task completions. */}
               <ClickUpOverlayChart
                 title="Firmware releases ↔ Cook success rate"
-                subtitle="Daily cook-success rate with firmware-keyword ClickUp task completions as vertical markers. Did a firmware release move the success line?"
+                subtitle="Daily cook-success rate with Category=Firmware ClickUp task completions as vertical markers. Precise field-match — did a firmware release move the success line?"
                 primarySeries={rangedHistory.map(r => ({
                   date: r.business_date,
                   value: (r.session_count || 0) > 0
@@ -1204,8 +1204,7 @@ export function ProductEngineeringDivision() {
                 primaryLabel="Cook success %"
                 primaryColor="var(--green)"
                 clickupFilter={{
-                  space_id: '901313726772',
-                  keyword: 'firmware',
+                  category: 'Firmware',
                   event_types: 'completed',
                   days: 90,
                 }}

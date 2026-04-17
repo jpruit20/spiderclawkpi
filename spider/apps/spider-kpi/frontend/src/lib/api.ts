@@ -373,7 +373,17 @@ export const api = {
       method: 'POST', credentials: 'include',
     }).then(r => r.json()),
   clickupTimeline: (
-    opts?: { space_id?: string; keyword?: string; event_types?: string; priorities?: string; days?: number; limit?: number },
+    opts?: {
+      space_id?: string
+      keyword?: string
+      event_types?: string
+      priorities?: string
+      division?: string
+      customer_impact?: string
+      category?: string
+      days?: number
+      limit?: number
+    },
     signal?: AbortSignal,
   ) => {
     const p = new URLSearchParams()
