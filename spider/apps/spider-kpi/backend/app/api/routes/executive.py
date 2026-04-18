@@ -13,7 +13,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
@@ -31,6 +31,7 @@ from app.models import (
     TelemetryReport,
     TelemetrySession,
 )
+from app.services.probe_failure_classifier import classify_probe_failure
 from app.services.wismo_classifier import classify_wismo
 
 
@@ -585,6 +586,173 @@ def wismo_kpi(
         "wismo_pct_of_tickets": round(len(wismo_tickets) / total_in_window * 100.0, 1) if total_in_window else 0.0,
         "orders_in_window": orders_in_window,
         "rate_per_100_orders": round(rate_per_100, 2) if rate_per_100 is not None else None,
+        "trend": trend,
+        "week_over_week": {
+            "last_7": last_7,
+            "prior_7": prior_7,
+            "delta_pct": round(wow_delta_pct, 1) if wow_delta_pct is not None else None,
+        },
+        "recent_tickets": recent_payload,
+    }
+
+
+# Context: ~13k Venoms shipped as of 2026-04 — used as the denominator
+# floor when telemetry active-device counts are unavailable.
+INSTALLED_BASE_VENOMS = 13_000
+
+
+@router.get("/probe-failure-rate")
+def probe_failure_rate(
+    days: int = 90,
+    recent_limit: int = 15,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """CX-derived probe-failure rate.
+
+    Counts Freshdesk tickets where a customer reports an actual probe
+    failure (broken / needs replacement / stopped working) — as distinct
+    from setup/usage questions. Normalizes against the active fleet and
+    the installed base to give meaningful rates.
+
+    Why this exists: the telemetry-shadow "probe error" signal fires
+    whenever a probe reading is missing — including when the user just
+    never installed a meat probe (a valid use case) or hasn't finished
+    setup (no pit probe). The real hardware-failure signal lives in CX.
+    """
+    days = max(1, min(days, 730))
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+
+    tickets = db.execute(
+        select(FreshdeskTicket)
+        .where(FreshdeskTicket.created_at_source >= window_start)
+        .order_by(FreshdeskTicket.created_at_source.desc())
+    ).scalars().all()
+
+    probe_tickets: list[tuple[FreshdeskTicket, Any]] = []
+    daily_counts: dict[str, int] = {}
+    total_in_window = 0
+    for t in tickets:
+        total_in_window += 1
+        desc = ""
+        if isinstance(t.raw_payload, dict):
+            desc = t.raw_payload.get("description_text") or t.raw_payload.get("structured_description") or ""
+            if not isinstance(desc, str):
+                desc = str(desc)
+        tags = t.tags_json if isinstance(t.tags_json, list) else []
+        result = classify_probe_failure(t.subject, desc, tags)
+        if result.is_probe_failure:
+            probe_tickets.append((t, result))
+            if t.created_at_source:
+                d = t.created_at_source.date().isoformat()
+                daily_counts[d] = daily_counts.get(d, 0) + 1
+
+    # Fleet denominator: active device count in window from telemetry.
+    active_devices_in_window = int(db.execute(text("""
+        SELECT COUNT(DISTINCT device_id)
+          FROM telemetry_stream_events
+         WHERE sample_timestamp >= :s
+           AND device_id IS NOT NULL
+    """), {"s": window_start}).scalar() or 0)
+
+    # Fall back to sessions if stream is empty.
+    if active_devices_in_window == 0:
+        active_devices_in_window = int(db.execute(text("""
+            SELECT COUNT(DISTINCT device_id)
+              FROM telemetry_sessions
+             WHERE session_start >= :s
+               AND device_id IS NOT NULL
+        """), {"s": window_start}).scalar() or 0)
+
+    probe_count = len(probe_tickets)
+
+    # Failure rate per 1000 active devices, normalized to 30-day window
+    # for comparability across window sizes.
+    rate_per_1000_active_30d: Optional[float] = None
+    if active_devices_in_window > 0:
+        rate_per_1000_active_30d = (
+            (probe_count / active_devices_in_window) * 1000.0 * (30.0 / days)
+        )
+
+    # Annualized rate per installed-base unit (what fraction of the
+    # deployed fleet files a probe-failure ticket per year).
+    annualized_rate_per_installed_base: Optional[float] = None
+    if INSTALLED_BASE_VENOMS > 0 and days > 0:
+        annualized_rate_per_installed_base = (
+            probe_count / INSTALLED_BASE_VENOMS * (365.0 / days)
+        )
+
+    # Daily trend — one row per day in the window, even if 0.
+    trend = []
+    start_date = window_start.date()
+    for i in range(days):
+        d = (start_date + timedelta(days=i)).isoformat()
+        trend.append({
+            "date": d,
+            "probe_failures": daily_counts.get(d, 0),
+        })
+
+    # Week-over-week (last 7 vs prior 7).
+    wow_cutoff = now - timedelta(days=7)
+    wow_prior_cutoff = now - timedelta(days=14)
+    last_7 = sum(
+        1 for (t, _r) in probe_tickets
+        if t.created_at_source and t.created_at_source >= wow_cutoff
+    )
+    prior_7 = sum(
+        1 for (t, _r) in probe_tickets
+        if t.created_at_source and wow_prior_cutoff <= t.created_at_source < wow_cutoff
+    )
+    wow_delta_pct: Optional[float] = None
+    if prior_7 > 0:
+        wow_delta_pct = (last_7 - prior_7) / prior_7 * 100.0
+
+    # Recent flagged tickets.
+    freshdesk_domain = os.environ.get("FRESHDESK_DOMAIN") or ""
+    recent_payload = []
+    for (t, r) in probe_tickets[:recent_limit]:
+        ticket_url: Optional[str] = None
+        if freshdesk_domain and t.ticket_id:
+            base = freshdesk_domain.rstrip("/")
+            if not base.startswith("http"):
+                base = f"https://{base}"
+            ticket_url = f"{base}/a/tickets/{t.ticket_id}"
+        recent_payload.append({
+            "ticket_id": t.ticket_id,
+            "subject": t.subject,
+            "created_at": t.created_at_source.isoformat() if t.created_at_source else None,
+            "status": t.status,
+            "priority": t.priority,
+            "confidence": r.confidence,
+            "matched_rule": r.matched_rule,
+            "url": ticket_url,
+        })
+
+    return {
+        "ok": True,
+        "generated_at": now.isoformat(),
+        "window_days": days,
+        "window_start": window_start.date().isoformat(),
+        "tickets_in_window": total_in_window,
+        "probe_failure_count": probe_count,
+        "probe_failure_pct_of_tickets": (
+            round(probe_count / total_in_window * 100.0, 2)
+            if total_in_window else 0.0
+        ),
+        "active_devices_in_window": active_devices_in_window,
+        "installed_base_venoms": INSTALLED_BASE_VENOMS,
+        "rate_per_1000_active_30d": (
+            round(rate_per_1000_active_30d, 3)
+            if rate_per_1000_active_30d is not None else None
+        ),
+        "annualized_rate_per_installed_base": (
+            round(annualized_rate_per_installed_base, 5)
+            if annualized_rate_per_installed_base is not None else None
+        ),
+        "annualized_failures_projected": (
+            round(probe_count * (365.0 / days))
+            if days > 0 else None
+        ),
         "trend": trend,
         "week_over_week": {
             "last_7": last_7,

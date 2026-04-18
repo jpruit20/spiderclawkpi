@@ -387,6 +387,21 @@ export function ProductEngineeringDivision() {
     return () => { cancelled = true }
   }, [daysDiff])
 
+  // CX-derived probe-failure rate. Replaces the misleading
+  // telemetry-shadow "probe error" signal: the shadow fires whenever
+  // a probe reading is missing (user never installed a meat probe =
+  // valid use case, no pit probe = setup issue), while CX tickets
+  // capture actual hardware failures ("my probe stopped working,
+  // need a replacement").
+  const [probeFailure, setProbeFailure] = useState<Record<string, any> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.probeFailureRate(Math.max(daysDiff, 30))
+      .then(data => { if (!cancelled) setProbeFailure(data) })
+      .catch(() => { if (!cancelled) setProbeFailure(null) })
+    return () => { cancelled = true }
+  }, [daysDiff])
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -542,7 +557,19 @@ export function ProductEngineeringDivision() {
   const medianCookDuration = derived?.median_cook_duration_seconds ?? null
   const p95CookDuration = derived?.p95_cook_duration_seconds ?? null
   const medianRssi = historyStats?.historicalRssi ?? derived?.median_rssi_now ?? null
-  const probeErrorRate = analytics?.probe_failure_rate ?? null
+  // CX-derived probe failure rate (real hardware failures from tickets).
+  // The legacy `analytics.probe_failure_rate` was misleading — it counted
+  // any session where a probe reading was missing, including users who
+  // intentionally don't install meat probes. Kept only as a comparison
+  // reference, not as the headline number.
+  const probeFailureCount = probeFailure?.probe_failure_count ?? null
+  const probeActiveDevices = probeFailure?.active_devices_in_window ?? 0
+  const probeInstalledBase = probeFailure?.installed_base_venoms ?? 13000
+  const probeWindowDays = probeFailure?.window_days ?? 0
+  const probeRatePer1kActive = probeFailure?.rate_per_1000_active_30d ?? null
+  const probeAnnualizedProjected = probeFailure?.annualized_failures_projected ?? null
+  const probeAnnualizedRateOfBase = probeFailure?.annualized_rate_per_installed_base ?? null
+  const legacyShadowProbeRate = analytics?.probe_failure_rate ?? null
   const devices24h = isHistoricalOnly
     ? Math.round(historyStats?.avgDevices ?? 0)
     : (collection?.active_devices_last_24h ?? 0)
@@ -1131,16 +1158,31 @@ export function ProductEngineeringDivision() {
                 <div className="venom-breakdown-list">
                   <div className="venom-breakdown-row"><span>Session success (legacy)</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
                   <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state={(confidence?.disconnect_detection as TruthState) || 'proxy'} /></div>
-                  <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
+                  <div className="venom-breakdown-row">
+                    <span>Probe failures (CX tickets, {probeWindowDays || '—'}d)</span>
+                    <span className="venom-breakdown-val">{probeFailureCount != null ? fmtInt(probeFailureCount) : '—'}</span>
+                    <TruthBadge state="canonical" />
+                  </div>
+                  <div className="venom-breakdown-row">
+                    <span>Failure rate /1k active (30d)</span>
+                    <span className="venom-breakdown-val">{probeRatePer1kActive != null ? probeRatePer1kActive.toFixed(2) : '—'}</span>
+                  </div>
+                  <div className="venom-breakdown-row">
+                    <span>Annualized /installed base</span>
+                    <span className="venom-breakdown-val">{probeAnnualizedRateOfBase != null ? `${(probeAnnualizedRateOfBase * 100).toFixed(2)}%` : '—'}</span>
+                  </div>
                   <div className="venom-breakdown-row"><span>Avg RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${typeof medianRssi === 'number' ? medianRssi.toFixed(1) : medianRssi} dBm` : '\u2014'}</span></div>
                   {historyStats && (
                     <div className="venom-breakdown-row"><span>Event error rate</span><span className="venom-breakdown-val">{fmtPct(historyStats.errorRate)}</span><TruthBadge state="canonical" /></div>
                   )}
                 </div>
                 <small className="venom-panel-footer">
+                  Probe failure rate is CX-derived — tickets where a customer reported their probe broke or needs replacement, classified via keyword/tag match. Normalized against {fmtInt(probeActiveDevices)} active devices seen this window (installed base ≈ {fmtInt(probeInstalledBase)}).
+                  {probeAnnualizedProjected != null && ` At the current rate, ~${fmtInt(probeAnnualizedProjected)} probe-failure tickets/yr would be expected.`}
+                  {legacyShadowProbeRate != null && ` Legacy telemetry-shadow signal was ${fmtPct(legacyShadowProbeRate)} — retained only for reference; it conflates hardware failures with users who never installed a meat probe.`}
                   {historyStats?.daysWithSessions
-                    ? `Based on ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions} days in the selected range.`
-                    : `Disconnect rate = sessions where a >45-minute gap was detected. Probe error = sessions where food probe readings were missing. n=${fmtInt(sampleSize)} sessions.`}
+                    ? ` Based on ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions} days in the selected range.`
+                    : ` Disconnect rate = sessions where a >45-minute gap was detected. n=${fmtInt(sampleSize)} sessions.`}
                 </small>
                 {grillTypeHealth.length > 0 && (
                   <div style={{ marginTop: 12 }}>

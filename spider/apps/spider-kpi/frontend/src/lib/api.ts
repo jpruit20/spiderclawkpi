@@ -21,6 +21,7 @@ import type {
   LatestTelemetryReportResponse,
   MorningBriefResponse,
   WismoKpiResponse,
+  ProbeFailureRateResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
   SlackPulseResponse,
@@ -451,6 +452,8 @@ export const api = {
     request<CookDurationStats>(`/api/executive/cook-duration-stats?days=${days}`, { signal }),
   wismoKpi: (days: number = 30, signal?: AbortSignal) =>
     request<WismoKpiResponse>(`/api/executive/wismo-kpi?days=${days}`, { signal }),
+  probeFailureRate: (days: number = 90, signal?: AbortSignal) =>
+    request<ProbeFailureRateResponse>(`/api/executive/probe-failure-rate?days=${days}`, { signal }),
 
   dismissInsight: (id: number, reason?: string) =>
     fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {

@@ -1111,6 +1111,36 @@ export interface WismoKpiResponse {
   recent_tickets: WismoTicket[]
 }
 
+export interface ProbeFailureTicket {
+  ticket_id: string
+  subject: string | null
+  created_at: string | null
+  status: string | null
+  priority: string | null
+  confidence: number
+  matched_rule: string | null
+  url: string | null
+}
+
+export interface ProbeFailureRateResponse {
+  ok: boolean
+  generated_at: string
+  window_days: number
+  window_start: string
+  tickets_in_window: number
+  probe_failure_count: number
+  probe_failure_pct_of_tickets: number
+  active_devices_in_window: number
+  installed_base_venoms: number
+  rate_per_1000_active_30d: number | null
+  annualized_rate_per_installed_base: number | null
+  annualized_failures_projected: number | null
+  trend: Array<{ date: string; probe_failures: number }>
+  week_over_week: { last_7: number; prior_7: number; delta_pct: number | null }
+  recent_tickets: ProbeFailureTicket[]
+}
+
+
 export interface FirmwareCohort {
   firmware_version: string
   sessions: number
