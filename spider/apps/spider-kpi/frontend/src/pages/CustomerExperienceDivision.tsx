@@ -10,6 +10,7 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
@@ -681,6 +682,19 @@ export function CustomerExperienceDivision() {
             </div>
           </section>
 
+          {/* ==============================================================
+              BELOW-THE-FOLD DETAIL — progressive disclosure.
+              Hero above is kept tight: header, KPIs, WISMO card,
+              performance metrics, today's focus, action queue. Everything
+              downstream lives behind collapsible groups so the page
+              doesn't overwhelm at open.
+              ============================================================== */}
+          <CollapsibleSection
+            id="cx-team-performance"
+            title="Team performance & ticket operations"
+            subtitle="Agent comparison, team load, insights, queue trends, SLA breach countdowns, resolution-time distribution, ticket-aging heatmap, channel breakdown"
+            accentColor="#6ea8ff"
+          >
           {/* Agent Performance Comparison */}
           <section className="card">
             <div className="venom-panel-head">
@@ -943,6 +957,14 @@ export function CustomerExperienceDivision() {
             </div>
           </section>
 
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="cx-advanced-analytics"
+            title="Advanced analytics & patterns"
+            subtitle="First-contact resolution, week-over-week comparison, peak hour analysis, theme-trend heatmap (with cluster drill-down), at-risk ticket predictor, repeat-contact analysis"
+            accentColor="#f59e0b"
+          >
           {/* ─── NEW IMPROVEMENT WIDGETS ─── */}
 
           {/* First Contact Resolution (FCR) Rate */}
@@ -1320,6 +1342,14 @@ export function CustomerExperienceDivision() {
             </section>
           ) : null}
 
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="cx-external-coordination"
+            title="External voice & coordination"
+            subtitle="Social listening / brand pulse, auto-generated social actions, ClickUp CX tasks & team velocity, #marketing-customer-service Slack pulse, navigation shortcuts"
+            accentColor="#a78bfa"
+          >
           {/* Social Listening — Brand Pulse */}
           <section className="card">
             <div className="venom-panel-head">
@@ -1462,6 +1492,7 @@ export function CustomerExperienceDivision() {
               ))}
             </div>
           </section>
+          </CollapsibleSection>
         </>
       ) : null}
     </div>
