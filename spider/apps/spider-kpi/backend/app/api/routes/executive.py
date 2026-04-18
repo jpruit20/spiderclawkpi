@@ -7,6 +7,7 @@ Nothing new is computed — it's pure synthesis of already-materialized data.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ from app.models import (
     AIInsight,
     ClickUpTask,
     DeciDecision,
+    FreshdeskTicket,
     IssueSignal,
     KPIDaily,
     SlackMessage,
@@ -29,6 +31,7 @@ from app.models import (
     TelemetryReport,
     TelemetrySession,
 )
+from app.services.wismo_classifier import classify_wismo
 
 
 logger = logging.getLogger(__name__)
@@ -236,6 +239,37 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
             "ts_dt": hot_msg.ts_dt.isoformat() if hot_msg.ts_dt else None,
         }
 
+    # --- WISMO headline (last 7 days vs prior 7) -------------------------
+    # Lightweight scan — just count, don't build full payload.
+    from app.services.wismo_classifier import classify_wismo as _cw
+    wismo_since = now - timedelta(days=14)
+    recent_tickets = db.execute(
+        select(FreshdeskTicket.subject, FreshdeskTicket.tags_json, FreshdeskTicket.raw_payload, FreshdeskTicket.created_at_source)
+        .where(FreshdeskTicket.created_at_source >= wismo_since)
+    ).all()
+    wismo_last_7 = 0
+    wismo_prior_7 = 0
+    wow_cutoff = now - timedelta(days=7)
+    for subj, tags, raw, ts in recent_tickets:
+        if ts is None:
+            continue
+        desc = ""
+        if isinstance(raw, dict):
+            desc = raw.get("description_text") or raw.get("structured_description") or ""
+            if not isinstance(desc, str):
+                desc = str(desc)
+        t_list = tags if isinstance(tags, list) else []
+        if _cw(subj, desc, t_list).is_wismo:
+            if ts >= wow_cutoff:
+                wismo_last_7 += 1
+            else:
+                wismo_prior_7 += 1
+    wismo_payload = {
+        "last_7": wismo_last_7,
+        "prior_7": wismo_prior_7,
+        "delta": wismo_last_7 - wismo_prior_7,
+    }
+
     # --- Telemetry anomalies (trailing-14d median/MAD z-score) -----------
     anomaly_rows = db.execute(
         select(TelemetryAnomaly)
@@ -297,6 +331,8 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "insights_high_urgency": sum(1 for i in insights_payload if i["urgency"] == "high"),
         "anomalies_count": len(anomalies_payload),
         "anomalies_critical": sum(1 for a in anomalies_payload if a["severity"] == "critical"),
+        "wismo_last_7": wismo_last_7,
+        "wismo_wow_delta": wismo_last_7 - wismo_prior_7,
     }
 
     return {
@@ -313,6 +349,7 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         "slack_hot": slack_hot,
         "insights": insights_payload,
         "anomalies": anomalies_payload,
+        "wismo": wismo_payload,
     }
 
 
@@ -410,6 +447,126 @@ def get_telemetry_report(
     if r is None:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "report": _report_payload(r, full_body=True)}
+
+
+@router.get("/wismo-kpi")
+def wismo_kpi(
+    days: int = 30,
+    recent_limit: int = 15,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """WISMO ("where is my order") customer-follow-up KPI.
+
+    Target: trend to zero. Every WISMO ticket represents a missed
+    proactive-communication opportunity — the customer shouldn't have
+    needed to reach out at all.
+
+    Returns count + rate-per-100-orders over the window, daily trend,
+    week-over-week delta, and the most recent flagged tickets.
+    """
+    days = max(1, min(days, 365))
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+
+    # Pull all tickets in window; classify in Python (fast enough at ~1k tickets).
+    tickets = db.execute(
+        select(FreshdeskTicket)
+        .where(FreshdeskTicket.created_at_source >= window_start)
+        .order_by(FreshdeskTicket.created_at_source.desc())
+    ).scalars().all()
+
+    wismo_tickets: list[tuple[FreshdeskTicket, Any]] = []
+    daily_wismo: dict[str, int] = {}
+    total_in_window = 0
+    for t in tickets:
+        total_in_window += 1
+        desc = ""
+        if isinstance(t.raw_payload, dict):
+            desc = t.raw_payload.get("description_text") or t.raw_payload.get("structured_description") or ""
+            if not isinstance(desc, str):
+                desc = str(desc)
+        tags = t.tags_json if isinstance(t.tags_json, list) else []
+        result = classify_wismo(t.subject, desc, tags)
+        if result.is_wismo:
+            wismo_tickets.append((t, result))
+            if t.created_at_source:
+                d = t.created_at_source.date().isoformat()
+                daily_wismo[d] = daily_wismo.get(d, 0) + 1
+
+    # Orders in window (for rate).
+    orders_in_window = int(db.execute(
+        select(func.sum(KPIDaily.orders))
+        .where(KPIDaily.business_date >= window_start.date())
+    ).scalar() or 0)
+    rate_per_100 = (len(wismo_tickets) / orders_in_window * 100.0) if orders_in_window > 0 else None
+
+    # Daily trend — one row per day in the window, even if 0 WISMOs.
+    trend = []
+    orders_by_date = {
+        r.business_date.isoformat(): int(r.orders or 0)
+        for r in db.execute(
+            select(KPIDaily.business_date, KPIDaily.orders)
+            .where(KPIDaily.business_date >= window_start.date())
+        ).all()
+    }
+    start_date = window_start.date()
+    for i in range(days):
+        d = (start_date + timedelta(days=i)).isoformat()
+        trend.append({
+            "date": d,
+            "wismo": daily_wismo.get(d, 0),
+            "orders": orders_by_date.get(d, 0),
+        })
+
+    # Week-over-week.
+    wow_cutoff = now - timedelta(days=7)
+    wow_prior_cutoff = now - timedelta(days=14)
+    last_7 = sum(1 for (t, _r) in wismo_tickets if t.created_at_source and t.created_at_source >= wow_cutoff)
+    prior_7 = sum(1 for (t, _r) in wismo_tickets if t.created_at_source and wow_prior_cutoff <= t.created_at_source < wow_cutoff)
+    wow_delta_pct: Optional[float] = None
+    if prior_7 > 0:
+        wow_delta_pct = (last_7 - prior_7) / prior_7 * 100.0
+
+    # Recent flagged tickets with links.
+    freshdesk_domain = os.environ.get("FRESHDESK_DOMAIN") or ""
+    recent_payload = []
+    for (t, r) in wismo_tickets[:recent_limit]:
+        ticket_url: Optional[str] = None
+        if freshdesk_domain and t.ticket_id:
+            base = freshdesk_domain.rstrip("/")
+            if not base.startswith("http"):
+                base = f"https://{base}"
+            ticket_url = f"{base}/a/tickets/{t.ticket_id}"
+        recent_payload.append({
+            "ticket_id": t.ticket_id,
+            "subject": t.subject,
+            "created_at": t.created_at_source.isoformat() if t.created_at_source else None,
+            "status": t.status,
+            "priority": t.priority,
+            "requester_id": t.requester_id,
+            "confidence": r.confidence,
+            "matched_rule": r.matched_rule,
+            "url": ticket_url,
+        })
+
+    return {
+        "ok": True,
+        "generated_at": now.isoformat(),
+        "window_days": days,
+        "window_start": window_start.date().isoformat(),
+        "tickets_in_window": total_in_window,
+        "wismo_count": len(wismo_tickets),
+        "wismo_pct_of_tickets": round(len(wismo_tickets) / total_in_window * 100.0, 1) if total_in_window else 0.0,
+        "orders_in_window": orders_in_window,
+        "rate_per_100_orders": round(rate_per_100, 2) if rate_per_100 is not None else None,
+        "trend": trend,
+        "week_over_week": {
+            "last_7": last_7,
+            "prior_7": prior_7,
+            "delta_pct": round(wow_delta_pct, 1) if wow_delta_pct is not None else None,
+        },
+        "recent_tickets": recent_payload,
+    }
 
 
 @router.get("/firmware-cohorts")

@@ -76,6 +76,19 @@ export function CommandCenter() {
               {h.clickup_wow_delta >= 0 ? '+' : ''}{h.clickup_wow_delta}
             </div>
           </div>
+          <div className="venom-kpi">
+            <div className="venom-kpi-label">WISMO (7d, target 0)</div>
+            <div className="venom-kpi-value" style={{
+              color: h.wismo_last_7 === 0 ? 'var(--green)' : h.wismo_last_7 <= 3 ? 'var(--orange)' : 'var(--red)',
+            }}>
+              {h.wismo_last_7}
+            </div>
+            <div className="venom-kpi-trend" style={{
+              color: h.wismo_wow_delta <= 0 ? 'var(--green)' : 'var(--red)',
+            }}>
+              {h.wismo_wow_delta > 0 ? '+' : ''}{h.wismo_wow_delta} vs prior 7
+            </div>
+          </div>
         </div>
       </section>
 

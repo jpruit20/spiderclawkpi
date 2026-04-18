@@ -106,12 +106,16 @@ def _render_html(brief: dict) -> str:
         '<table cellpadding="0" cellspacing="0" style="width:100%;margin-bottom:18px">',
         '<tr>',
     ]
+    wismo_7 = h.get("wismo_last_7", 0) or 0
+    wismo_delta = h.get("wismo_wow_delta", 0) or 0
+    wismo_color = "#16a34a" if wismo_7 == 0 else ("#f59e0b" if wismo_7 <= 3 else "#b91c1c")
     kpi_items = [
         ("Drafts to review", _fmt_int(h.get("drafts_awaiting_review", 0)), "#4a7aff" if h.get("drafts_awaiting_review", 0) > 0 else "#9ca3af"),
         ("Critical signals (24h)", _fmt_int(h.get("critical_signals_24h", 0)), "#b91c1c" if h.get("critical_signals_24h", 0) > 0 else "#9ca3af"),
         ("Overdue urgent/high", _fmt_int(h.get("overdue_urgent_or_high", 0)), "#b91c1c" if h.get("overdue_urgent_or_high", 0) > 0 else "#9ca3af"),
         ("Revenue WoW", f'{"+" if (rev_wow or 0) >= 0 else ""}{rev_wow:.0f}%' if rev_wow is not None else "—", rev_color if rev_wow is not None else "#9ca3af"),
         ("Tasks closed WoW", f'{"+" if velo_wow >= 0 else ""}{velo_wow}', velo_color),
+        ("WISMO 7d (target 0)", f"{wismo_7} ({'+' if wismo_delta > 0 else ''}{wismo_delta})", wismo_color),
     ]
     for label, value, color in kpi_items:
         parts.append(
@@ -323,6 +327,8 @@ def send_morning_email() -> None:
             flags.append(f"{h['overdue_urgent_or_high']} overdue")
         if h.get("drafts_awaiting_review", 0):
             flags.append(f"{h['drafts_awaiting_review']} drafts")
+        if h.get("wismo_last_7", 0):
+            flags.append(f"{h['wismo_last_7']} WISMO this week")
         flags_str = " · ".join(flags) if flags else "all quiet"
 
         now = datetime.now(BUSINESS_TZ)

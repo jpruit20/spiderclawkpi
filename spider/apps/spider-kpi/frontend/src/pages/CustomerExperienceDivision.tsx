@@ -11,6 +11,7 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
+import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, formatFreshness } from '../lib/format'
 import { ClusterTicketDetail, CXActionItem, CXMetricItem, CXSnapshotResponse, FreshdeskTicketItem, IssueRadarResponse, KPIDaily, SocialPulse, SupportOverviewResponse } from '../lib/types'
@@ -605,6 +606,10 @@ export function CustomerExperienceDivision() {
 
           {/* KPI Strip */}
           <VenomKpiStrip cards={kpiCards} cols={4} />
+
+          {/* WISMO — target: 0. Customer follow-ups on undelivered orders.
+              Every one is a proactive-comms gap. */}
+          <WismoKpiCard days={30} />
 
           {/* Two-col: Performance Metrics + Today's Focus */}
           <div className="two-col two-col-equal">

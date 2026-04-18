@@ -1080,6 +1080,33 @@ export interface MorningSlackHot {
   ts_dt: string | null
 }
 
+export interface WismoTicket {
+  ticket_id: string
+  subject: string | null
+  created_at: string | null
+  status: string | null
+  priority: string | null
+  requester_id: string | null
+  confidence: number
+  matched_rule: string | null
+  url: string | null
+}
+
+export interface WismoKpiResponse {
+  ok: boolean
+  generated_at: string
+  window_days: number
+  window_start: string
+  tickets_in_window: number
+  wismo_count: number
+  wismo_pct_of_tickets: number
+  orders_in_window: number
+  rate_per_100_orders: number | null
+  trend: Array<{ date: string; wismo: number; orders: number }>
+  week_over_week: { last_7: number; prior_7: number; delta_pct: number | null }
+  recent_tickets: WismoTicket[]
+}
+
 export interface FirmwareCohort {
   firmware_version: string
   sessions: number
@@ -1144,6 +1171,8 @@ export interface MorningBriefResponse {
     insights_high_urgency: number
     anomalies_count: number
     anomalies_critical: number
+    wismo_last_7: number
+    wismo_wow_delta: number
   }
   drafts: MorningDraft[]
   critical_signals: MorningCriticalSignal[]
@@ -1159,6 +1188,7 @@ export interface MorningBriefResponse {
   slack_hot: MorningSlackHot | null
   insights: AIInsight[]
   anomalies: TelemetryAnomaly[]
+  wismo: { last_7: number; prior_7: number; delta: number }
 }
 
 export interface InsightsListResponse {

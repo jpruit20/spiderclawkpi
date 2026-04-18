@@ -17,6 +17,7 @@ import type {
   InsightsListResponse,
   LatestTelemetryReportResponse,
   MorningBriefResponse,
+  WismoKpiResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
   SlackPulseResponse,
@@ -439,6 +440,8 @@ export const api = {
     request<LatestTelemetryReportResponse>(`/api/executive/telemetry-reports/latest?type=${type}`, { signal }),
   firmwareCohorts: (min_sessions: number = 20, signal?: AbortSignal) =>
     request<FirmwareCohortsResponse>(`/api/executive/firmware-cohorts?min_sessions=${min_sessions}`, { signal }),
+  wismoKpi: (days: number = 30, signal?: AbortSignal) =>
+    request<WismoKpiResponse>(`/api/executive/wismo-kpi?days=${days}`, { signal }),
 
   dismissInsight: (id: number, reason?: string) =>
     fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {
