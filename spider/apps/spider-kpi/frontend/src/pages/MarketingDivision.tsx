@@ -8,6 +8,7 @@ import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
+import { ChannelMixCard } from '../components/ChannelMixCard'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -64,6 +65,11 @@ export function MarketingDivision() {
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeState>({ preset: '30d', startDate: '', endDate: '' })
   const [compareMode, setCompareMode] = useState<Mode>('prior_period')
+  // Hour-trimmed comparison totals (2026-04-18 fix for issue Joseph
+  // flagged: today-so-far vs yesterday-full is apples-to-oranges).
+  // When the backend applies hour-trimming, this payload's current
+  // and prior totals override the daily-sum versions below.
+  const [periodCompare, setPeriodCompare] = useState<import('../lib/types').MarketingPeriodCompareResponse | null>(null)
 
   /* ---- data fetch ---- */
   useEffect(() => {
@@ -99,6 +105,20 @@ export function MarketingDivision() {
     return () => { cancelled = true }
   }, [])
 
+  // Fetch hour-trimmed period-compare whenever range or mode changes.
+  useEffect(() => {
+    if (!range.startDate || !range.endDate) return
+    let cancelled = false
+    api.marketingPeriodCompare({
+      start: range.startDate,
+      end: range.endDate,
+      mode: compareMode === 'same_day_last_week' ? 'same_day_last_week' : 'prior_period',
+    })
+      .then(r => { if (!cancelled) setPeriodCompare(r) })
+      .catch(() => { if (!cancelled) setPeriodCompare(null) })
+    return () => { cancelled = true }
+  }, [range.startDate, range.endDate, compareMode])
+
   /* ---- derived data ---- */
   const currentRows = useMemo(() => filterRowsByRange(rows, range), [rows, range])
   const priorRows = useMemo(
@@ -111,17 +131,23 @@ export function MarketingDivision() {
   const sourceHealth = overview?.source_health || []
   const clarityDegraded = clarityIsDegraded(sourceHealth)
 
-  /* ---- aggregates ---- */
-  const revenue = sum(currentRows, 'revenue')
-  const priorRevenue = sum(priorRows, 'revenue')
+  /* ---- aggregates ----
+     When the backend applies hour-trimming (current window includes
+     partial today), use its precisely-trimmed current/prior totals
+     from KPIIntraday — apples-to-apples same-hours-of-day comparison.
+     Otherwise fall back to whole-row daily sums. Refunds stay on
+     daily rows because KPIIntraday doesn't track them yet. */
+  const trimApplied = periodCompare?.hour_trim_applied === true
+  const revenue = trimApplied && periodCompare ? periodCompare.current.revenue : sum(currentRows, 'revenue')
+  const priorRevenue = trimApplied && periodCompare ? periodCompare.prior.revenue : sum(priorRows, 'revenue')
   const refunds = sum(currentRows, 'refunds' as keyof KPIDaily)
   const priorRefunds = sum(priorRows, 'refunds' as keyof KPIDaily)
-  const sessions = sum(currentRows, 'sessions')
-  const priorSessions = sum(priorRows, 'sessions')
-  const orders = sum(currentRows, 'orders')
-  const priorOrders = sum(priorRows, 'orders')
-  const adSpend = sum(currentRows, 'ad_spend')
-  const priorAdSpend = sum(priorRows, 'ad_spend')
+  const sessions = trimApplied && periodCompare ? periodCompare.current.sessions : sum(currentRows, 'sessions')
+  const priorSessions = trimApplied && periodCompare ? periodCompare.prior.sessions : sum(priorRows, 'sessions')
+  const orders = trimApplied && periodCompare ? periodCompare.current.orders : sum(currentRows, 'orders')
+  const priorOrders = trimApplied && periodCompare ? periodCompare.prior.orders : sum(priorRows, 'orders')
+  const adSpend = trimApplied && periodCompare ? periodCompare.current.ad_spend : sum(currentRows, 'ad_spend')
+  const priorAdSpend = trimApplied && periodCompare ? periodCompare.prior.ad_spend : sum(priorRows, 'ad_spend')
   const aov = orders ? revenue / orders : 0
   const priorAov = priorOrders ? priorRevenue / priorOrders : 0
   const conversion = sessions ? (orders / sessions) * 100 : 0
@@ -149,13 +175,47 @@ export function MarketingDivision() {
   const purchaseEstimate = orders
   const priorPurchaseEstimate = priorOrders
 
-  const funnel = useMemo(() => [
-    { label: 'Sessions', volume: sessions, prior: priorSessions, widthPct: 100, dropoff: 0 },
-    { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate, widthPct: sessions ? (pdpViewsEstimate / sessions) * 100 : 0, dropoff: sessions ? (1 - pdpViewsEstimate / sessions) * 100 : 0 },
-    { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate, widthPct: sessions ? (addToCartEstimate / sessions) * 100 : 0, dropoff: pdpViewsEstimate ? (1 - addToCartEstimate / pdpViewsEstimate) * 100 : 0 },
-    { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate, widthPct: sessions ? (checkoutEstimate / sessions) * 100 : 0, dropoff: addToCartEstimate ? (1 - checkoutEstimate / addToCartEstimate) * 100 : 0 },
-    { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate, widthPct: sessions ? (purchaseEstimate / sessions) * 100 : 0, dropoff: checkoutEstimate ? (1 - purchaseEstimate / checkoutEstimate) * 100 : 0 },
-  ], [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
+  // Funnel stages. Each stage carries TWO distinct comparisons — Joseph
+  // flagged the ambiguity 2026-04-18:
+  //   - ``dropoff_to_next``: intra-funnel — what % of THIS stage's
+  //     volume did not advance to the NEXT stage in the funnel.
+  //     Only meaningful on non-terminal stages; Purchase has no next.
+  //   - ``prior_period_delta_pct``: time-based — how this stage's
+  //     volume compares to the same stage in the prior period (or
+  //     same-day-last-week if that mode is active).
+  // ``prev_label`` is the previous funnel step's display name, used
+  // in the rendered copy to disambiguate ("Sessions → PDP drop").
+  const funnel = useMemo(() => {
+    const stages = [
+      { label: 'Sessions', volume: sessions, prior: priorSessions },
+      { label: 'PDP', volume: pdpViewsEstimate, prior: priorPdpViewsEstimate },
+      { label: 'Add to Cart', volume: addToCartEstimate, prior: priorAddToCartEstimate },
+      { label: 'Checkout', volume: checkoutEstimate, prior: priorCheckoutEstimate },
+      { label: 'Purchase', volume: purchaseEstimate, prior: priorPurchaseEstimate },
+    ]
+    return stages.map((s, i) => {
+      const prevVol = i > 0 ? stages[i - 1].volume : 0
+      const nextVol = i < stages.length - 1 ? stages[i + 1].volume : null
+      const widthPct = sessions ? (s.volume / sessions) * 100 : 0
+      // Intra-funnel: what % of THIS stage drops before the next step.
+      const dropoffToNext = (nextVol != null && s.volume > 0)
+        ? (1 - nextVol / s.volume) * 100
+        : 0
+      // Time-based: this stage vs same stage in prior period.
+      const priorPeriodDeltaPct = s.prior > 0 ? ((s.volume - s.prior) / s.prior) * 100 : null
+      return {
+        label: s.label,
+        volume: s.volume,
+        prior: s.prior,
+        prev_label: i > 0 ? stages[i - 1].label : null,
+        next_label: i < stages.length - 1 ? stages[i + 1].label : null,
+        widthPct,
+        dropoff: dropoffToNext,   // retained for back-compat with biggestLeak
+        dropoff_to_next: dropoffToNext,
+        prior_period_delta_pct: priorPeriodDeltaPct,
+      }
+    })
+  }, [sessions, priorSessions, pdpViewsEstimate, priorPdpViewsEstimate, addToCartEstimate, priorAddToCartEstimate, checkoutEstimate, priorCheckoutEstimate, purchaseEstimate, priorPurchaseEstimate])
 
   /* ---- funnel leak detection ---- */
   const biggestLeak = useMemo(() => {
@@ -392,6 +452,15 @@ export function MarketingDivision() {
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
       <CompareToolbar mode={compareMode} onChange={setCompareMode as (mode: CompareMode) => void} />
+      {/* Apples-to-apples comparison hint. When today is partial,
+          the backend clips the prior window's matching day to the
+          same elapsed hours, so "today through 2:42pm" is compared
+          against "yesterday through 2:42pm" instead of full-day. */}
+      {periodCompare?.hour_trim_applied && (
+        <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 12px', marginTop: -4, marginBottom: 4 }}>
+          <span style={{ color: 'var(--blue)' }}>⏱ Hour-trimmed:</span> comparing current period{periodCompare.window.label_suffix} against the prior period clipped to the same elapsed hours.
+        </div>
+      )}
 
       {/* ---- Loading / error ---- */}
       {loading ? <Card title="Marketing"><div className="state-message">Loading marketing division...</div></Card> : null}
@@ -451,20 +520,39 @@ export function MarketingDivision() {
           <section className="card">
             <div className="venom-panel-head">
               <strong>Visual Funnel</strong>
-              <span className="venom-panel-hint">Sessions to purchase</span>
+              <span className="venom-panel-hint">Sessions → PDP → Add to Cart → Checkout → Purchase</span>
+            </div>
+            {/* Legend disambiguates the two different comparisons that
+                appear per stage — Joseph 2026-04-18: prior was confusing
+                because "prior stage" could mean either the previous funnel
+                step OR the prior time period. */}
+            <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 14, marginBottom: 10, flexWrap: 'wrap' }}>
+              <span>
+                <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--orange)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
+                <strong>Drop to next step</strong> = % of this stage that did not advance in the funnel
+              </span>
+              <span>
+                <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--blue)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
+                <strong>vs prior period</strong> = this stage's volume vs same stage in the prior window
+              </span>
             </div>
             {biggestLeak ? (
               <div className="trust-banner trust-banner-warn" style={{ marginBottom: 12 }}>
-                <strong>Biggest Leak: {biggestLeak.label}</strong>
+                <strong>Biggest in-funnel leak: {biggestLeak.prev_label ? `${biggestLeak.prev_label} → ${biggestLeak.label}` : biggestLeak.label}</strong>
                 <p>
-                  {biggestLeak.dropoff.toFixed(1)}% drop-off — focus optimization efforts here for maximum conversion impact.
+                  {biggestLeak.dropoff.toFixed(1)}% of {biggestLeak.prev_label || 'prior step'} traffic didn't reach {biggestLeak.label}.
+                  Focus optimization here for maximum conversion impact.
                 </p>
               </div>
             ) : null}
             <div className="venom-bar-list">
               {funnel.map((step) => {
                 const isBiggestLeak = biggestLeak && step.label === biggestLeak.label
-                const severity = step.dropoff > 0 ? getLeakSeverity(step.dropoff) : null
+                const severity = step.dropoff_to_next > 0 ? getLeakSeverity(step.dropoff_to_next) : null
+                const ppDelta = step.prior_period_delta_pct
+                const ppBadgeClass = ppDelta == null
+                  ? 'badge-neutral'
+                  : ppDelta > 2 ? 'badge-good' : ppDelta < -2 ? 'badge-bad' : 'badge-neutral'
                 return (
                   <div key={step.label} style={isBiggestLeak ? { background: 'var(--warning-bg)', borderRadius: 4, padding: '4px 8px', marginLeft: -8, marginRight: -8 } : undefined}>
                     <div className="venom-bar-row">
@@ -472,25 +560,33 @@ export function MarketingDivision() {
                       <BarIndicator value={step.volume} max={sessions || 1} color={FUNNEL_COLORS[step.label] || 'var(--blue)'} />
                       <span className="venom-bar-value">{fmtInt(Math.round(step.volume))}</span>
                     </div>
-                    {step.dropoff > 0 ? (
-                      <div style={{ paddingLeft: 140, marginTop: -4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ paddingLeft: 140, marginTop: -4, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      {step.next_label && step.dropoff_to_next > 0 ? (
                         <small className="venom-panel-footer" style={{ margin: 0 }}>
-                          {step.dropoff.toFixed(1)}% drop-off from prior stage
+                          <span style={{ color: 'var(--orange)' }}>↘</span> <strong>{step.dropoff_to_next.toFixed(1)}%</strong> drop to {step.next_label}
+                          {severity ? <span className={`badge ${severity.class}`} style={{ marginLeft: 6 }}>{severity.label}</span> : null}
+                          {isBiggestLeak ? <span className="badge badge-bad" style={{ marginLeft: 4 }}>Biggest leak</span> : null}
                         </small>
-                        {severity ? <span className={`badge ${severity.class}`}>{severity.label}</span> : null}
-                        {isBiggestLeak ? <span className="badge badge-bad">Biggest Leak</span> : null}
-                      </div>
-                    ) : null}
-                    {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions x 0.62 PDP view rate</small> : null}
-                    {step.label === 'Add to Cart' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: uses GA4 add_to_cart_rate x PDP estimate</small> : null}
-                    {step.label === 'Checkout' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: ATC x 0.58</small> : null}
+                      ) : null}
+                      {ppDelta != null ? (
+                        <small className="venom-panel-footer" style={{ margin: 0 }}>
+                          <span style={{ color: 'var(--blue)' }}>Δ</span> <span className={`badge ${ppBadgeClass}`}>{ppDelta >= 0 ? '+' : ''}{ppDelta.toFixed(1)}%</span> vs prior period
+                        </small>
+                      ) : null}
+                    </div>
+                    {step.label === 'PDP' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: sessions × 0.62 PDP view rate</small> : null}
+                    {step.label === 'Add to Cart' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: PDP × GA4 add-to-cart rate</small> : null}
+                    {step.label === 'Checkout' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Estimated: ATC × 0.58</small> : null}
                     {step.label === 'Purchase' ? <small style={{color:'var(--muted)', fontSize:11, fontStyle:'italic'}}>Canonical: Shopify order count</small> : null}
                   </div>
                 )
               })}
             </div>
             <small className="venom-panel-footer">
-              Estimated funnel — stages 2-4 are modeled from behavioral proxies
+              Estimated funnel — stages 2-4 are modeled from behavioral proxies.
+              Drop percentages are intra-funnel (this stage → next step); the
+              Δ badges compare volume to the same stage in the prior period
+              (or same-day-last-week when that compare mode is active).
             </small>
           </section>
 
@@ -629,24 +725,7 @@ export function MarketingDivision() {
               </div>
             </section>
 
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Channel Revenue</strong>
-                <TruthBadge state="unavailable" />
-              </div>
-              <div className="stack-list compact">
-                <div className="list-item status-bad">
-                  <strong>Blocked</strong>
-                  <p>{blockedStates.marketing_channel_revenue_breakdown.decision_blocked}</p>
-                  <small>
-                    Missing source: {blockedStates.marketing_channel_revenue_breakdown.missing_source}
-                  </small>
-                  <small>
-                    Owner: {blockedStates.marketing_channel_revenue_breakdown.owner} — {blockedStates.marketing_channel_revenue_breakdown.required_action_to_unblock}
-                  </small>
-                </div>
-              </div>
-            </section>
+            <ChannelMixCard range={range} />
           </div>
 
           {/* ---- Industry Pulse — Social Listening ---- */}

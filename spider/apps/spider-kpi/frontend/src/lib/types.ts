@@ -1122,6 +1122,49 @@ export interface ProbeFailureTicket {
   url: string | null
 }
 
+export interface MarketingChannelRow {
+  column: string
+  label: string
+  spend: number
+  share_pct: number
+  prior_spend: number
+  delta_pct: number | null
+}
+
+export interface MarketingPeriodCompareResponse {
+  ok: boolean
+  generated_at: string
+  mode: 'prior_period' | 'same_day_last_week' | string
+  window: { start: string; end: string; days: number; label_suffix: string }
+  prior_window: { start: string; end: string; days: number }
+  /** Hours elapsed today ET — set when current window is partial today. */
+  elapsed_hours_et: number | null
+  hour_trim_applied: boolean
+  current: { revenue: number; orders: number; sessions: number; ad_spend: number }
+  prior: { revenue: number; orders: number; sessions: number; ad_spend: number }
+  deltas: {
+    revenue_pct: number | null
+    orders_pct: number | null
+    sessions_pct: number | null
+    ad_spend_pct: number | null
+  }
+}
+
+export interface MarketingChannelMixResponse {
+  ok: boolean
+  generated_at: string
+  window: { start: string; end: string; days: number }
+  prior_window: { start: string; end: string; days: number } | null
+  totals: {
+    ad_spend: number
+    revenue: number
+    mer: number | null
+    unmapped_spend: number
+    per_channel_sum: number
+  }
+  channels: MarketingChannelRow[]
+}
+
 export interface ProbeFailureRateResponse {
   ok: boolean
   generated_at: string

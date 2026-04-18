@@ -22,6 +22,8 @@ import type {
   MorningBriefResponse,
   WismoKpiResponse,
   ProbeFailureRateResponse,
+  MarketingChannelMixResponse,
+  MarketingPeriodCompareResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
   SlackPulseResponse,
@@ -454,6 +456,32 @@ export const api = {
     request<WismoKpiResponse>(`/api/executive/wismo-kpi?days=${days}`, { signal }),
   probeFailureRate: (days: number = 90, signal?: AbortSignal) =>
     request<ProbeFailureRateResponse>(`/api/executive/probe-failure-rate?days=${days}`, { signal }),
+
+  // Marketing -----------------------------------------------------------
+  marketingChannelMix: (
+    opts: { start?: string; end?: string; days?: number; compare_prior?: boolean } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.start) p.set('start', opts.start)
+    if (opts.end) p.set('end', opts.end)
+    if (opts.days != null) p.set('days', String(opts.days))
+    if (opts.compare_prior === false) p.set('compare_prior', 'false')
+    const qs = p.toString()
+    return request<MarketingChannelMixResponse>(`/api/marketing/channel-mix${qs ? `?${qs}` : ''}`, { signal })
+  },
+  marketingPeriodCompare: (
+    opts: { start?: string; end?: string; days?: number; mode?: 'prior_period' | 'same_day_last_week' } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.start) p.set('start', opts.start)
+    if (opts.end) p.set('end', opts.end)
+    if (opts.days != null) p.set('days', String(opts.days))
+    if (opts.mode) p.set('mode', opts.mode)
+    const qs = p.toString()
+    return request<MarketingPeriodCompareResponse>(`/api/marketing/period-compare${qs ? `?${qs}` : ''}`, { signal })
+  },
 
   dismissInsight: (id: number, reason?: string) =>
     fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {

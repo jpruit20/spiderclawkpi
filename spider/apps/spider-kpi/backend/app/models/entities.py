@@ -138,6 +138,29 @@ class TWSummaryIntraday(TimestampMixin, Base):
     cost_per_atc: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     ad_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Per-channel spend (2026-04-18). ``channel_metrics_json`` is a
+    # flexible catch-all for revenue/orders/roas/impressions per channel
+    # when the raw TW payload exposes them — empty on older rows.
+    facebook_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    google_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    tiktok_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    snapchat_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    pinterest_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    bing_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    twitter_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reddit_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    linkedin_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    amazon_ads_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    smsbump_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    omnisend_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    postscript_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    taboola_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    outbrain_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    stackadapt_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    adroll_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    impact_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    custom_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    channel_metrics_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
 class TWSummaryDaily(TimestampMixin, Base):
@@ -157,6 +180,26 @@ class TWSummaryDaily(TimestampMixin, Base):
     cost_per_atc: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     ad_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    facebook_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    google_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    tiktok_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    snapchat_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    pinterest_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    bing_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    twitter_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reddit_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    linkedin_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    amazon_ads_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    smsbump_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    omnisend_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    postscript_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    taboola_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    outbrain_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    stackadapt_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    adroll_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    impact_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    custom_spend: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    channel_metrics_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
 class TWMetricCatalog(TimestampMixin, Base):

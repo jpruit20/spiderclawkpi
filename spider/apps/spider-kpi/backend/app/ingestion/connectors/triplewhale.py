@@ -66,6 +66,39 @@ def _sum_current_values(index: dict[str, dict[str, Any]], metric_ids: list[str])
     return sum(_current_value(index, metric_id, 0.0) for metric_id in metric_ids)
 
 
+# Per-channel spend metric IDs — TW surfaces spend under multiple
+# aliases depending on the channel / integration era (e.g. pinterestAds
+# vs pinterestSpend, googleAds vs googleSpend). We sum across aliases
+# for each normalized channel so the total lands in one column.
+# ``custom_spend`` captures the two meta-channels TW uses for arbitrary
+# user-defined integrations so those dollars aren't lost.
+CHANNEL_SPEND_IDS: dict[str, list[str]] = {
+    "facebook_spend": ["facebookSpend", "facebookAds"],
+    "google_spend": ["googleSpend", "googleAds"],
+    "tiktok_spend": ["tiktokSpend", "tiktokAds"],
+    "snapchat_spend": ["snapchatSpend", "snapchatAds"],
+    "pinterest_spend": ["pinterestSpend", "pinterestAds"],
+    "bing_spend": ["bingAdSpend", "bingSpend", "bingAds"],
+    "twitter_spend": ["twitterAds", "twitterSpend"],
+    "reddit_spend": ["redditSpend", "redditAds"],
+    "linkedin_spend": ["linkedinSpend", "linkedinAds"],
+    "amazon_ads_spend": ["amazonAds", "amazonSpend"],
+    "smsbump_spend": ["smsbumpSpend"],
+    "omnisend_spend": ["omnisendSpend"],
+    "postscript_spend": ["postscriptSpend"],
+    "taboola_spend": ["taboolaSpend"],
+    "outbrain_spend": ["outbrainSpend"],
+    "stackadapt_spend": ["stackadaptSpend"],
+    "adroll_spend": ["adrollSpend"],
+    "impact_spend": ["impactSpend"],
+    "custom_spend": ["totalCustomAdSpends", "totalApiCustomAdSpends"],
+}
+
+
+def _all_channel_metric_ids() -> list[str]:
+    return [mid for ids in CHANNEL_SPEND_IDS.values() for mid in ids]
+
+
 def _build_payload(store: str, start_date: str, end_date: str) -> dict[str, Any]:
     return {
         "period": {"start": start_date, "end": end_date},
@@ -85,41 +118,44 @@ def _build_payload(store: str, start_date: str, end_date: str) -> dict[str, Any]
             "pixelCostPerAtc",
             "blendedSales",
             "blendedAdSpend",
+            # Per-channel spend — stored as first-class columns so we
+            # can chart spend mix without re-parsing raw payloads.
+            *_all_channel_metric_ids(),
         ],
     }
 
 
+def _extract_channel_spends(index: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """Return {column_name: spend} for every channel defined in CHANNEL_SPEND_IDS.
+
+    Each channel sums across all known aliases for that channel, since
+    TW can emit spend under a historical or current alias depending on
+    when the ad-account was connected.
+    """
+    out: dict[str, float] = {}
+    for column_name, aliases in CHANNEL_SPEND_IDS.items():
+        out[column_name] = round(_sum_current_values(index, aliases), 2)
+    return out
+
+
 def _normalize(raw: Any, payload: dict[str, Any]) -> dict[str, Any]:
     index = _build_metric_index(raw)
+    channel_spends = _extract_channel_spends(index)
+    # Blended ad spend: prefer TW's blended value, else reconstruct by
+    # summing the per-channel totals (not the raw aliases — we already
+    # collapsed aliases in ``channel_spends``).
     ad_spend = _current_value(index, "blendedAdSpend", 0.0)
     if ad_spend == 0.0:
-        ad_spend = _sum_current_values(
-            index,
-            [
-                "facebookSpend",
-                "googleAds",
-                "googleSpend",
-                "tiktokSpend",
-                "snapchatSpend",
-                "pinterestAds",
-                "pinterestSpend",
-                "bingAdSpend",
-                "twitterAds",
-                "redditSpend",
-                "linkedinSpend",
-                "taboolaSpend",
-                "outbrainSpend",
-                "stackadaptSpend",
-                "adrollSpend",
-                "impactSpend",
-                "amazonAds",
-                "smsbumpSpend",
-                "omnisendSpend",
-                "postscriptSpend",
-                "totalCustomAdSpends",
-                "totalApiCustomAdSpends",
-            ],
-        )
+        ad_spend = sum(channel_spends.values())
+
+    # Channel-metrics catch-all: stash the raw per-channel metric values
+    # the payload exposed (keyed by alias) so we can re-derive ROAS /
+    # revenue / orders per channel later without a new migration.
+    channel_metrics_raw = {
+        mid: _current_value(index, mid, 0.0)
+        for mid in _all_channel_metric_ids()
+        if mid in index
+    }
 
     return {
         "date": payload["period"]["end"],
@@ -136,8 +172,32 @@ def _normalize(raw: Any, payload: dict[str, Any]) -> dict[str, Any]:
         "cost_per_atc": round(_current_value(index, "pixelCostPerAtc", 0.0), 4),
         "revenue": round(_current_value(index, "blendedSales", 0.0), 2),
         "ad_spend": round(ad_spend, 2),
+        **channel_spends,
+        "channel_metrics_json": channel_metrics_raw,
         "metric_ids_found": sorted(index.keys()),
     }
+
+
+# Scalar summary columns shared by TWSummaryDaily and TWSummaryIntraday.
+# Listed explicitly (not derived from the model) so a new keyword in
+# ``normalized`` doesn't silently land on the row — forces a deliberate
+# edit here, which also forces a matching alembic migration.
+_SUMMARY_SCALAR_FIELDS = (
+    "sessions", "users", "conversion_rate", "add_to_cart_rate",
+    "purchases", "page_views", "bounce_rate", "cost_per_session",
+    "cost_per_atc", "revenue", "ad_spend",
+    "facebook_spend", "google_spend", "tiktok_spend", "snapchat_spend",
+    "pinterest_spend", "bing_spend", "twitter_spend", "reddit_spend",
+    "linkedin_spend", "amazon_ads_spend", "smsbump_spend", "omnisend_spend",
+    "postscript_spend", "taboola_spend", "outbrain_spend", "stackadapt_spend",
+    "adroll_spend", "impact_spend", "custom_spend",
+)
+
+
+def _apply_summary_fields(record: Any, normalized: dict[str, Any]) -> None:
+    for field in _SUMMARY_SCALAR_FIELDS:
+        setattr(record, field, normalized.get(field, 0.0))
+    record.channel_metrics_json = normalized.get("channel_metrics_json") or {}
 
 
 def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str, Any]:
@@ -211,17 +271,7 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
             if record is None:
                 record = TWSummaryDaily(business_date=target_date)
                 db.add(record)
-            record.sessions = normalized["sessions"]
-            record.users = normalized["users"]
-            record.conversion_rate = normalized["conversion_rate"]
-            record.add_to_cart_rate = normalized["add_to_cart_rate"]
-            record.purchases = normalized["purchases"]
-            record.page_views = normalized["page_views"]
-            record.bounce_rate = normalized["bounce_rate"]
-            record.cost_per_session = normalized["cost_per_session"]
-            record.cost_per_atc = normalized["cost_per_atc"]
-            record.revenue = normalized["revenue"]
-            record.ad_spend = normalized["ad_spend"]
+            _apply_summary_fields(record, normalized)
 
             bucket = current_hour_bucket if target_date == business_today else datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
             intraday = db.execute(
@@ -230,17 +280,7 @@ def sync_triplewhale(db: Session, backfill_days: int | None = None) -> dict[str,
             if intraday is None:
                 intraday = TWSummaryIntraday(bucket_start=bucket)
                 db.add(intraday)
-            intraday.sessions = normalized["sessions"]
-            intraday.users = normalized["users"]
-            intraday.conversion_rate = normalized["conversion_rate"]
-            intraday.add_to_cart_rate = normalized["add_to_cart_rate"]
-            intraday.purchases = normalized["purchases"]
-            intraday.page_views = normalized["page_views"]
-            intraday.bounce_rate = normalized["bounce_rate"]
-            intraday.cost_per_session = normalized["cost_per_session"]
-            intraday.cost_per_atc = normalized["cost_per_atc"]
-            intraday.revenue = normalized["revenue"]
-            intraday.ad_spend = normalized["ad_spend"]
+            _apply_summary_fields(intraday, normalized)
 
             for metric_id in set(normalized["metric_ids_found"]):
                 catalog = db.execute(select(TWMetricCatalog).where(TWMetricCatalog.metric_id == metric_id)).scalars().first()
