@@ -495,12 +495,20 @@ export function ProductEngineeringDivision() {
     })
   }, [historyDaily, dateStart, dateEnd])
 
-  const fleetChartRows = useMemo(() => rangedHistory.map((row) => ({
-    date: row.business_date.slice(5),
-    active_devices: row.active_devices,
-    engaged_devices: row.engaged_devices,
-    error_rate: row.total_events > 0 ? Math.round((row.error_events / row.total_events) * 10000) / 100 : 0,
-  })), [rangedHistory])
+  // Exclude today's partial-rollup row from the fleet chart. Today's
+  // row in telemetry_history_daily is populated once at 4am ET by the
+  // nightly materializer using only the ~4 hours accumulated since
+  // midnight ET — it never updates during the day, so it always looks
+  // like a massive cliff (e.g. 172 yesterday → 21 today at 1pm). The
+  // banner below exposes the real "today" number from the live stream.
+  const fleetChartRows = useMemo(() => rangedHistory
+    .filter(row => row.business_date !== todayET())
+    .map((row) => ({
+      date: row.business_date.slice(5),
+      active_devices: row.active_devices,
+      engaged_devices: row.engaged_devices,
+      error_rate: row.total_events > 0 ? Math.round((row.error_events / row.total_events) * 10000) / 100 : 0,
+    })), [rangedHistory])
 
   const peakHourData = useMemo(() => buildPeakHours(rangedHistory), [rangedHistory])
   const modelData = useMemo(() => buildModelBreakdown(rangedHistory), [rangedHistory])
@@ -918,7 +926,8 @@ export function ProductEngineeringDivision() {
                 ) : <div className="state-message">No historical daily data available for this date range. Run the S3 import to populate fleet history.</div>}
                 {partialLatest && (
                   <div style={{ marginTop: 6, padding: '6px 10px', fontSize: 11, color: 'var(--muted)', background: 'rgba(245,158,11,0.08)', borderLeft: '3px solid var(--orange)', borderRadius: 4 }}>
-                    <strong style={{ color: 'var(--orange)' }}>⚠ Today ({partialLatest.business_date}) is a partial day.</strong> Only {fmtInt(partialLatest.active_devices)} device{partialLatest.active_devices === 1 ? '' : 's'} have reported shadow state so far; expect this to grow by end of day. Ignore if this is far below yesterday.
+                    <strong style={{ color: 'var(--orange)' }}>Today ({partialLatest.business_date}) excluded from chart.</strong>{' '}
+                    The daily rollup materializes once at 4am ET, so today's row reflects only the overnight hours ({fmtInt(partialLatest.active_devices)} device{partialLatest.active_devices === 1 ? '' : 's'} rolled up). Live stream shows <strong>{fmtInt(collection?.active_devices_last_24h ?? 0)}</strong> active in the last 24h and <strong>{fmtInt(collection?.active_devices_last_15m ?? 0)}</strong> cooking right now — today's bar will fill in tomorrow morning.
                   </div>
                 )}
                 {historyStats ? (
