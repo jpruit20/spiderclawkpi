@@ -1160,6 +1160,27 @@ export interface FirmwareImpactTimelineResponse {
   firmware_releases: FirmwareRelease[]
 }
 
+export interface CookDurationStats {
+  ok: boolean
+  source: string
+  window_days: number
+  total_sessions: number
+  avg_duration_seconds: number | null
+  median_duration_seconds: number | null
+  median_is_estimate?: boolean
+  p25_duration_seconds: number | null
+  p75_duration_seconds: number | null
+  p90_duration_seconds: number | null
+  unique_devices: number
+  unique_devices_is_partial?: boolean
+  unique_devices_source_days?: number
+  avg_sessions_per_device: number | null
+  median_sessions_per_device: number | null
+  sessions_per_device_histogram: Record<string, number> | null
+  top_device_sessions: Array<{ device_id_short: string; sessions: number }>
+  hint?: string
+}
+
 export interface CookOutcomesSummary {
   ok: boolean
   window_days: number

@@ -12,6 +12,7 @@ import type {
   ClickUpWebhookStatus,
   DeciClickUpLink,
   DeciDraft,
+  CookDurationStats,
   CookOutcomesSummary,
   DeciDraftsResponse,
   FirmwareCohortsResponse,
@@ -446,6 +447,8 @@ export const api = {
     request<FirmwareImpactTimelineResponse>(`/api/executive/firmware-impact-timeline?weeks=${weeks}`, { signal }),
   cookOutcomesSummary: (days: number = 90, signal?: AbortSignal) =>
     request<CookOutcomesSummary>(`/api/executive/cook-outcomes-summary?days=${days}`, { signal }),
+  cookDurationStats: (days: number = 30, signal?: AbortSignal) =>
+    request<CookDurationStats>(`/api/executive/cook-duration-stats?days=${days}`, { signal }),
   wismoKpi: (days: number = 30, signal?: AbortSignal) =>
     request<WismoKpiResponse>(`/api/executive/wismo-kpi?days=${days}`, { signal }),
 

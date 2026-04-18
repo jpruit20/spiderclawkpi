@@ -38,80 +38,127 @@ export function TelemetryReportCard({ reportType = 'comprehensive' as const }: {
   // backfill completes (see auto_regen_on_backfill_complete.py).
   const generatedBeforeBackfill = !!(report.created_at && new Date(report.created_at) < new Date('2026-04-18T12:00:00Z'))
 
-  return (
-    <section className="card" style={{ borderLeft: '3px solid #b88bff' }}>
-      <div className="venom-panel-head">
-        <strong>Telemetry analysis — {report.report_type === 'comprehensive' ? 'comprehensive baseline' : 'monthly report'}</strong>
-        <span className="venom-panel-hint">{report.window_start} → {report.window_end} · Opus 4.7</span>
-      </div>
+  const highFindings = (report.key_findings || []).filter(f => f.urgency === 'high').length
 
-      {generatedBeforeBackfill && (
-        <div
+  return (
+    <section
+      className="card"
+      style={{
+        borderLeft: '3px solid #b88bff',
+        padding: 0,
+      }}
+    >
+      {/* Collapsed header — one compact row. Click anywhere to expand. */}
+      <button
+        type="button"
+        onClick={() => setExpanded(x => !x)}
+        aria-expanded={expanded}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          width: '100%',
+          padding: '10px 14px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          color: 'inherit',
+          font: 'inherit',
+          minWidth: 0,
+        }}
+      >
+        <span
           style={{
-            margin: '8px 0 10px',
-            padding: '6px 10px',
-            fontSize: 11,
+            display: 'inline-block',
+            transition: 'transform 120ms ease',
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
             color: 'var(--muted)',
-            background: 'rgba(245, 158, 11, 0.08)',
-            borderLeft: '3px solid var(--orange)',
-            borderRadius: 4,
+            fontSize: 11,
+            width: 10,
+            flexShrink: 0,
           }}
         >
-          <strong style={{ color: 'var(--orange)' }}>Pending refresh:</strong> this baseline was written against
-          daily aggregates before the full S3 session backfill completed. The watchdog will automatically
-          regenerate with session-level depth (per-firmware success cohorts, duration/TTS percentiles,
-          archetype distribution) once the backfill finishes.
-        </div>
-      )}
-
-      <h3 style={{ margin: '6px 0 4px', fontSize: 15 }}>{report.title}</h3>
-      <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
-        {report.summary}
-      </p>
-
-      {report.key_findings && report.key_findings.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>
-            Key findings
-          </div>
-          <div className="stack-list compact">
-            {report.key_findings.slice(0, 5).map((f, i) => (
-              <div key={i} className={`list-item status-${f.urgency === 'high' ? 'bad' : f.urgency === 'medium' ? 'warn' : 'neutral'}`}>
-                <div className="item-head">
-                  <strong style={{ fontSize: 12 }}>{f.title}</strong>
-                  <div className="inline-badges">
-                    <span className={`badge ${f.urgency === 'high' ? 'badge-bad' : f.urgency === 'medium' ? 'badge-warn' : 'badge-muted'}`} style={{ fontSize: 10 }}>
-                      {f.urgency}
-                    </span>
-                    <span className="badge badge-muted" style={{ fontSize: 10 }}>{f.category}</span>
-                  </div>
-                </div>
-                <p style={{ fontSize: 11, margin: '4px 0 0' }}>{f.detail}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
-        <button
-          className="analysis-link"
-          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit' }}
-          onClick={() => setExpanded(x => !x)}
-        >
-          {expanded ? '▾ Hide full report' : `▸ Read full report (${report.sections.length} sections)`}
-        </button>
-        <span style={{ color: 'var(--muted)', fontSize: 11 }}>
-          {report.sources_used.length} sources · {Object.keys(report.benchmarks).length} benchmarks · {report.recommendations.length} recommendations
+          ▶
         </span>
-      </div>
+        <span style={{ fontSize: 14 }}>🧠</span>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {report.title}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+            {report.report_type === 'comprehensive' ? 'Comprehensive baseline' : 'Monthly report'}
+            {' · '}{report.window_start} → {report.window_end}
+            {' · '}{report.sections.length} sections · {report.key_findings.length} findings
+            {highFindings > 0 && <span style={{ color: 'var(--red)' }}>{` · ${highFindings} high-urgency`}</span>}
+            {generatedBeforeBackfill && <span style={{ color: 'var(--orange)' }}>{' · pending refresh'}</span>}
+          </div>
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
+          {expanded ? 'hide' : 'expand'}
+        </span>
+      </button>
 
       {expanded && (
-        <div
-          className="telemetry-report-body"
-          style={{ marginTop: 12, padding: 14, background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 13, lineHeight: 1.6 }}
-          dangerouslySetInnerHTML={{ __html: bodyHtml }}
-        />
+        <div style={{ padding: '0 16px 16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          {generatedBeforeBackfill && (
+            <div
+              style={{
+                margin: '10px 0',
+                padding: '6px 10px',
+                fontSize: 11,
+                color: 'var(--muted)',
+                background: 'rgba(245, 158, 11, 0.08)',
+                borderLeft: '3px solid var(--orange)',
+                borderRadius: 4,
+              }}
+            >
+              <strong style={{ color: 'var(--orange)' }}>Pending refresh:</strong> this baseline was written against
+              daily aggregates before the full S3 session backfill completed. The watchdog will automatically
+              regenerate with session-level depth (per-firmware success cohorts, duration/TTS percentiles,
+              archetype distribution) once the backfill finishes.
+            </div>
+          )}
+
+          <h3 style={{ margin: '10px 0 6px', fontSize: 15 }}>Executive summary</h3>
+          <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text)', whiteSpace: 'pre-wrap', marginTop: 0 }}>
+            {report.summary}
+          </p>
+
+          {report.key_findings && report.key_findings.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 6 }}>
+                Key findings
+              </div>
+              <div className="stack-list compact">
+                {report.key_findings.slice(0, 5).map((f, i) => (
+                  <div key={i} className={`list-item status-${f.urgency === 'high' ? 'bad' : f.urgency === 'medium' ? 'warn' : 'neutral'}`}>
+                    <div className="item-head">
+                      <strong style={{ fontSize: 12 }}>{f.title}</strong>
+                      <div className="inline-badges">
+                        <span className={`badge ${f.urgency === 'high' ? 'badge-bad' : f.urgency === 'medium' ? 'badge-warn' : 'badge-muted'}`} style={{ fontSize: 10 }}>
+                          {f.urgency}
+                        </span>
+                        <span className="badge badge-muted" style={{ fontSize: 10 }}>{f.category}</span>
+                      </div>
+                    </div>
+                    <p style={{ fontSize: 11, margin: '4px 0 0' }}>{f.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', color: 'var(--muted)', fontSize: 11 }}>
+            {report.sources_used.length} sources · {Object.keys(report.benchmarks).length} benchmarks · {report.recommendations.length} recommendations · Opus 4.7
+          </div>
+
+          <div
+            className="telemetry-report-body"
+            style={{ marginTop: 14, padding: 14, background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 13, lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
+        </div>
       )}
     </section>
   )

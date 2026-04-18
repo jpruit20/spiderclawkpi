@@ -917,6 +917,185 @@ def cook_outcomes_summary(
     }
 
 
+@router.get("/cook-duration-stats")
+def cook_duration_stats(
+    days: int = 30,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Duration + cohort analytics — 'how long are people cooking, and
+    how broad is the active user base?'
+
+    Returns:
+      * avg_duration_seconds, median_duration_seconds — cook length
+      * unique_devices — count of distinct device_ids seen in window
+      * total_sessions
+      * sessions_per_device histogram
+      * avg_sessions_per_device, median_sessions_per_device
+      * top_device_sessions — top-10 power-users session counts
+
+    Primary source is telemetry_sessions; when that's empty (backfill
+    in progress) we fall back to telemetry_stream_events for last-9d
+    visibility, and to telemetry_history_daily for long-range duration
+    aggregation.
+    """
+    days = max(1, min(days, 730))
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # --- Primary: telemetry_sessions ---------------------------------
+    sess_count = int(db.execute(text(
+        "SELECT COUNT(*) FROM telemetry_sessions WHERE session_start >= :s"
+    ), {"s": start}).scalar() or 0)
+
+    if sess_count >= 10:
+        # Duration stats from sessions — most accurate.
+        dur = db.execute(text("""
+            SELECT AVG(session_duration_seconds)::float AS avg_sec,
+                   percentile_cont(0.50) WITHIN GROUP (ORDER BY session_duration_seconds) AS p50,
+                   percentile_cont(0.25) WITHIN GROUP (ORDER BY session_duration_seconds) AS p25,
+                   percentile_cont(0.75) WITHIN GROUP (ORDER BY session_duration_seconds) AS p75,
+                   percentile_cont(0.90) WITHIN GROUP (ORDER BY session_duration_seconds) AS p90,
+                   COUNT(*) AS n
+              FROM telemetry_sessions
+             WHERE session_start >= :s
+               AND session_duration_seconds IS NOT NULL
+               AND session_duration_seconds > 0
+        """), {"s": start}).first()
+
+        # Cohort: sessions per device.
+        per_device = db.execute(text("""
+            SELECT device_id, COUNT(*) AS n
+              FROM telemetry_sessions
+             WHERE session_start >= :s AND device_id IS NOT NULL
+             GROUP BY device_id
+             ORDER BY n DESC
+        """), {"s": start}).all()
+        counts = [int(r[1]) for r in per_device]
+        unique_devices = len(counts)
+
+        # Sessions-per-device histogram buckets.
+        buckets = {"1": 0, "2-3": 0, "4-6": 0, "7-14": 0, "15-29": 0, "30+": 0}
+        for c in counts:
+            if c >= 30: buckets["30+"] += 1
+            elif c >= 15: buckets["15-29"] += 1
+            elif c >= 7: buckets["7-14"] += 1
+            elif c >= 4: buckets["4-6"] += 1
+            elif c >= 2: buckets["2-3"] += 1
+            else: buckets["1"] += 1
+
+        # Percentile stats on sessions-per-device.
+        avg_spd = (sum(counts) / len(counts)) if counts else None
+        median_spd = None
+        if counts:
+            sorted_c = sorted(counts)
+            mid = len(sorted_c) // 2
+            median_spd = sorted_c[mid] if len(sorted_c) % 2 else (sorted_c[mid - 1] + sorted_c[mid]) / 2
+
+        top10 = [
+            {"device_id_short": (r[0] or '')[:12], "sessions": int(r[1])}
+            for r in per_device[:10]
+        ]
+
+        return {
+            "ok": True,
+            "source": "telemetry_sessions",
+            "window_days": days,
+            "total_sessions": int(dur.n) if dur and dur.n else 0,
+            "avg_duration_seconds": round(float(dur.avg_sec), 1) if dur and dur.avg_sec is not None else None,
+            "median_duration_seconds": round(float(dur.p50), 1) if dur and dur.p50 is not None else None,
+            "p25_duration_seconds": round(float(dur.p25), 1) if dur and dur.p25 is not None else None,
+            "p75_duration_seconds": round(float(dur.p75), 1) if dur and dur.p75 is not None else None,
+            "p90_duration_seconds": round(float(dur.p90), 1) if dur and dur.p90 is not None else None,
+            "unique_devices": unique_devices,
+            "avg_sessions_per_device": round(avg_spd, 2) if avg_spd is not None else None,
+            "median_sessions_per_device": median_spd,
+            "sessions_per_device_histogram": buckets,
+            "top_device_sessions": top10,
+        }
+
+    # --- Fallback: telemetry_stream_events for duration + devices ----
+    # Less ideal (no session derivation), but gives SOMETHING while
+    # the S3 backfill is running.
+    stream_devices_row = db.execute(text("""
+        SELECT COUNT(DISTINCT device_id) AS n
+          FROM telemetry_stream_events
+         WHERE sample_timestamp >= :s
+           AND device_id IS NOT NULL
+    """), {"s": start}).first()
+    stream_devices = int(stream_devices_row.n) if stream_devices_row else 0
+
+    # Duration fallback from daily rollups' per-style medians —
+    # weighted by count.
+    style_rows = db.execute(text("""
+        SELECT cook_style_details_json
+          FROM telemetry_history_daily
+         WHERE business_date >= :start_d
+           AND cook_style_details_json IS NOT NULL
+           AND cook_style_details_json <> '{}'::jsonb
+    """), {"start_d": start.date()}).all()
+    total_count = 0
+    weighted_avg_sum = 0.0
+    all_bucket_counts = {"under_30m": 0, "30m_to_2h": 0, "2h_to_4h": 0, "over_4h": 0}
+    for (details,) in style_rows:
+        if not isinstance(details, dict):
+            continue
+        for style, d in details.items():
+            if not isinstance(d, dict): continue
+            c = int(d.get("count") or 0)
+            avg = d.get("avg_duration_seconds")
+            if c > 0 and avg is not None:
+                total_count += c
+                weighted_avg_sum += float(avg) * c
+
+    # Median from duration_range_json bucket interpolation.
+    bucket_rows = db.execute(text("""
+        SELECT duration_range_json
+          FROM telemetry_history_daily
+         WHERE business_date >= :start_d
+    """), {"start_d": start.date()}).all()
+    for (dr,) in bucket_rows:
+        if isinstance(dr, dict):
+            for k in all_bucket_counts:
+                all_bucket_counts[k] += int(dr.get(k) or 0)
+    total_bucket = sum(all_bucket_counts.values())
+    median_estimate = None
+    if total_bucket > 0:
+        # Midpoints per bucket, in seconds.
+        midpoints = {"under_30m": 900, "30m_to_2h": 4500, "2h_to_4h": 10800, "over_4h": 18000}
+        cum = 0
+        half = total_bucket / 2
+        for k in ["under_30m", "30m_to_2h", "2h_to_4h", "over_4h"]:
+            cum += all_bucket_counts[k]
+            if cum >= half:
+                median_estimate = midpoints[k]
+                break
+
+    return {
+        "ok": True,
+        "source": "fallback_history_daily+stream_events",
+        "window_days": days,
+        "total_sessions": total_count,
+        "avg_duration_seconds": round(weighted_avg_sum / total_count, 1) if total_count > 0 else None,
+        "median_duration_seconds": median_estimate,
+        "median_is_estimate": True,
+        "p25_duration_seconds": None,
+        "p75_duration_seconds": None,
+        "p90_duration_seconds": None,
+        "unique_devices": stream_devices,
+        "unique_devices_is_partial": True,
+        "unique_devices_source_days": 9,
+        "avg_sessions_per_device": None,
+        "median_sessions_per_device": None,
+        "sessions_per_device_histogram": None,
+        "top_device_sessions": [],
+        "hint": (
+            "Cohort analytics (sessions-per-device histogram, device-level stats) "
+            "populate automatically once the v2 S3 backfill finishes writing to "
+            "telemetry_sessions. Duration stats shown here are weighted averages "
+            "from the daily rollups + a median estimate from duration buckets."
+        ),
+    }
+
+
 @router.post("/insights/{insight_id}/dismiss")
 def dismiss_insight(
     insight_id: int,

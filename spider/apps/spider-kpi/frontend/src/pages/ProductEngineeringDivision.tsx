@@ -14,6 +14,7 @@ import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
+import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
@@ -369,6 +370,20 @@ export function ProductEngineeringDivision() {
     api.cookOutcomesSummary(daysDiff)
       .then(data => { if (!cancelled) setCookOutcomes(data) })
       .catch(() => { if (!cancelled) setCookOutcomes(null) })
+    return () => { cancelled = true }
+  }, [daysDiff])
+
+  // Cook duration + unique-device cohort stats. Drives:
+  //   - Avg/Median cook time tiles (replaces old Avg Cook Temp)
+  //   - Unique devices in range + sessions-per-device histogram panel
+  //     (the '13k Venoms in the world, are we seeing 100 users or a
+  //     broad cohort?' question)
+  const [cookDuration, setCookDuration] = useState<Record<string, any> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.cookDurationStats(daysDiff)
+      .then(data => { if (!cancelled) setCookDuration(data) })
+      .catch(() => { if (!cancelled) setCookDuration(null) })
     return () => { cancelled = true }
   }, [daysDiff])
 
@@ -911,13 +926,47 @@ export function ProductEngineeringDivision() {
                       </div>
                       <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
                     </div>
+                    {/* Avg Cook Time — replaces Avg Cook Temp. Pulls from
+                        /cook-duration-stats which prefers telemetry_sessions
+                        but falls back to weighted per-style aggregates from
+                        the daily rollups when sessions haven't been
+                        backfilled yet. */}
                     <div className="venom-kpi-card">
-                      <div className="venom-kpi-label">Avg Cook Temp</div>
+                      <div className="venom-kpi-label">Avg Cook Time</div>
                       <div className="venom-kpi-value">
-                        {historyStats.historicalCookTemp != null ? `${Math.round(historyStats.historicalCookTemp)}\u00b0F` : '\u2014'}
+                        {cookDuration?.avg_duration_seconds != null
+                          ? fmtDuration(cookDuration.avg_duration_seconds)
+                          : '\u2014'}
                       </div>
-                      <div className="venom-kpi-sub">weighted by event volume</div>
-                      <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
+                      <div className="venom-kpi-sub">
+                        {cookDuration?.source === 'telemetry_sessions'
+                          ? `${fmtInt(cookDuration.total_sessions || 0)} sessions`
+                          : cookDuration
+                            ? 'weighted from daily rollups · sessions pending backfill'
+                            : 'loading…'}
+                      </div>
+                      <div className="venom-kpi-badges">
+                        <TruthBadge state={cookDuration?.source === 'telemetry_sessions' ? 'canonical' : 'estimated'} />
+                      </div>
+                    </div>
+                    {/* Median Cook Time — new tile alongside Avg. */}
+                    <div className="venom-kpi-card">
+                      <div className="venom-kpi-label">Median Cook Time</div>
+                      <div className="venom-kpi-value">
+                        {cookDuration?.median_duration_seconds != null
+                          ? fmtDuration(cookDuration.median_duration_seconds)
+                          : '\u2014'}
+                      </div>
+                      <div className="venom-kpi-sub">
+                        {cookDuration?.source === 'telemetry_sessions'
+                          ? `p50 · ${cookDuration.p90_duration_seconds != null ? `p90 ${fmtDuration(cookDuration.p90_duration_seconds)}` : ''}`
+                          : cookDuration?.median_is_estimate
+                            ? 'bucket-interpolated estimate · refines after backfill'
+                            : ''}
+                      </div>
+                      <div className="venom-kpi-badges">
+                        <TruthBadge state={cookDuration?.source === 'telemetry_sessions' ? 'canonical' : 'estimated'} />
+                      </div>
                     </div>
                     <div className="venom-kpi-card">
                       <div className="venom-kpi-label">Total Events</div>
@@ -927,38 +976,58 @@ export function ProductEngineeringDivision() {
                     </div>
                   </div>
                 ) : null}
+
+                {/* Unique-device cohort panel — 'are we seeing the same
+                    100 people cook over and over, or is the active user
+                    base broad?' Answers: count of distinct Venoms active
+                    in the selected window + histogram of sessions-per-
+                    device. Lights up fully once telemetry_sessions
+                    populates; falls back to a 9-day stream-events count
+                    in the meantime. */}
+                {cookDuration && (
+                  <UniqueDeviceCohortPanel stats={cookDuration} />
+                )}
               </section>
 
               {/* Model Mix Over Time — surfaces the Huntsman ramp that was
-                  invisible on the active-devices chart (report finding #3). */}
+                  invisible on the active-devices chart (report finding #3).
+                  NOT stacked: each model is its own translucent area so
+                  smaller lines are still visible when they overlap the
+                  bigger ones. Render order: largest model first (in the
+                  back), smaller models on top so they never get hidden. */}
               {modelStacked.rows.length > 0 && modelStacked.keys.length > 1 && (
                 <section className="card">
                   <div className="venom-panel-head">
                     <div>
                       <strong>Fleet Composition — Daily Events by Model</strong>
-                      <p className="venom-chart-sub">Stacked event volume per grill model across the selected range. Ramps and SKU shifts show here first.</p>
+                      <p className="venom-chart-sub">Per-model event volume across the selected range. Overlayed (not stacked) so small-share models stay visible — smaller models render on top with translucent fill.</p>
                     </div>
                     <span className="venom-panel-hint">{modelStacked.keys.length} models shown</span>
                   </div>
                   <div className="chart-wrap">
                     <ResponsiveContainer width="100%" height={300}>
-                      <ComposedChart data={modelStacked.rows} stackOffset="none">
+                      <ComposedChart data={modelStacked.rows}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" />
                         <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
                         <YAxis stroke="#9fb0d4" tickFormatter={(v: number) => v >= 1_000_000 ? `${(v/1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v/1_000).toFixed(0)}k` : String(v)} />
                         <Tooltip formatter={(v: number) => v.toLocaleString()} />
                         <Legend />
+                        {/* Render largest-total first so small models paint on top
+                            and remain visible through the big model's translucent
+                            fill. `modelStacked.keys` is already sorted descending
+                            by cumulative event volume (from buildModelStackedSeries). */}
                         {modelStacked.keys.map((name, i) => (
                           <Area
                             key={name}
                             type="monotone"
                             dataKey={name}
-                            stackId="1"
                             name={name}
                             fill={CHART_COLORS[i % CHART_COLORS.length]}
                             stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                            fillOpacity={0.55}
-                            strokeWidth={1}
+                            fillOpacity={0.30}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 3 }}
                           />
                         ))}
                       </ComposedChart>
@@ -966,6 +1035,7 @@ export function ProductEngineeringDivision() {
                   </div>
                   <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
                     Derived from <code>telemetry_history_daily.model_distribution</code>. Kettle22 / W:K:22:1:V / kettle_22 are merged under one display name.
+                    Areas are overlayed with 30% fill — legend toggle lets you isolate a single model.
                   </p>
                 </section>
               )}
