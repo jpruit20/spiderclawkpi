@@ -40,16 +40,11 @@ export function CommandCenter() {
     return () => { cancelled = true }
   }, [])
 
-  if (loading) return <div className="page-grid"><section className="card"><div className="state-message">Loading…</div></section></div>
-  if (error || !data) return <div className="page-grid"><section className="card"><div className="state-message error">{error || 'No data'}</div></section></div>
-
-  const h = data.headline
-  const revSparkline = (data.revenue.sparkline || []).map(p => p.revenue)
-
-  // Greeting updates with ET time-of-day. Re-evaluated once per mount;
-  // a page refresh (every morning-brief refetch) will pick up the
-  // current bucket. For a page open all day, it re-renders on other
-  // state changes frequently enough to feel live.
+  // NOTE: every hook must run on every render — keep all useMemo/useEffect
+  // calls above the loading/error early returns below. React error #310
+  // ("Rendered more hooks than during the previous render") fires if a
+  // hook sits below an early return, because the first render (loading=true)
+  // skips it and the second render (loading=false) runs it.
   const greeting = useMemo(() => {
     const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
     const hour = nowET.getHours()
@@ -57,7 +52,13 @@ export function CommandCenter() {
     if (hour >= 12 && hour < 17) return "Good afternoon — here's where things stand"
     if (hour >= 17 && hour < 22) return "Good evening — here's the wrap-up"
     return "Burning the midnight oil — here's the state of things"
-  }, [data.generated_at])
+  }, [data?.generated_at])
+
+  if (loading) return <div className="page-grid"><section className="card"><div className="state-message">Loading…</div></section></div>
+  if (error || !data) return <div className="page-grid"><section className="card"><div className="state-message error">{error || 'No data'}</div></section></div>
+
+  const h = data.headline
+  const revSparkline = (data.revenue.sparkline || []).map(p => p.revenue)
 
   // Derive division status from morning brief data.
   const pe = derivePEStatus(data)
