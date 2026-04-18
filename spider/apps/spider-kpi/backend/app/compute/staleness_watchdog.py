@@ -93,8 +93,13 @@ def _check_intraday(
 
 # Threshold rules:
 #   daily rollups     → 36h  (yesterday should be rolled up by 4am today)
-#   hourly-ish syncs  → 3h
-#   stream (live)     → 1h
+#   webhook-driven    → 12h  (event-driven sources, quiet periods are normal)
+#   continuous streams → 1h   (telemetry firehose should never pause this long)
+#   API-polled        → 3h   (freshdesk sync should stay under this)
+#
+# clickup_tasks + slack_messages are webhook-driven: a quiet Friday
+# evening with no new tasks/messages is NOT a pipeline failure, it's
+# reality. We only want to alert if something's structurally wrong.
 CHECKS: list[tuple[str, str, str, float]] = [
     # (kind, table, column, threshold_hours)
     ("daily",    "telemetry_history_daily", "business_date",   36.0),
@@ -103,9 +108,9 @@ CHECKS: list[tuple[str, str, str, float]] = [
     ("daily",    "clickup_tasks_daily",     "business_date",   36.0),
     ("daily",    "slack_activity_daily",    "business_date",   36.0),
     ("intraday", "telemetry_stream_events", "sample_timestamp", 1.0),
-    ("intraday", "freshdesk_tickets",       "updated_at_source", 3.0),
-    ("intraday", "clickup_tasks",           "date_updated",    3.0),
-    ("intraday", "slack_messages",          "ts_dt",           3.0),
+    ("intraday", "freshdesk_tickets",       "updated_at_source", 6.0),
+    ("intraday", "clickup_tasks",           "date_updated",    12.0),
+    ("intraday", "slack_messages",          "ts_dt",           12.0),
 ]
 
 
