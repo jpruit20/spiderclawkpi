@@ -557,9 +557,19 @@ ON CONFLICT (source_event_id) DO NOTHING
 
 
 def days_with_sessions(conn) -> set[str]:
-    """Returns set of YYYY-MM-DD where session_count > 0 already."""
+    """Returns set of YYYY-MM-DD where v2 has already written s3:-prefixed
+    session rows. Previously this checked telemetry_history_daily's
+    session_count — but that column gets populated by the v1 backfill
+    too, which means v2 would incorrectly skip days that v1 rolled up
+    but never wrote individual session rows for. Now we check the real
+    source of truth: are there actual s3:-prefixed sessions persisted
+    for this date?"""
     with conn.cursor() as cur:
-        cur.execute("SELECT business_date FROM telemetry_history_daily WHERE session_count IS NOT NULL AND session_count > 0")
+        cur.execute("""
+            SELECT DISTINCT DATE(session_start) AS d
+              FROM telemetry_sessions
+             WHERE source_event_id LIKE 's3:%%'
+        """)
         return {str(r[0]) for r in cur.fetchall()}
 
 

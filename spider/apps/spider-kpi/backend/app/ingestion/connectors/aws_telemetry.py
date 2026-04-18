@@ -549,7 +549,14 @@ def sync_aws_telemetry(
         with _telemetry_setting_overrides(**override_values):
             records, read_stats = _load_records(max_records)
             sessions, derivation_stats = _derive_sessions(records)
-        db.execute(delete(TelemetrySession))
+        # NOTE: sync_aws_telemetry treats telemetry_sessions as its own
+        # scratch space — it always rebuilds its rows from the current
+        # DynamoDB scan on each run. The S3 historical backfill writes
+        # rows with source_event_id prefixed 's3:'; those MUST be preserved
+        # here. (Before 2026-04-18 this blanket-wiped the table every
+        # sync — it silently erased 12k+ backfilled sessions in a single
+        # scheduler fire.)
+        db.execute(delete(TelemetrySession).where(~TelemetrySession.source_event_id.like('s3:%')))
         db.execute(delete(TelemetryDaily))
         db.flush()
 
