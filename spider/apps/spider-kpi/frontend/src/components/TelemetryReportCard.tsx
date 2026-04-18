@@ -29,12 +29,40 @@ export function TelemetryReportCard({ reportType = 'comprehensive' as const }: {
 
   if (loading || !report) return null
 
+  // The first comprehensive report was generated against daily aggregates
+  // + partial-sample session data. Session-level depth (archetype
+  // distribution, per-firmware cohorts, duration percentiles) only
+  // became available after the full S3 backfill landed in
+  // `telemetry_sessions`. Reports generated *before* that have this
+  // pending badge; a fresh regeneration happens automatically once the
+  // backfill completes (see auto_regen_on_backfill_complete.py).
+  const generatedBeforeBackfill = !!(report.created_at && new Date(report.created_at) < new Date('2026-04-18T12:00:00Z'))
+
   return (
     <section className="card" style={{ borderLeft: '3px solid #b88bff' }}>
       <div className="venom-panel-head">
         <strong>Telemetry analysis — {report.report_type === 'comprehensive' ? 'comprehensive baseline' : 'monthly report'}</strong>
         <span className="venom-panel-hint">{report.window_start} → {report.window_end} · Opus 4.7</span>
       </div>
+
+      {generatedBeforeBackfill && (
+        <div
+          style={{
+            margin: '8px 0 10px',
+            padding: '6px 10px',
+            fontSize: 11,
+            color: 'var(--muted)',
+            background: 'rgba(245, 158, 11, 0.08)',
+            borderLeft: '3px solid var(--orange)',
+            borderRadius: 4,
+          }}
+        >
+          <strong style={{ color: 'var(--orange)' }}>Pending refresh:</strong> this baseline was written against
+          daily aggregates before the full S3 session backfill completed. The watchdog will automatically
+          regenerate with session-level depth (per-firmware success cohorts, duration/TTS percentiles,
+          archetype distribution) once the backfill finishes.
+        </div>
+      )}
 
       <h3 style={{ margin: '6px 0 4px', fontSize: 15 }}>{report.title}</h3>
       <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
