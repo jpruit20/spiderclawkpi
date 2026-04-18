@@ -27,6 +27,7 @@ from app.models import (
     TelemetryAnomaly,
     TelemetryHistoryDaily,
     TelemetryReport,
+    TelemetrySession,
 )
 
 
@@ -409,6 +410,76 @@ def get_telemetry_report(
     if r is None:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "report": _report_payload(r, full_body=True)}
+
+
+@router.get("/firmware-cohorts")
+def firmware_cohorts(
+    min_sessions: int = 20,
+    limit: int = 20,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Per-firmware session performance (cook success, stability, tts, error rate).
+
+    Operates over the full telemetry_sessions table. Returns a list of
+    cohorts with n ≥ min_sessions, sorted by session count desc.
+
+    Returns ``{ok: False, reason: "insufficient_data"}`` when session
+    table has <100 rows so callers can show a "backfill in progress"
+    hint instead of an empty chart.
+    """
+    total = int(db.execute(select(func.count(TelemetrySession.id))).scalar() or 0)
+    if total < 100:
+        return {
+            "ok": False,
+            "reason": "insufficient_data",
+            "total_sessions": total,
+            "hint": "Session-level data is still backfilling from S3. This panel will populate automatically once the v2 backfill completes.",
+        }
+
+    rows = db.execute(text("""
+        SELECT firmware_version,
+               COUNT(*)                                AS n,
+               AVG((cook_success::int))::float         AS success_rate,
+               AVG(temp_stability_score)::float        AS avg_stability,
+               AVG(session_duration_seconds)::float    AS avg_duration_seconds,
+               AVG(time_to_stabilization_seconds)::float AS avg_tts_seconds,
+               SUM(error_count)                        AS total_errors,
+               SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END) AS sessions_with_errors,
+               AVG(target_temp)::float                 AS avg_target_temp,
+               MIN(session_start)                      AS first_seen,
+               MAX(session_start)                      AS last_seen
+          FROM telemetry_sessions
+         WHERE firmware_version IS NOT NULL
+         GROUP BY firmware_version
+         HAVING COUNT(*) >= :min_n
+         ORDER BY n DESC
+         LIMIT :limit
+    """), {"min_n": min_sessions, "limit": limit}).mappings().all()
+
+    cohorts = []
+    for r in rows:
+        n = int(r["n"] or 0)
+        errors = int(r["sessions_with_errors"] or 0)
+        cohorts.append({
+            "firmware_version": r["firmware_version"],
+            "sessions": n,
+            "success_rate": float(r["success_rate"] or 0),
+            "avg_stability": float(r["avg_stability"] or 0),
+            "avg_duration_seconds": float(r["avg_duration_seconds"] or 0),
+            "avg_tts_seconds": float(r["avg_tts_seconds"]) if r["avg_tts_seconds"] is not None else None,
+            "error_session_rate": (errors / n) if n else 0.0,
+            "total_errors": int(r["total_errors"] or 0),
+            "avg_target_temp": float(r["avg_target_temp"]) if r["avg_target_temp"] is not None else None,
+            "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
+            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+        })
+    return {
+        "ok": True,
+        "total_sessions": total,
+        "cohorts_returned": len(cohorts),
+        "min_sessions_threshold": min_sessions,
+        "cohorts": cohorts,
+    }
 
 
 @router.post("/insights/{insight_id}/dismiss")

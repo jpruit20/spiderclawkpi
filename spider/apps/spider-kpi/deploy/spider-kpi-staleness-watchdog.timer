@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for stale data tables at 6:45am ET (heads-up before the 7am morning email)
+Requires=spider-kpi-staleness-watchdog.service
+
+[Timer]
+OnCalendar=*-*-* 06:45:00 America/New_York
+Persistent=true
+Unit=spider-kpi-staleness-watchdog.service
+
+[Install]
+WantedBy=timers.target

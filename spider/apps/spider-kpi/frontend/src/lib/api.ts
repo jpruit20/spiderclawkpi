@@ -13,6 +13,7 @@ import type {
   DeciClickUpLink,
   DeciDraft,
   DeciDraftsResponse,
+  FirmwareCohortsResponse,
   InsightsListResponse,
   LatestTelemetryReportResponse,
   MorningBriefResponse,
@@ -436,6 +437,8 @@ export const api = {
   },
   latestTelemetryReport: (type: 'comprehensive' | 'monthly' = 'comprehensive', signal?: AbortSignal) =>
     request<LatestTelemetryReportResponse>(`/api/executive/telemetry-reports/latest?type=${type}`, { signal }),
+  firmwareCohorts: (min_sessions: number = 20, signal?: AbortSignal) =>
+    request<FirmwareCohortsResponse>(`/api/executive/firmware-cohorts?min_sessions=${min_sessions}`, { signal }),
 
   dismissInsight: (id: number, reason?: string) =>
     fetch(`${API_BASE}/api/executive/insights/${id}/dismiss${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {

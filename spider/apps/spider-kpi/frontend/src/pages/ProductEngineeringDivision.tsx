@@ -9,6 +9,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
+import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { ApiError, api } from '../lib/api'
@@ -82,14 +83,36 @@ const COOK_STYLE_COLORS: Record<string, string> = {
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 
+/** UTC offset for America/New_York on a representative "now" date.
+ *  DST-correct: -4 during EDT (spring-summer), -5 during EST (fall-winter).
+ *  We rebase peak_hour_distribution (which is keyed by UTC hour) into
+ *  ET so "0:00" late-night cooks don't show up in the morning bucket. */
+function _etOffsetHours(): number {
+  // Compute current ET offset by taking a UTC midnight and asking what
+  // hour it is in NY. The difference is the offset.
+  const nowUtc = new Date()
+  const etFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const parts = etFormatter.formatToParts(nowUtc)
+  const etHour = Number(parts.find(p => p.type === 'hour')?.value ?? '0')
+  const utcHour = nowUtc.getUTCHours()
+  let delta = etHour - utcHour
+  if (delta > 12) delta -= 24
+  if (delta < -12) delta += 24
+  return delta
+}
+
 function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
-  const hourTotals: Record<string, number> = {}
+  const offset = _etOffsetHours()  // e.g. -4 during EDT
+  const etTotals: Record<number, number> = {}
   for (const row of historyRows) {
     for (const [hour, count] of Object.entries(row.peak_hour_distribution || {})) {
-      hourTotals[hour] = (hourTotals[hour] || 0) + (count as number)
+      const utcH = Number(hour)
+      if (!Number.isFinite(utcH)) continue
+      const etH = (utcH + offset + 24) % 24
+      etTotals[etH] = (etTotals[etH] || 0) + (count as number)
     }
   }
-  return Array.from({ length: 24 }, (_, i) => ({ hour: `${String(i).padStart(2, '0')}:00`, events: hourTotals[String(i)] || 0 }))
+  return Array.from({ length: 24 }, (_, i) => ({ hour: `${String(i).padStart(2, '0')}:00 ET`, events: etTotals[i] || 0 }))
 }
 
 function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
@@ -857,6 +880,10 @@ export function ProductEngineeringDivision() {
                   </p>
                 </section>
               )}
+
+              {/* Firmware cohort performance — lights up when telemetry_sessions
+                  has enough rows. Uses ≥20-session threshold. */}
+              <FirmwareCohortPanel minSessions={20} />
 
               {/* Cook Type Analysis */}
               <section className="card">

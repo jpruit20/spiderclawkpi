@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll for v2 backfill completion every 15 min until it fires once
+Requires=spider-kpi-auto-regen-watcher.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=spider-kpi-auto-regen-watcher.service
+
+[Install]
+WantedBy=timers.target

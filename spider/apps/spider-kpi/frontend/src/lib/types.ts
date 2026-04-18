@@ -1080,6 +1080,30 @@ export interface MorningSlackHot {
   ts_dt: string | null
 }
 
+export interface FirmwareCohort {
+  firmware_version: string
+  sessions: number
+  success_rate: number
+  avg_stability: number
+  avg_duration_seconds: number
+  avg_tts_seconds: number | null
+  error_session_rate: number
+  total_errors: number
+  avg_target_temp: number | null
+  first_seen: string | null
+  last_seen: string | null
+}
+
+export interface FirmwareCohortsResponse {
+  ok: boolean
+  reason?: string
+  hint?: string
+  total_sessions: number
+  cohorts_returned?: number
+  min_sessions_threshold?: number
+  cohorts?: FirmwareCohort[]
+}
+
 export interface TelemetryAnomaly {
   id: number
   business_date: string

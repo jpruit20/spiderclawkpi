@@ -1,0 +1,13 @@
+[Unit]
+Description=Spider KPI staleness watchdog
+After=network-online.target
+OnFailure=spider-kpi-job-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/run_staleness_watchdog.py
+StandardOutput=append:/var/log/spider-kpi-staleness-watchdog.log
+StandardError=append:/var/log/spider-kpi-staleness-watchdog.log

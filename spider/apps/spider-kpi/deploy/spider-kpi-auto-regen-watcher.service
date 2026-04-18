@@ -1,0 +1,13 @@
+[Unit]
+Description=Auto-regen comprehensive telemetry report when v2 backfill completes
+After=network-online.target
+OnFailure=spider-kpi-job-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+EnvironmentFile=/opt/spiderclawkpi/spider/apps/spider-kpi/.env
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/auto_regen_on_backfill_complete.py
+StandardOutput=append:/var/log/spider-kpi-auto-regen-watcher.log
+StandardError=append:/var/log/spider-kpi-auto-regen-watcher.log
