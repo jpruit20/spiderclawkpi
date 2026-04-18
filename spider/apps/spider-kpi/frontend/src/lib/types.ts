@@ -1110,6 +1110,7 @@ export interface WismoKpiResponse {
 export interface FirmwareCohort {
   firmware_version: string
   sessions: number
+  /** Legacy success rate — retained for back-compat; prefer held_target_rate. */
   success_rate: number
   avg_stability: number
   avg_duration_seconds: number
@@ -1119,6 +1120,61 @@ export interface FirmwareCohort {
   avg_target_temp: number | null
   first_seen: string | null
   last_seen: string | null
+  /** Intent/outcome/PID-quality (new model, added 2026-04-18). Null
+   *  while the re-derivation hasn't populated yet. */
+  held_target_rate: number | null
+  target_seeking_sessions: number
+  startup_assist_sessions: number
+  reached_not_held_sessions: number
+  did_not_reach_sessions: number
+  avg_in_control_pct: number | null
+  avg_disturbances_per_cook: number | null
+  avg_recovery_seconds: number | null
+  avg_max_overshoot_f: number | null
+}
+
+export interface FirmwareImpactWeek {
+  week_start: string
+  dominant_firmware: string | null
+  in_control_pct: number | null
+  held_target_rate: number | null
+  avg_disturbances_per_cook: number | null
+  avg_recovery_seconds: number | null
+  sessions: number
+  firmware_share: Record<string, number>
+  sparse: boolean
+}
+
+export interface FirmwareRelease {
+  date: string
+  name: string
+  url: string | null
+}
+
+export interface FirmwareImpactTimelineResponse {
+  ok: boolean
+  window_weeks: number
+  start: string
+  end: string
+  series: FirmwareImpactWeek[]
+  firmware_releases: FirmwareRelease[]
+}
+
+export interface CookOutcomesSummary {
+  ok: boolean
+  window_days: number
+  totals: {
+    sessions_scored: number
+    held_count: number
+    target_seeking_count: number
+    held_target_rate: number | null
+    avg_in_control_pct: number | null
+    avg_disturbances_per_cook: number | null
+    avg_recovery_seconds: number | null
+  }
+  intent_distribution: Array<{ intent: string; count: number }>
+  outcome_distribution: Array<{ outcome: string; count: number }>
+  daily_intent_series: Array<Record<string, number | string>>
 }
 
 export interface FirmwareCohortsResponse {

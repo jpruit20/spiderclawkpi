@@ -593,18 +593,36 @@ def firmware_cohorts(
             "hint": "Session-level data is still backfilling from S3. This panel will populate automatically once the v2 backfill completes.",
         }
 
+    # The per-firmware aggregate uses the new intent/outcome/PID-quality
+    # columns alongside the legacy success_rate. held_target_rate is the
+    # headline PID metric — it excludes startup_assist and disconnect
+    # sessions from the denominator. avg_in_control_pct measures PID
+    # performance during non-disturbance windows only.
     rows = db.execute(text("""
         SELECT firmware_version,
-               COUNT(*)                                AS n,
-               AVG((cook_success::int))::float         AS success_rate,
-               AVG(temp_stability_score)::float        AS avg_stability,
-               AVG(session_duration_seconds)::float    AS avg_duration_seconds,
-               AVG(time_to_stabilization_seconds)::float AS avg_tts_seconds,
-               SUM(error_count)                        AS total_errors,
-               SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END) AS sessions_with_errors,
-               AVG(target_temp)::float                 AS avg_target_temp,
-               MIN(session_start)                      AS first_seen,
-               MAX(session_start)                      AS last_seen
+               COUNT(*)                                                         AS n,
+               AVG((cook_success::int))::float                                  AS success_rate,
+               AVG(temp_stability_score)::float                                 AS avg_stability,
+               AVG(session_duration_seconds)::float                             AS avg_duration_seconds,
+               AVG(time_to_stabilization_seconds)::float                        AS avg_tts_seconds,
+               SUM(error_count)                                                 AS total_errors,
+               SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END)                 AS sessions_with_errors,
+               AVG(target_temp)::float                                          AS avg_target_temp,
+               MIN(session_start)                                               AS first_seen,
+               MAX(session_start)                                               AS last_seen,
+               -- intent/outcome/PID quality model (new)
+               SUM(CASE WHEN held_target IS TRUE THEN 1 ELSE 0 END)             AS held_target_count,
+               SUM(CASE
+                     WHEN cook_outcome IN ('reached_and_held','reached_not_held','did_not_reach')
+                       AND cook_intent <> 'startup_assist'
+                     THEN 1 ELSE 0 END)                                         AS target_seeking_count,
+               AVG(in_control_pct)::float                                       AS avg_in_control_pct,
+               AVG(disturbance_count)::float                                    AS avg_disturbances,
+               AVG(avg_recovery_seconds)::float                                 AS avg_recovery_seconds,
+               AVG(max_overshoot_f)::float                                      AS avg_max_overshoot_f,
+               SUM(CASE WHEN cook_intent = 'startup_assist' THEN 1 ELSE 0 END)  AS startup_count,
+               SUM(CASE WHEN cook_outcome = 'reached_not_held' THEN 1 ELSE 0 END) AS not_held_count,
+               SUM(CASE WHEN cook_outcome = 'did_not_reach'     THEN 1 ELSE 0 END) AS not_reach_count
           FROM telemetry_sessions
          WHERE firmware_version IS NOT NULL
          GROUP BY firmware_version
@@ -617,9 +635,12 @@ def firmware_cohorts(
     for r in rows:
         n = int(r["n"] or 0)
         errors = int(r["sessions_with_errors"] or 0)
+        held = int(r["held_target_count"] or 0)
+        seeking = int(r["target_seeking_count"] or 0)
         cohorts.append({
             "firmware_version": r["firmware_version"],
             "sessions": n,
+            # Legacy metric — retained for back-compat.
             "success_rate": float(r["success_rate"] or 0),
             "avg_stability": float(r["avg_stability"] or 0),
             "avg_duration_seconds": float(r["avg_duration_seconds"] or 0),
@@ -629,6 +650,16 @@ def firmware_cohorts(
             "avg_target_temp": float(r["avg_target_temp"]) if r["avg_target_temp"] is not None else None,
             "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+            # Intent/outcome/PID-quality (new model).
+            "held_target_rate": (held / seeking) if seeking > 0 else None,
+            "target_seeking_sessions": seeking,
+            "startup_assist_sessions": int(r["startup_count"] or 0),
+            "reached_not_held_sessions": int(r["not_held_count"] or 0),
+            "did_not_reach_sessions": int(r["not_reach_count"] or 0),
+            "avg_in_control_pct": float(r["avg_in_control_pct"]) if r["avg_in_control_pct"] is not None else None,
+            "avg_disturbances_per_cook": float(r["avg_disturbances"]) if r["avg_disturbances"] is not None else None,
+            "avg_recovery_seconds": float(r["avg_recovery_seconds"]) if r["avg_recovery_seconds"] is not None else None,
+            "avg_max_overshoot_f": float(r["avg_max_overshoot_f"]) if r["avg_max_overshoot_f"] is not None else None,
         })
     return {
         "ok": True,
@@ -636,6 +667,253 @@ def firmware_cohorts(
         "cohorts_returned": len(cohorts),
         "min_sessions_threshold": min_sessions,
         "cohorts": cohorts,
+    }
+
+
+@router.get("/firmware-impact-timeline")
+def firmware_impact_timeline(
+    weeks: int = 26,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Per-week PID quality, colored by dominant firmware version.
+
+    Returns a series of weekly buckets. Each bucket has:
+      * ``week_start`` — ISO date of the Monday starting the bucket
+      * ``dominant_firmware`` — the firmware_version with the most
+        sessions in that week
+      * ``in_control_pct`` — avg across all sessions that week
+      * ``held_target_rate`` — of target-seeking sessions that week
+      * ``sessions`` / ``devices`` counts
+      * ``firmware_share`` — {firmware: count} mix that week
+
+    Also returns ``firmware_releases`` — ClickUp Category=Firmware task
+    completions in the window, for overlaying release markers on the
+    client chart.
+    """
+    weeks = max(4, min(weeks, 104))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(weeks=weeks)
+
+    # Minimum sessions for a week to be "countable" on the chart.
+    # Sparse weeks get rendered as gaps so a couple of early-morning
+    # sessions don't skew the trend line.
+    MIN_SESSIONS_PER_WEEK = 10
+
+    row_query = text("""
+        SELECT date_trunc('week', session_start)::date AS week_start,
+               firmware_version,
+               COUNT(*) AS n,
+               AVG(in_control_pct) AS avg_in_control,
+               SUM(CASE WHEN held_target IS TRUE THEN 1 ELSE 0 END) AS held_count,
+               SUM(CASE
+                     WHEN cook_outcome IN ('reached_and_held','reached_not_held','did_not_reach')
+                       AND cook_intent <> 'startup_assist'
+                     THEN 1 ELSE 0 END) AS seeking_count,
+               AVG(disturbance_count)::float AS avg_disturbances,
+               AVG(avg_recovery_seconds)::float AS avg_recovery_seconds
+          FROM telemetry_sessions
+         WHERE session_start >= :since
+           AND firmware_version IS NOT NULL
+           AND cook_intent IS NOT NULL
+         GROUP BY week_start, firmware_version
+         ORDER BY week_start, n DESC
+    """)
+    rows = db.execute(row_query, {"since": start}).mappings().all()
+
+    # Pivot to per-week aggregates.
+    weeks_map: dict[Any, dict[str, Any]] = {}
+    for r in rows:
+        ws = r["week_start"]
+        bucket = weeks_map.setdefault(ws, {
+            "week_start": ws.isoformat() if ws else None,
+            "firmware_share": {},
+            "sessions": 0,
+            "dominant_firmware": None,
+            "_max_share": 0,
+            "_in_control_weighted_sum": 0.0,
+            "_in_control_weight": 0,
+            "_held": 0,
+            "_seeking": 0,
+            "_disturb_weighted_sum": 0.0,
+            "_disturb_weight": 0,
+            "_recovery_weighted_sum": 0.0,
+            "_recovery_weight": 0,
+        })
+        n = int(r["n"] or 0)
+        bucket["sessions"] += n
+        bucket["firmware_share"][r["firmware_version"]] = n
+        if n > bucket["_max_share"]:
+            bucket["_max_share"] = n
+            bucket["dominant_firmware"] = r["firmware_version"]
+        if r["avg_in_control"] is not None:
+            bucket["_in_control_weighted_sum"] += float(r["avg_in_control"]) * n
+            bucket["_in_control_weight"] += n
+        bucket["_held"] += int(r["held_count"] or 0)
+        bucket["_seeking"] += int(r["seeking_count"] or 0)
+        if r["avg_disturbances"] is not None:
+            bucket["_disturb_weighted_sum"] += float(r["avg_disturbances"]) * n
+            bucket["_disturb_weight"] += n
+        if r["avg_recovery_seconds"] is not None:
+            bucket["_recovery_weighted_sum"] += float(r["avg_recovery_seconds"]) * n
+            bucket["_recovery_weight"] += n
+
+    series = []
+    for ws, b in sorted(weeks_map.items()):
+        if b["sessions"] < MIN_SESSIONS_PER_WEEK:
+            # Sparse week — render as gap (null values).
+            series.append({
+                "week_start": b["week_start"],
+                "dominant_firmware": b["dominant_firmware"],
+                "in_control_pct": None,
+                "held_target_rate": None,
+                "avg_disturbances_per_cook": None,
+                "avg_recovery_seconds": None,
+                "sessions": b["sessions"],
+                "firmware_share": b["firmware_share"],
+                "sparse": True,
+            })
+            continue
+        in_control = (b["_in_control_weighted_sum"] / b["_in_control_weight"]) if b["_in_control_weight"] > 0 else None
+        held_rate = (b["_held"] / b["_seeking"]) if b["_seeking"] > 0 else None
+        avg_dist = (b["_disturb_weighted_sum"] / b["_disturb_weight"]) if b["_disturb_weight"] > 0 else None
+        avg_recov = (b["_recovery_weighted_sum"] / b["_recovery_weight"]) if b["_recovery_weight"] > 0 else None
+        series.append({
+            "week_start": b["week_start"],
+            "dominant_firmware": b["dominant_firmware"],
+            "in_control_pct": round(in_control, 4) if in_control is not None else None,
+            "held_target_rate": round(held_rate, 4) if held_rate is not None else None,
+            "avg_disturbances_per_cook": round(avg_dist, 2) if avg_dist is not None else None,
+            "avg_recovery_seconds": round(avg_recov, 1) if avg_recov is not None else None,
+            "sessions": b["sessions"],
+            "firmware_share": b["firmware_share"],
+            "sparse": False,
+        })
+
+    # Firmware release markers — Category=Firmware ClickUp tasks
+    # completed in the window.
+    fw_tasks = db.execute(
+        select(ClickUpTask).where(
+            ClickUpTask.date_done.isnot(None),
+            ClickUpTask.date_done >= start,
+        ).order_by(ClickUpTask.date_done)
+    ).scalars().all()
+    releases = []
+    for t in fw_tasks:
+        for f in (t.custom_fields_json or []):
+            if not isinstance(f, dict) or (f.get("name") or "").lower() != "category":
+                continue
+            type_cfg = f.get("type_config") or {}
+            opts = type_cfg.get("options") or []
+            val = f.get("value")
+            label = None
+            if isinstance(val, int) and 0 <= val < len(opts):
+                label = (opts[val] or {}).get("name")
+            elif isinstance(val, str):
+                for o in opts:
+                    if isinstance(o, dict) and o.get("id") == val:
+                        label = o.get("name")
+                        break
+            if label and label.lower() == "firmware":
+                releases.append({
+                    "date": t.date_done.date().isoformat(),
+                    "name": t.name or "(untitled firmware task)",
+                    "url": t.url or None,
+                })
+                break
+
+    return {
+        "ok": True,
+        "window_weeks": weeks,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "series": series,
+        "firmware_releases": releases,
+    }
+
+
+@router.get("/cook-outcomes-summary")
+def cook_outcomes_summary(
+    days: int = 90,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Distribution of cook_intent and cook_outcome across the window,
+    plus per-day series for stacked charts.
+
+    Empty intent/outcome on a session means the re-derivation script
+    hasn't touched it yet — those rows are excluded.
+    """
+    days = max(7, min(days, 730))
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Distribution totals.
+    intents = db.execute(text("""
+        SELECT cook_intent, COUNT(*) AS n
+          FROM telemetry_sessions
+         WHERE cook_intent IS NOT NULL AND session_start >= :since
+         GROUP BY cook_intent ORDER BY n DESC
+    """), {"since": start}).all()
+    outcomes = db.execute(text("""
+        SELECT cook_outcome, COUNT(*) AS n
+          FROM telemetry_sessions
+         WHERE cook_outcome IS NOT NULL AND session_start >= :since
+         GROUP BY cook_outcome ORDER BY n DESC
+    """), {"since": start}).all()
+
+    # Per-day intent stacks.
+    daily_intents = db.execute(text("""
+        SELECT DATE(session_start) AS d, cook_intent, COUNT(*) AS n
+          FROM telemetry_sessions
+         WHERE cook_intent IS NOT NULL AND session_start >= :since
+         GROUP BY d, cook_intent
+         ORDER BY d
+    """), {"since": start}).all()
+
+    # Headline rate.
+    summary = db.execute(text("""
+        SELECT
+          SUM(CASE WHEN held_target IS TRUE THEN 1 ELSE 0 END) AS held_count,
+          SUM(CASE
+                WHEN cook_outcome IN ('reached_and_held','reached_not_held','did_not_reach')
+                  AND cook_intent <> 'startup_assist'
+                THEN 1 ELSE 0 END) AS seeking_count,
+          AVG(in_control_pct)::float AS avg_in_control_pct,
+          AVG(disturbance_count)::float AS avg_disturbances,
+          AVG(avg_recovery_seconds)::float AS avg_recovery_seconds,
+          COUNT(*) AS n
+          FROM telemetry_sessions
+         WHERE session_start >= :since AND cook_intent IS NOT NULL
+    """), {"since": start}).first()
+
+    held_rate = None
+    if summary and summary.seeking_count and summary.seeking_count > 0:
+        held_rate = float(summary.held_count or 0) / float(summary.seeking_count)
+
+    # Pivot daily into {date, [intent]: count} shape for stacked chart.
+    daily_pivot: dict[str, dict[str, int]] = {}
+    for row in daily_intents:
+        d_str = row[0].isoformat() if row[0] else None
+        if d_str is None:
+            continue
+        daily_pivot.setdefault(d_str, {"date": d_str, "total": 0})
+        daily_pivot[d_str][row[1]] = int(row[2])
+        daily_pivot[d_str]["total"] += int(row[2])
+    daily_series = sorted(daily_pivot.values(), key=lambda x: x["date"])
+
+    return {
+        "ok": True,
+        "window_days": days,
+        "totals": {
+            "sessions_scored": int(summary.n) if summary and summary.n else 0,
+            "held_count": int(summary.held_count) if summary and summary.held_count else 0,
+            "target_seeking_count": int(summary.seeking_count) if summary and summary.seeking_count else 0,
+            "held_target_rate": round(held_rate, 4) if held_rate is not None else None,
+            "avg_in_control_pct": round(float(summary.avg_in_control_pct), 4) if summary and summary.avg_in_control_pct is not None else None,
+            "avg_disturbances_per_cook": round(float(summary.avg_disturbances), 2) if summary and summary.avg_disturbances is not None else None,
+            "avg_recovery_seconds": round(float(summary.avg_recovery_seconds), 1) if summary and summary.avg_recovery_seconds is not None else None,
+        },
+        "intent_distribution": [{"intent": i or "unclassified", "count": int(n)} for (i, n) in intents],
+        "outcome_distribution": [{"outcome": o or "unknown", "count": int(n)} for (o, n) in outcomes],
+        "daily_intent_series": daily_series,
     }
 
 

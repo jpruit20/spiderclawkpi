@@ -11,6 +11,7 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
+import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
@@ -356,6 +357,19 @@ export function ProductEngineeringDivision() {
       .catch(() => { if (!cancelled) setCookData(null) })
     return () => { cancelled = true }
   }, [dateStart, dateEnd])
+
+  // Cook outcomes summary (the 2026-04-18 intent/outcome/PID-quality
+  // model). Held-target rate + in-control % drive the new hero gauges.
+  // Falls back to legacy metrics when the re-derivation hasn't populated
+  // yet (totals.held_target_rate === null).
+  const [cookOutcomes, setCookOutcomes] = useState<Record<string, any> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.cookOutcomesSummary(daysDiff)
+      .then(data => { if (!cancelled) setCookOutcomes(data) })
+      .catch(() => { if (!cancelled) setCookOutcomes(null) })
+    return () => { cancelled = true }
+  }, [daysDiff])
 
   useEffect(() => {
     let cancelled = false
@@ -762,24 +776,56 @@ export function ProductEngineeringDivision() {
                     sparkline={rangedHistory.map(r => r.engaged_devices).slice(-30)}
                     onClick={() => openSectionById('pe-fleet-cook-patterns')}
                   />
-                  <GaugeTile
-                    label="Cook success rate"
-                    value={successRate ?? 0}
-                    display={successRate != null ? fmtPct(successRate) : '—'}
-                    sublabel={historyStats?.daysWithSessions
-                      ? `${fmtInt(historyStats.totalSessions)} sessions · ${historyStats.daysWithSessions}d with data`
-                      : `n=${fmtInt(sampleSize)}`}
-                    bandsAsc={{ bad: 0.60, warn: 0.65 }}
-                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
-                  />
-                  <GaugeTile
-                    label="Temp stability"
-                    value={stabilityScore ?? 0}
-                    display={fmtDecimal(stabilityScore)}
-                    sublabel={cookStabilityScore != null ? 'weighted across cook styles' : '0-1 scale, higher=steadier'}
-                    bandsAsc={{ bad: 0.50, warn: 0.70 }}
-                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
-                  />
+                  {/* Held-target rate — excludes startup_assist sessions
+                      from the denominator so the metric doesn't penalize
+                      the device for doing what the user asked (quick
+                      fire-start then manual). Falls back to legacy
+                      cook_success_rate when the re-derivation hasn't
+                      populated the new columns yet. */}
+                  {(() => {
+                    const newRate = cookOutcomes?.totals?.held_target_rate as number | null | undefined
+                    const seeking = cookOutcomes?.totals?.target_seeking_count as number | undefined
+                    const usingNew = newRate != null
+                    const val = usingNew ? newRate : (successRate ?? 0)
+                    return (
+                      <GaugeTile
+                        label={usingNew ? 'Held-target rate' : 'Cook success rate (legacy)'}
+                        value={val}
+                        display={val != null ? fmtPct(val) : '—'}
+                        sublabel={
+                          usingNew
+                            ? `${fmtInt(cookOutcomes?.totals?.held_count || 0)} / ${fmtInt(seeking || 0)} target-seeking cooks · startup-assist excluded`
+                            : historyStats?.daysWithSessions
+                              ? `${fmtInt(historyStats.totalSessions)} sessions · ${historyStats.daysWithSessions}d · pending new-model re-derivation`
+                              : `n=${fmtInt(sampleSize)} · pending new-model re-derivation`
+                        }
+                        bandsAsc={{ bad: 0.60, warn: 0.75 }}
+                        onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                      />
+                    )
+                  })()}
+                  {/* PID quality — in-control % during post-reach,
+                      non-disturbance windows only. Lid-opens don't
+                      penalize the device. */}
+                  {(() => {
+                    const inControl = cookOutcomes?.totals?.avg_in_control_pct as number | null | undefined
+                    const usingNew = inControl != null
+                    const val = usingNew ? inControl : (stabilityScore ?? 0)
+                    return (
+                      <GaugeTile
+                        label={usingNew ? 'PID quality (in-control %)' : 'Temp stability (legacy)'}
+                        value={val}
+                        display={usingNew ? fmtPct(val) : fmtDecimal(val)}
+                        sublabel={
+                          usingNew
+                            ? 'post-reach samples within ±15°F · lid-open windows excluded'
+                            : 'legacy 0-1 score · pending new-model re-derivation'
+                        }
+                        bandsAsc={{ bad: 0.50, warn: 0.70 }}
+                        onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                      />
+                    )
+                  })()}
                   <MetricTile
                     label="Error rate"
                     value={historyStats ? fmtPct(historyStats.errorRate) : '—'}
@@ -923,9 +969,17 @@ export function ProductEngineeringDivision() {
                 </section>
               )}
 
-              {/* Firmware cohort performance — lights up when telemetry_sessions
-                  has enough rows. Uses ≥20-session threshold. */}
+              {/* Firmware cohort performance — uses held-target rate +
+                  in-control % once the re-derivation populates the new
+                  columns; falls back to legacy success rate in the
+                  meantime. */}
               <FirmwareCohortPanel minSessions={20} />
+
+              {/* Firmware-over-time impact — did shipping 01.01.97 actually
+                  improve PID quality vs 01.01.94? Segmented line chart
+                  colored by dominant firmware each week, with ClickUp
+                  firmware-release markers overlaid. */}
+              <FirmwareImpactTimeline weeks={26} />
 
               {/* ========================================================= */}
               {/* BELOW-THE-FOLD DETAIL — progressive disclosure.           */}
