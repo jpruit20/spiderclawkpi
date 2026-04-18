@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
 import { ApiError, api } from '../lib/api'
-import { currency, fmtInt, fmtPct, formatFreshness } from '../lib/format'
+import { currency, fmtInt, fmtPct, formatDateTimeET, formatFreshness } from '../lib/format'
 import type { MorningBriefResponse } from '../lib/types'
 
 /**
@@ -37,7 +37,7 @@ export function CommandCenter() {
     <div className="page-grid">
       <div className="page-head">
         <h2>Good morning — here's what needs you</h2>
-        <p>As of {new Date(data.generated_at).toLocaleString()}. One screen, everything material.</p>
+        <p>As of {formatDateTimeET(data.generated_at)}. One screen, everything material.</p>
       </div>
 
       <section className="card">

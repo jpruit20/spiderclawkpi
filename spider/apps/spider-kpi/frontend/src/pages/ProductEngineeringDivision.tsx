@@ -14,7 +14,7 @@ import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { ApiError, api } from '../lib/api'
-import { fmtPct, fmtInt, fmtDecimal, fmtDuration, formatFreshness } from '../lib/format'
+import { addDays, fmtPct, fmtInt, fmtDecimal, fmtDuration, formatDateTimeET, formatFreshness, todayET } from '../lib/format'
 import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
 import {
   BarChart, Bar, ResponsiveContainer, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, Area, ComposedChart, PieChart, Pie, Cell, ReferenceLine,
@@ -330,9 +330,9 @@ export function ProductEngineeringDivision() {
 
   // Date range — defaults to last 30 days
   const [dateStart, setDateStart] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().split('T')[0]
+    return addDays(todayET(), -30)
   })
-  const [dateEnd, setDateEnd] = useState(() => new Date().toISOString().split('T')[0])
+  const [dateEnd, setDateEnd] = useState(() => todayET())
   const [showDatePicker, setShowDatePicker] = useState(false)
 
   // Cluster drill-down state
@@ -468,9 +468,7 @@ export function ProductEngineeringDivision() {
   const partialLatest = useMemo(() => {
     if (!rangedHistory.length) return null
     const last = rangedHistory[rangedHistory.length - 1]
-    const todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
-    const todayISO = `${todayET.getFullYear()}-${String(todayET.getMonth() + 1).padStart(2, '0')}-${String(todayET.getDate()).padStart(2, '0')}`
-    return last.business_date === todayISO ? last : null
+    return last.business_date === todayET() ? last : null
   }, [rangedHistory])
 
   const historyStats = useMemo(() => {

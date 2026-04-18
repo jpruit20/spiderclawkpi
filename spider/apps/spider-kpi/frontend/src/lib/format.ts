@@ -36,6 +36,59 @@ export function formatFreshness(timestamp?: string | null) {
   return `${hours}h ago`
 }
 
+/** All human-visible timestamps across the dashboard render in US Eastern
+ *  time. Data is stored UTC but readers see ET. */
+export const DISPLAY_TZ = 'America/New_York'
+
+/** "Apr 18, 6:42 PM" style display — short, US Eastern. */
+export function formatDateTimeET(timestamp?: string | Date | null): string {
+  if (!timestamp) return '—'
+  const d = typeof timestamp === 'string' ? new Date(timestamp) : timestamp
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('en-US', {
+    timeZone: DISPLAY_TZ,
+    month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+    hour12: true,
+  }) + ' ET'
+}
+
+/** "Apr 18, 2026" style date-only display, US Eastern. */
+export function formatDateET(timestamp?: string | Date | null): string {
+  if (!timestamp) return '—'
+  const d = typeof timestamp === 'string' ? new Date(timestamp) : timestamp
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString('en-US', {
+    timeZone: DISPLAY_TZ,
+    month: 'short', day: 'numeric', year: 'numeric',
+  })
+}
+
+/** Today's date string in ET, YYYY-MM-DD. Used for range inputs and
+ *  comparisons that operate on business-date values. Replaces unsafe
+ *  patterns like `new Date().toISOString().slice(0,10)` which quietly
+ *  uses UTC and gives the wrong day for anyone east of Greenwich. */
+export function todayET(): string {
+  const now = new Date()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DISPLAY_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now)
+  const y = parts.find(p => p.type === 'year')?.value || '1970'
+  const m = parts.find(p => p.type === 'month')?.value || '01'
+  const d = parts.find(p => p.type === 'day')?.value || '01'
+  return `${y}-${m}-${d}`
+}
+
+/** Add N days to a YYYY-MM-DD string, returning YYYY-MM-DD. Purely
+ *  calendar arithmetic — no timezone involvement. */
+export function addDays(isoDate: string, delta: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + delta)
+  return dt.toISOString().slice(0, 10)
+}
+
 export function currency(value?: number | null) {
   if (value === null || value === undefined || Number.isNaN(value)) return '\u2014'
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
