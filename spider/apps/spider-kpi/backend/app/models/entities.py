@@ -741,6 +741,18 @@ class TelemetrySession(TimestampMixin, Base):
     manual_override_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     cook_success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # 2026-04-18: intent/outcome/PID-quality model. All nullable —
+    # re-derivation script backfills from actual_temp_time_series.
+    cook_intent: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    cook_outcome: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    held_target: Mapped[Optional[bool]] = mapped_column(Boolean)
+    disturbance_count: Mapped[Optional[int]] = mapped_column(Integer)
+    total_disturbance_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    avg_recovery_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    in_control_pct: Mapped[Optional[float]] = mapped_column(Float)
+    max_overshoot_f: Mapped[Optional[float]] = mapped_column(Float)
+    max_undershoot_f: Mapped[Optional[float]] = mapped_column(Float)
+    post_reach_samples: Mapped[Optional[int]] = mapped_column(Integer)
 
 
 class TelemetryDaily(TimestampMixin, Base):
@@ -785,6 +797,16 @@ class TelemetryHistoryDaily(TimestampMixin, Base):
     duration_range_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     unique_devices_seen: Mapped[Optional[int]] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(64), default="ddb_export_backfill", nullable=False)
+    # 2026-04-18: intent+outcome+PID-quality daily aggregates.
+    cook_intents_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    cook_outcomes_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    held_target_sessions: Mapped[Optional[int]] = mapped_column(Integer)
+    target_seeking_sessions: Mapped[Optional[int]] = mapped_column(Integer)
+    held_target_rate: Mapped[Optional[float]] = mapped_column(Float)
+    avg_in_control_pct: Mapped[Optional[float]] = mapped_column(Float)
+    avg_disturbances_per_cook: Mapped[Optional[float]] = mapped_column(Float)
+    avg_recovery_seconds: Mapped[Optional[float]] = mapped_column(Float)
+    avg_overshoot_f: Mapped[Optional[float]] = mapped_column(Float)
 
 
 class TelemetryHistoryMonthly(TimestampMixin, Base):
