@@ -13,6 +13,7 @@ import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
@@ -1037,66 +1038,54 @@ export function ProductEngineeringDivision() {
                 ) : <div className="state-message">Cook type data populates from telemetry sessions. Data will appear after sufficient device activity.</div>}
               </section>
 
-              {/* Control Quality + Reliability */}
-              <div className="two-col two-col-equal">
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Temperature Control Quality</strong>
-                    <Link to="/analysis/temp-curves" className="analysis-link">View curves &#x2197;</Link>
-                  </div>
-                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-                    Post-target stability: only measures temperature hold <em>after</em> reaching the target zone. Preheat ramp-up is excluded. Stabilization time depends on charcoal type, ambient conditions, and fire-start method — treat as directional, not absolute.
-                  </p>
-                  <div className="venom-bar-list">
-                    <div className="venom-bar-row"><span className="venom-bar-label">Stability (post-target)</span><BarIndicator value={(stabilityScore || 0) * 100} max={100} color="var(--green)" /><span className="venom-bar-value">{fmtDecimal(stabilityScore)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Overshoot rate</span><BarIndicator value={(overshootRate || 0) * 100} max={100} color="var(--orange)" /><span className="venom-bar-value">{fmtPct(overshootRate, 0)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p50)</span><BarIndicator value={p50Stabilize || 0} max={p95Stabilize || 1200} color="var(--blue)" /><span className="venom-bar-value">{fmtDuration(p50Stabilize)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Stabilize (p95)</span><BarIndicator value={p95Stabilize || 0} max={p95Stabilize || 1200} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95Stabilize)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Median cook</span><BarIndicator value={medianCookDuration || 0} max={p95CookDuration || 14400} color="#9b7bff" /><span className="venom-bar-value">{fmtDuration(medianCookDuration)}</span></div>
-                    <div className="venom-bar-row"><span className="venom-bar-label">Cook p95</span><BarIndicator value={p95CookDuration || 0} max={p95CookDuration || 14400} color="var(--red)" /><span className="venom-bar-value">{fmtDuration(p95CookDuration)}</span></div>
-                  </div>
-                  <small className="venom-panel-footer">
-                    Stability = how tightly temp stays within target band <strong>after reaching setpoint</strong> (preheat excluded). Stabilize time = seconds from grill-lit detection (&gt;150°F) to 3 consecutive readings within ±15°F of target. Varies by charcoal, ambient temp, fire-start method.
-                  </small>
-                </section>
+              {/* NEW (2026-04-18): Temp Control Quality redesigned around
+                  the intent/outcome/PID-quality model. Falls back to a
+                  'pending re-derivation' banner until the new columns
+                  are populated. */}
+              <TempControlQualityPanel days={Math.max(daysDiff, 7)} />
 
-                <section className="card">
-                  <div className="venom-panel-head">
-                    <strong>Connectivity & Reliability</strong>
-                    <Link to="/issues" className="analysis-link">View issues &#x2197;</Link>
-                  </div>
-                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-                    Session success requires: reaching target temp, stabilizing, no disconnects, and zero errors. Startup-only sessions (&lt;15 min) that end before target may count as incomplete.
-                  </p>
-                  <div className="venom-breakdown-list">
-                    <div className="venom-breakdown-row"><span>Session success rate</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
-                    <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state={(confidence?.disconnect_detection as TruthState) || 'proxy'} /></div>
-                    <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
-                    <div className="venom-breakdown-row"><span>Avg RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${typeof medianRssi === 'number' ? medianRssi.toFixed(1) : medianRssi} dBm` : '\u2014'}</span></div>
-                    {historyStats && (
-                      <div className="venom-breakdown-row"><span>Error rate</span><span className="venom-breakdown-val">{fmtPct(historyStats.errorRate)}</span><TruthBadge state="canonical" /></div>
-                    )}
-                  </div>
-                  <small className="venom-panel-footer">
-                    {historyStats?.daysWithSessions
-                      ? `Based on ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions} days in the selected range.`
-                      : `Disconnect rate = sessions where a >45-minute gap was detected. Probe error = sessions where food probe readings were missing. n=${fmtInt(sampleSize)} sessions.`}
-                  </small>
-                  {grillTypeHealth.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="venom-breakdown-label">By Grill Type</div>
-                      <div className="venom-breakdown-list">
-                        {grillTypeHealth.map((g, i) => (
-                          <div key={i} className="venom-breakdown-row">
-                            <span>{g.key}</span>
-                            <span className="venom-breakdown-val" style={{ color: g.severity === 'critical' ? 'var(--red)' : g.severity === 'warning' ? 'var(--orange)' : 'var(--green)' }}>{fmtDecimal(g.health_score)} health</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+              {/* Connectivity & Reliability — kept compact; these are
+                  infrastructure-level (WiFi signal, disconnects, probe
+                  health) rather than PID-level, so it stays as a separate
+                  card. Legacy session_success shown as 'legacy metric' for
+                  compat. Grill-type health retained as a sub-table. */}
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Connectivity &amp; reliability</strong>
+                  <Link to="/issues" className="analysis-link">View issues &#x2197;</Link>
+                </div>
+                <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+                  Infrastructure-level reliability — WiFi signal, disconnects, probe hardware. Orthogonal to PID-quality
+                  (above); a session can be connectively healthy but have poor PID-quality, and vice versa.
+                </p>
+                <div className="venom-breakdown-list">
+                  <div className="venom-breakdown-row"><span>Session success (legacy)</span><span className="venom-breakdown-val">{fmtPct(successRate)}</span><TruthBadge state={(confidence?.cook_success as TruthState) || 'estimated'} /></div>
+                  <div className="venom-breakdown-row"><span>Disconnect rate</span><span className="venom-breakdown-val">{fmtPct(disconnectRate)}</span><TruthBadge state={(confidence?.disconnect_detection as TruthState) || 'proxy'} /></div>
+                  <div className="venom-breakdown-row"><span>Probe error rate</span><span className="venom-breakdown-val">{fmtPct(probeErrorRate)}</span></div>
+                  <div className="venom-breakdown-row"><span>Avg RSSI</span><span className="venom-breakdown-val">{medianRssi != null ? `${typeof medianRssi === 'number' ? medianRssi.toFixed(1) : medianRssi} dBm` : '\u2014'}</span></div>
+                  {historyStats && (
+                    <div className="venom-breakdown-row"><span>Event error rate</span><span className="venom-breakdown-val">{fmtPct(historyStats.errorRate)}</span><TruthBadge state="canonical" /></div>
                   )}
-                </section>
-              </div>
+                </div>
+                <small className="venom-panel-footer">
+                  {historyStats?.daysWithSessions
+                    ? `Based on ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions} days in the selected range.`
+                    : `Disconnect rate = sessions where a >45-minute gap was detected. Probe error = sessions where food probe readings were missing. n=${fmtInt(sampleSize)} sessions.`}
+                </small>
+                {grillTypeHealth.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div className="venom-breakdown-label">By grill type</div>
+                    <div className="venom-breakdown-list">
+                      {grillTypeHealth.map((g, i) => (
+                        <div key={i} className="venom-breakdown-row">
+                          <span>{g.key}</span>
+                          <span className="venom-breakdown-val" style={{ color: g.severity === 'critical' ? 'var(--red)' : g.severity === 'warning' ? 'var(--orange)' : 'var(--green)' }}>{fmtDecimal(g.health_score)} health</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
 
               {/* Model + Peak Hours */}
               <div className="two-col two-col-equal">
