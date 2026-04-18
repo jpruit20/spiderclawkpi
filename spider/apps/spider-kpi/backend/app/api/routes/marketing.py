@@ -220,26 +220,37 @@ def _sum_kpi_daily(db: Session, start_d: date, end_d: date) -> dict[str, float]:
     }
 
 
-def _sum_kpi_intraday_clipped(
+def _latest_kpi_intraday_snapshot(
     db: Session, business_date_et: date, elapsed_hours_et: int
 ) -> dict[str, float]:
-    """Sum KPIIntraday buckets whose bucket_start falls within
-    ``business_date_et`` (interpreted in ET) up to ``elapsed_hours_et``
-    hours past that day's midnight ET.
+    """Return the latest KPIIntraday **snapshot** on ``business_date_et``
+    at or before ``elapsed_hours_et`` past ET midnight.
 
-    Uses UTC ranges under the hood because ``bucket_start`` is stored
-    tz-aware (UTC). Business-date boundaries are midnight ET.
+    CRITICAL: kpi_intraday rows are *cumulative-to-date snapshots*
+    (running totals of the day), NOT hourly increments. Summing them
+    across the day inflates values Nx (where N = snapshot count). We
+    pick the latest snapshot inside the hour cap and return its
+    running totals as-of that point.
+
+    If no snapshot exists for the day within the cap (common
+    pre-materialize for early morning), return zeros so the caller
+    can decide how to degrade gracefully.
     """
     day_start_et = datetime.combine(business_date_et, datetime.min.time(), tzinfo=BUSINESS_TZ)
     start_utc = day_start_et.astimezone(timezone.utc)
     end_utc = (day_start_et + timedelta(hours=elapsed_hours_et)).astimezone(timezone.utc)
     row = db.execute(
         select(
-            func.coalesce(func.sum(KPIIntraday.revenue), 0.0).label("revenue"),
-            func.coalesce(func.sum(KPIIntraday.orders), 0).label("orders"),
-            func.coalesce(func.sum(KPIIntraday.sessions), 0.0).label("sessions"),
-        ).where(KPIIntraday.bucket_start >= start_utc, KPIIntraday.bucket_start < end_utc)
-    ).one()
+            KPIIntraday.revenue,
+            KPIIntraday.orders,
+            KPIIntraday.sessions,
+        )
+        .where(KPIIntraday.bucket_start >= start_utc, KPIIntraday.bucket_start < end_utc)
+        .order_by(KPIIntraday.bucket_start.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return {"revenue": 0.0, "orders": 0, "sessions": 0.0}
     return {
         "revenue": float(row.revenue or 0.0),
         "orders": int(row.orders or 0),
@@ -247,21 +258,29 @@ def _sum_kpi_intraday_clipped(
     }
 
 
-def _sum_tw_intraday_clipped(
+def _latest_tw_intraday_snapshot(
     db: Session, business_date_et: date, elapsed_hours_et: int
 ) -> dict[str, float]:
+    """Same snapshot semantics as KPIIntraday for TWSummaryIntraday —
+    each bucket is cumulative-to-date, so we take the latest within
+    the hour cap rather than summing."""
     day_start_et = datetime.combine(business_date_et, datetime.min.time(), tzinfo=BUSINESS_TZ)
     start_utc = day_start_et.astimezone(timezone.utc)
     end_utc = (day_start_et + timedelta(hours=elapsed_hours_et)).astimezone(timezone.utc)
     row = db.execute(
         select(
-            func.coalesce(func.sum(TWSummaryIntraday.revenue), 0.0).label("revenue"),
-            func.coalesce(func.sum(TWSummaryIntraday.ad_spend), 0.0).label("ad_spend"),
-        ).where(
+            TWSummaryIntraday.revenue,
+            TWSummaryIntraday.ad_spend,
+        )
+        .where(
             TWSummaryIntraday.bucket_start >= start_utc,
             TWSummaryIntraday.bucket_start < end_utc,
         )
-    ).one()
+        .order_by(TWSummaryIntraday.bucket_start.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return {"revenue": 0.0, "ad_spend": 0.0}
     return {
         "revenue": float(row.revenue or 0.0),
         "ad_spend": float(row.ad_spend or 0.0),
@@ -275,22 +294,25 @@ def _aggregate_window(
     trim_last_day_to_hours: Optional[int],
 ) -> dict[str, float]:
     """Aggregate KPIs for a date range. If ``trim_last_day_to_hours``
-    is set, the ``end_d`` day is excluded from the daily sum and
-    replaced with the intraday (hour-clipped) contribution instead —
-    so "today through 2pm" is apples-to-apples with "yesterday
-    through 2pm" after the same treatment.
+    is set, ``end_d`` is treated as the "trimmed" day and its
+    contribution comes from the latest intraday **snapshot** at or
+    before the hour cap (kpi_intraday and tw_summary_intraday store
+    running totals per bucket, not hourly deltas — summing them
+    would Nx-inflate the number). Days before ``end_d`` are summed
+    from kpi_daily as usual.
     """
     if trim_last_day_to_hours is None:
         return _sum_kpi_daily(db, start_d, end_d)
 
-    # Sum complete days (everything before the trimmed day).
+    # Sum complete days preceding the trimmed day.
     if start_d < end_d:
         complete = _sum_kpi_daily(db, start_d, end_d - timedelta(days=1))
     else:
         complete = {"revenue": 0.0, "orders": 0, "sessions": 0.0, "ad_spend": 0.0}
 
-    intraday = _sum_kpi_intraday_clipped(db, end_d, trim_last_day_to_hours)
-    tw_intra = _sum_tw_intraday_clipped(db, end_d, trim_last_day_to_hours)
+    # Latest running-total snapshot for end_d at/before the hour cap.
+    intraday = _latest_kpi_intraday_snapshot(db, end_d, trim_last_day_to_hours)
+    tw_intra = _latest_tw_intraday_snapshot(db, end_d, trim_last_day_to_hours)
 
     return {
         "revenue": complete["revenue"] + intraday["revenue"],
