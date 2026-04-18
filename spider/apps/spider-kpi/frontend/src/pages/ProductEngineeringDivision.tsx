@@ -9,6 +9,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
@@ -885,6 +886,20 @@ export function ProductEngineeringDivision() {
                   has enough rows. Uses ≥20-session threshold. */}
               <FirmwareCohortPanel minSessions={20} />
 
+              {/* ========================================================= */}
+              {/* BELOW-THE-FOLD DETAIL — progressive disclosure.           */}
+              {/* Everything from here through the voice/roadmap sections   */}
+              {/* lives behind a single click. Expandable collapsible       */}
+              {/* sections so the top of the page stays digestible while    */}
+              {/* every card remains one keystroke away.                    */}
+              {/* ========================================================= */}
+
+              <CollapsibleSection
+                id="pe-fleet-cook-patterns"
+                title="Cook patterns & device behavior"
+                subtitle="How customers actually use Venom: cook styles, temperature control, connectivity, peak hours, model mix, firmware, error codes"
+                accentColor="#6ea8ff"
+              >
               {/* Cook Type Analysis */}
               <section className="card">
                 <div className="venom-panel-head">
@@ -1088,6 +1103,14 @@ export function ProductEngineeringDivision() {
                 </section>
               </div>
 
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                id="pe-app-side-fleet"
+                title="App-side fleet"
+                subtitle="Freshdesk-derived app user + device stats; app backend integration pending"
+                accentColor="#4ade80"
+              >
               {/* App-side fleet — Freshdesk-derived today, app backend pending */}
               <section className="card">
                 <div className="venom-panel-head">
@@ -1310,6 +1333,14 @@ export function ProductEngineeringDivision() {
                 </p>
               </section>
 
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                id="pe-team-activity"
+                title="Team activity & coordination"
+                subtitle="ClickUp product-dev tasks, velocity, compliance; firmware overlay; #product-dev Slack"
+                accentColor="#a78bfa"
+              >
               {/* ClickUp tasks + velocity — Product Development space */}
               <ClickUpTasksCard
                 title="ClickUp tasks — Product / Engineering"
@@ -1358,6 +1389,14 @@ export function ProductEngineeringDivision() {
                 defaultChannelName="product-dev"
               />
 
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                id="pe-engineering-issues"
+                title="Engineering issues & deep-dive navigation"
+                subtitle="Open GitHub issues, product issue clusters from support, cluster drill-down, telemetry analysis routes"
+                accentColor="#f59e0b"
+              >
               {/* GitHub Issues + Product Clusters */}
               <div className="two-col two-col-equal">
                 <section className="card">
@@ -1439,6 +1478,7 @@ export function ProductEngineeringDivision() {
                   ))}
                 </div>
               </section>
+              </CollapsibleSection>
             </>
           )}
 
@@ -1525,6 +1565,12 @@ export function ProductEngineeringDivision() {
                 {clusterDetailLoading && <div className="state-message">Loading ticket detail...</div>}
               </section>
 
+              <CollapsibleSection
+                id="pe-voice-escalations-intent"
+                title="Escalations & purchase-intent signals"
+                subtitle="Product-related escalations from Customer Experience + purchase-intent conversations from social"
+                accentColor="#4a7aff"
+              >
               {/* CX Escalations */}
               <section className="card">
                 <div className="venom-panel-head">
@@ -1574,6 +1620,7 @@ export function ProductEngineeringDivision() {
                   </div>
                 ) : <div className="state-message">No purchase intent signals captured yet.</div>}
               </section>
+              </CollapsibleSection>
             </>
           )}
 
@@ -1630,6 +1677,12 @@ export function ProductEngineeringDivision() {
                 ) : <div className="state-message">No trend data yet. Social connectors will populate this.</div>}
               </section>
 
+              <CollapsibleSection
+                id="pe-roadmap-signals-and-competition"
+                title="Innovation, competitor pain points & market position"
+                subtitle="Roll-ups of social signals tagged as innovation ideas, competitor complaints, share-of-voice, and Amazon position"
+                accentColor="#f472b6"
+              >
               {/* Innovation Signals */}
               <section className="card">
                 <div className="venom-panel-head"><strong>Product Innovation Signals</strong><Link to="/social" className="analysis-link">Social Intel &#x2197;</Link></div>
@@ -1757,6 +1810,7 @@ export function ProductEngineeringDivision() {
                   </div>
                 </div>
               </section>
+              </CollapsibleSection>
             </>
           )}
         </>
