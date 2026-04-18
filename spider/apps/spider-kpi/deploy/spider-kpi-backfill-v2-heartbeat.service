@@ -1,0 +1,12 @@
+[Unit]
+Description=Heartbeat watchdog for v2 S3 telemetry backfill (self-heals OOM restarts)
+After=network-online.target
+OnFailure=spider-kpi-job-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+ExecStart=/bin/bash /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/backfill_v2_heartbeat.sh
+StandardOutput=append:/var/log/spider-kpi-backfill-heartbeat.log
+StandardError=append:/var/log/spider-kpi-backfill-heartbeat.log

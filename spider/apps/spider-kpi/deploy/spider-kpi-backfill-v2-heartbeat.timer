@@ -1,0 +1,11 @@
+[Unit]
+Description=Check v2 backfill every 10 minutes; restart if killed with work remaining
+Requires=spider-kpi-backfill-v2-heartbeat.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Unit=spider-kpi-backfill-v2-heartbeat.service
+
+[Install]
+WantedBy=timers.target
