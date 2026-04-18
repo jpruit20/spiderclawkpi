@@ -19,6 +19,7 @@ from app.api.routes.deci import router as deci_router
 from app.api.routes.health import router as health_router
 from app.api.routes.marketing import router as marketing_router
 from app.api.routes.overview import router as overview_router
+from app.api.routes.personal_intelligence import router as personal_intelligence_router
 from app.api.routes.slack import router as slack_router, webhook_router as slack_webhook_router
 from app.core.config import get_settings
 from app.ingestion.connectors.ga4 import ga4_debug_self_check
@@ -82,6 +83,7 @@ async def add_security_headers(request, call_next):
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(overview_router)
+app.include_router(personal_intelligence_router)
 app.include_router(admin_router)
 app.include_router(deci_router)
 app.include_router(ai_router)
