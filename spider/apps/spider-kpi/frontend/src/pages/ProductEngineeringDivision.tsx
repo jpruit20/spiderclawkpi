@@ -13,6 +13,7 @@ import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
+import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
 import { addDays, fmtPct, fmtInt, fmtDecimal, fmtDuration, formatDateTimeET, formatFreshness, todayET } from '../lib/format'
 import type { AppSideFleetResponse, ClusterTicketDetail, CookAnalysis, GithubIssuesResponse, IssueRadarResponse, MarketIntelligence, MarketPost, TelemetryHistoryDailyRow, TelemetrySummary, TrendMomentum, CXSnapshotResponse } from '../lib/types'
@@ -712,48 +713,63 @@ export function ProductEngineeringDivision() {
             <>
               <TruthLegend />
 
-              {/* KPI Strip */}
-              <div className="venom-kpi-strip">
-                <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">{isHistoricalOnly ? 'Avg Engaged Devices' : 'Active Cooks'}</div>
-                  <div className="venom-kpi-value">{fmtInt(activeCooks)}</div>
-                  <div className="venom-kpi-sub">
-                    {isHistoricalOnly
-                      ? `avg/day over ${rangedHistory.length} days`
-                      : <>{fmtInt(devicesReporting)} devices reporting (5m)</>}
-                  </div>
-                  <div className="venom-kpi-badges">
-                    <TruthBadge state={isHistoricalOnly ? 'canonical' : (confidence?.global_completeness as TruthState) || 'proxy'} />
-                    {!isHistoricalOnly && devices60m > 0 && <span className="venom-delta venom-delta-up">{fmtInt(devices60m)} in 60m · {fmtInt(devices24h)} in 24h</span>}
-                  </div>
+              {/* Visual gauge dashboard — glanceable fleet health.
+                  Benchmarks: cook success 69% median (28-month baseline),
+                  error rate ≤1.3% healthy / ≥1.8% incident. */}
+              <section className="card" style={{ padding: '14px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+                  <strong style={{ fontSize: 13 }}>Fleet gauges</strong>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {isHistoricalOnly ? `historical window · ${rangedHistory.length} days` : 'live telemetry window'}
+                  </span>
                 </div>
-                <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Reliability</div>
-                  <div className="venom-kpi-value">{fmtPct(successRate)}</div>
-                  <div className="venom-kpi-sub">
-                    {historyStats?.daysWithSessions
-                      ? `session success · ${fmtInt(historyStats.totalSessions)} sessions over ${historyStats.daysWithSessions}d`
-                      : `session success · n=${fmtInt(sampleSize)}`}
-                  </div>
-                  <div className="venom-kpi-badges"><TruthBadge state={historyStats?.sessionSuccessRate != null ? 'canonical' : (confidence?.cook_success as TruthState) || 'estimated'} /></div>
-                </div>
-                <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Temp Stability</div>
-                  <div className="venom-kpi-value">{fmtDecimal(stabilityScore)}</div>
-                  <div className="venom-kpi-sub">
-                    {cookStabilityScore != null ? 'weighted avg from cook styles in range' : 'score (0-1, higher = steadier)'}
-                  </div>
-                  <div className="venom-kpi-badges"><TruthBadge state={cookStabilityScore != null ? 'canonical' : (confidence?.session_derivation as TruthState) || 'estimated'} /></div>
-                </div>
-                <div className="venom-kpi-card">
-                  <div className="venom-kpi-label">Error Rate</div>
-                  <div className="venom-kpi-value">{historyStats ? fmtPct(historyStats.errorRate) : '\u2014'}</div>
-                  <div className="venom-kpi-sub">
-                    {historyStats ? `${fmtInt(historyStats.totalErrors)} errors / ${fmtInt(historyStats.totalEvents)} events` : 'no data in range'}
-                  </div>
-                  <div className="venom-kpi-badges"><TruthBadge state="canonical" /></div>
-                </div>
-              </div>
+                <TileGrid cols={4}>
+                  <MetricTile
+                    label={isHistoricalOnly ? 'Avg engaged devices' : 'Active cooks'}
+                    value={fmtInt(activeCooks)}
+                    sublabel={isHistoricalOnly
+                      ? `avg/day across ${rangedHistory.length}d`
+                      : `${fmtInt(devicesReporting)} devices reporting (5m)`}
+                    state={activeCooks > 0 ? 'info' : 'neutral'}
+                    icon="🍖"
+                    sparkline={rangedHistory.map(r => r.engaged_devices).slice(-30)}
+                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                  />
+                  <GaugeTile
+                    label="Cook success rate"
+                    value={successRate ?? 0}
+                    display={successRate != null ? fmtPct(successRate) : '—'}
+                    sublabel={historyStats?.daysWithSessions
+                      ? `${fmtInt(historyStats.totalSessions)} sessions · ${historyStats.daysWithSessions}d with data`
+                      : `n=${fmtInt(sampleSize)}`}
+                    bandsAsc={{ bad: 0.60, warn: 0.65 }}
+                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                  />
+                  <GaugeTile
+                    label="Temp stability"
+                    value={stabilityScore ?? 0}
+                    display={fmtDecimal(stabilityScore)}
+                    sublabel={cookStabilityScore != null ? 'weighted across cook styles' : '0-1 scale, higher=steadier'}
+                    bandsAsc={{ bad: 0.50, warn: 0.70 }}
+                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                  />
+                  <MetricTile
+                    label="Error rate"
+                    value={historyStats ? fmtPct(historyStats.errorRate) : '—'}
+                    sublabel={historyStats
+                      ? `${fmtInt(historyStats.totalErrors)} / ${fmtInt(historyStats.totalEvents)} events`
+                      : 'no data in range'}
+                    state={
+                      !historyStats ? 'neutral'
+                      : historyStats.errorRate >= 0.018 ? 'bad'
+                      : historyStats.errorRate >= 0.013 ? 'warn'
+                      : 'good'
+                    }
+                    icon="⚠"
+                    onClick={() => openSectionById('pe-fleet-cook-patterns')}
+                  />
+                </TileGrid>
+              </section>
 
               {/* Fleet Activity Chart */}
               <section className="card">

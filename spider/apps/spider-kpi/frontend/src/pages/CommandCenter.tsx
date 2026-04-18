@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
 import { ApiError, api } from '../lib/api'
 import { currency, fmtInt, fmtPct, formatDateTimeET, formatFreshness } from '../lib/format'
+import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import type { MorningBriefResponse } from '../lib/types'
 
 /**
@@ -40,56 +41,70 @@ export function CommandCenter() {
         <p>As of {formatDateTimeET(data.generated_at)}. One screen, everything material.</p>
       </div>
 
-      <section className="card">
-        <div className="venom-panel-head">
-          <strong>Overnight at a glance</strong>
-          <span className="venom-panel-hint">{data.business_date}</span>
+      {/* Dashboard-style hero: each tile is a car-gauge — number + color
+          state + trend arrow. Tiles are clickable where a collapsible
+          drill-down exists below. */}
+      <section className="card" style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+          <strong style={{ fontSize: 13 }}>Overnight at a glance</strong>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>{data.business_date}</span>
         </div>
-        <div className="venom-kpi-strip">
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">Drafts to review</div>
-            <div className="venom-kpi-value" style={{ color: h.drafts_awaiting_review > 0 ? 'var(--blue)' : 'var(--muted)' }}>
-              {fmtInt(h.drafts_awaiting_review)}
-            </div>
-          </div>
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">Critical signals (24h)</div>
-            <div className="venom-kpi-value" style={{ color: h.critical_signals_24h > 0 ? 'var(--red)' : 'var(--muted)' }}>
-              {fmtInt(h.critical_signals_24h)}
-            </div>
-          </div>
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">Overdue urgent/high</div>
-            <div className="venom-kpi-value" style={{ color: h.overdue_urgent_or_high > 0 ? 'var(--red)' : 'var(--muted)' }}>
-              {fmtInt(h.overdue_urgent_or_high)}
-            </div>
-          </div>
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">Revenue WoW</div>
-            <div className="venom-kpi-value" style={{ color: revWoWColor }}>
-              {h.revenue_wow_pct == null ? '—' : `${h.revenue_wow_pct >= 0 ? '+' : ''}${h.revenue_wow_pct.toFixed(0)}%`}
-            </div>
-          </div>
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">Tasks closed WoW</div>
-            <div className="venom-kpi-value" style={{ color: veloWoWColor }}>
-              {h.clickup_wow_delta >= 0 ? '+' : ''}{h.clickup_wow_delta}
-            </div>
-          </div>
-          <div className="venom-kpi">
-            <div className="venom-kpi-label">WISMO (7d, target 0)</div>
-            <div className="venom-kpi-value" style={{
-              color: h.wismo_last_7 === 0 ? 'var(--green)' : h.wismo_last_7 <= 3 ? 'var(--orange)' : 'var(--red)',
-            }}>
-              {h.wismo_last_7}
-            </div>
-            <div className="venom-kpi-trend" style={{
-              color: h.wismo_wow_delta <= 0 ? 'var(--green)' : 'var(--red)',
-            }}>
-              {h.wismo_wow_delta > 0 ? '+' : ''}{h.wismo_wow_delta} vs prior 7
-            </div>
-          </div>
-        </div>
+        <TileGrid cols={6}>
+          <MetricTile
+            label="Drafts"
+            value={fmtInt(h.drafts_awaiting_review)}
+            sublabel="awaiting your review"
+            state={h.drafts_awaiting_review > 0 ? 'info' : 'neutral'}
+            icon="📝"
+            href="/deci"
+          />
+          <StatusLight
+            label="Critical (24h)"
+            count={h.critical_signals_24h}
+            alertState="bad"
+            sublabel="issue-radar signals"
+            icon="🚨"
+            href="/issues"
+          />
+          <StatusLight
+            label="Overdue tasks"
+            count={h.overdue_urgent_or_high}
+            alertState="bad"
+            sublabel="urgent + high priority"
+            icon="⏰"
+            href="/division/product-engineering"
+          />
+          <MetricTile
+            label="Revenue WoW"
+            value={h.revenue_wow_pct == null ? '—' : `${h.revenue_wow_pct >= 0 ? '+' : ''}${h.revenue_wow_pct.toFixed(0)}%`}
+            sublabel={`${currency(data.revenue.trailing_7)} last 7d`}
+            state={h.revenue_wow_pct == null ? 'neutral' : h.revenue_wow_pct >= 5 ? 'good' : h.revenue_wow_pct >= -5 ? 'neutral' : 'bad'}
+            delta={data.revenue.wow_delta ? `${currency(Math.abs(data.revenue.wow_delta))} vs prior` : undefined}
+            deltaDir={data.revenue.wow_delta > 0 ? 'up' : data.revenue.wow_delta < 0 ? 'down' : 'flat'}
+            sparkline={data.revenue.sparkline?.map(p => p.revenue) || []}
+            icon="💰"
+            href="/revenue"
+          />
+          <MetricTile
+            label="Tasks closed WoW"
+            value={`${h.clickup_wow_delta >= 0 ? '+' : ''}${h.clickup_wow_delta}`}
+            sublabel={`${data.clickup_velocity.closed_last_7} closed last 7d`}
+            state={h.clickup_wow_delta > 0 ? 'good' : h.clickup_wow_delta === 0 ? 'neutral' : 'warn'}
+            deltaDir={h.clickup_wow_delta > 0 ? 'up' : h.clickup_wow_delta < 0 ? 'down' : 'flat'}
+            icon="✓"
+          />
+          <MetricTile
+            label="WISMO (7d)"
+            value={fmtInt(h.wismo_last_7)}
+            sublabel={h.wismo_last_7 === 0 ? 'target: 0 — hit it' : 'target: 0'}
+            state={h.wismo_last_7 === 0 ? 'good' : h.wismo_last_7 <= 3 ? 'warn' : 'bad'}
+            delta={`${h.wismo_wow_delta > 0 ? '+' : ''}${h.wismo_wow_delta} vs prior`}
+            deltaDir={h.wismo_wow_delta > 0 ? 'up' : h.wismo_wow_delta < 0 ? 'down' : 'flat'}
+            upIsGood={false}
+            icon="📦"
+            href="/division/customer-experience"
+          />
+        </TileGrid>
       </section>
 
       {data.anomalies && data.anomalies.length > 0 && (

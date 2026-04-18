@@ -11,6 +11,7 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
@@ -612,35 +613,56 @@ export function CustomerExperienceDivision() {
               Every one is a proactive-comms gap. */}
           <WismoKpiCard days={30} />
 
-          {/* Two-col: Performance Metrics + Today's Focus */}
-          <div className="two-col two-col-equal">
-            {/* Left: Performance Metrics */}
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Performance Metrics</strong>
-              </div>
-              <div className="venom-breakdown-list">
-                {gridMetrics.map((metric) => (
-                  <div className="venom-breakdown-row" key={metric.key}>
-                    <span className="venom-breakdown-label">{metric.label}</span>
-                    <span className="venom-breakdown-val">{metricValue(metric)}</span>
-                    <span className={`badge badge-${statusTone(metric.status)}`}>{metric.status}</span>
-                    <span className={`venom-delta venom-delta-${trendDirection(metric.trend7d)}`}>
-                      7d {metric.trend7d > 0 ? '+' : ''}{metric.trend7d.toFixed(1)}%
-                    </span>
-                  </div>
-                ))}
-                {!gridMetrics.length ? <div className="state-message">No performance metrics returned.</div> : null}
-              </div>
-            </section>
+          {/* Performance Metrics as a visual tile grid. Each tile is a
+              car-gauge: big number, state color, 7-day trend arrow.
+              Click a tile to jump into the Team Performance collapsible
+              below where the full detail lives. */}
+          <section className="card" style={{ padding: '14px 16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+              <strong style={{ fontSize: 13 }}>Performance at a glance</strong>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>7-day trend vs. prior week</span>
+            </div>
+            {gridMetrics.length > 0 ? (
+              <TileGrid cols={4}>
+                {gridMetrics.map(metric => {
+                  const tone = statusTone(metric.status)
+                  const state: 'good' | 'warn' | 'bad' | 'neutral' =
+                    tone === 'good' ? 'good' : tone === 'warn' ? 'warn' : tone === 'bad' ? 'bad' : 'neutral'
+                  const dir = trendDirection(metric.trend7d)
+                  // 'Up' is good for CSAT / FCR; bad for times / rates.
+                  // Use metric.key to infer.
+                  const upIsGood = !(metric.key.includes('time') || metric.key.includes('breach') || metric.key.includes('backlog') || metric.key.includes('reopen'))
+                  return (
+                    <MetricTile
+                      key={metric.key}
+                      label={metric.label}
+                      value={metricValue(metric)}
+                      sublabel={`target ${metricTarget(metric)}`}
+                      state={state}
+                      delta={`${Math.abs(metric.trend7d).toFixed(1)}%`}
+                      deltaDir={dir}
+                      upIsGood={upIsGood}
+                      onClick={() => openSectionById('cx-team-performance')}
+                    />
+                  )
+                })}
+              </TileGrid>
+            ) : (
+              <div className="state-message">No performance metrics returned.</div>
+            )}
+          </section>
 
-            {/* Right: Today's Focus */}
-            <section className="card">
+          {/* Today's Focus — kept list-style because these are action items
+              needing titles + owner + description, not scannable gauges.
+              But limited to top 3 + 'N more' expand. */}
+          {todayFocus.length > 0 && (
+            <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
               <div className="venom-panel-head">
                 <strong>Today's Focus</strong>
+                <span className="venom-panel-hint">{todayFocus.length} action{todayFocus.length === 1 ? '' : 's'}</span>
               </div>
               <div className="stack-list compact">
-                {todayFocus.map((item) => (
+                {todayFocus.slice(0, 3).map(item => (
                   <div className="list-item" key={item.id}>
                     <div className="item-head">
                       <strong>{item.title}</strong>
@@ -650,10 +672,19 @@ export function CustomerExperienceDivision() {
                     <small>Owner: {item.owner}</small>
                   </div>
                 ))}
-                {!todayFocus.length ? <div className="list-item status-good"><p>No open priority actions from the current daily snapshot.</p></div> : null}
+                {todayFocus.length > 3 && (
+                  <div className="list-item status-muted" style={{ fontSize: 12 }}>
+                    + {todayFocus.length - 3} more action{todayFocus.length - 3 === 1 ? '' : 's'} below in the full queue
+                  </div>
+                )}
               </div>
             </section>
-          </div>
+          )}
+          {todayFocus.length === 0 && (
+            <section className="card" style={{ borderLeft: '3px solid var(--green)', padding: '10px 16px' }}>
+              <span style={{ fontSize: 13 }}>✓ No open priority actions from today's snapshot — queue is healthy.</span>
+            </section>
+          )}
 
           {/* Action Queue (full width) */}
           <section className="card">

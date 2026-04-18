@@ -79,6 +79,17 @@ export function CollapsibleSection({
     _syncUrl(id, open)
   }, [id, open])
 
+  // Listen for programmatic expand/collapse requests from tiles.
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as { id?: string; open?: boolean } | undefined
+      if (!detail || detail.id !== id) return
+      setOpen(detail.open ?? true)
+    }
+    window.addEventListener('spider-kpi:collapsible', handler)
+    return () => window.removeEventListener('spider-kpi:collapsible', handler)
+  }, [id])
+
   const toggle = useCallback(() => setOpen(x => !x), [])
 
   const padding = density === 'compact' ? '8px 12px' : '12px 16px'
@@ -86,6 +97,7 @@ export function CollapsibleSection({
   return (
     <section
       className="card"
+      data-collapsible-id={id}
       style={{
         padding: 0,
         borderLeft: accentColor ? `3px solid ${accentColor}` : undefined,

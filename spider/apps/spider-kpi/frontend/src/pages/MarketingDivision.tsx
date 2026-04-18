@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { MetricTile, TileGrid, openSectionById } from '../components/tiles'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
@@ -400,8 +401,38 @@ export function MarketingDivision() {
         <>
           <TruthLegend />
 
-          {/* ---- KPI Strip (4 cards) ---- */}
-          <VenomKpiStrip cards={kpiCards} cols={4} />
+          {/* ---- KPI tiles (car-dashboard style: big number, color state,
+                 trend arrow, optional sparkline) ---- */}
+          <section className="card" style={{ padding: '14px 16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+              <strong style={{ fontSize: 13 }}>Marketing gauges</strong>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>selected range</span>
+            </div>
+            <TileGrid cols={4}>
+              {kpiCards.map(card => {
+                const dirMap: Record<string, 'up' | 'down' | 'flat'> =
+                  { up: 'up', down: 'down', flat: 'flat', stable: 'flat' }
+                const dir: 'up' | 'down' | 'flat' =
+                  card.delta ? (dirMap[card.delta.direction] || 'flat') : 'flat'
+                // For marketing KPIs up is generally good (revenue, conv rate,
+                // AOV). Sessions/traffic also up-is-good.
+                return (
+                  <MetricTile
+                    key={card.label}
+                    label={card.label}
+                    value={card.value}
+                    sublabel={card.sub}
+                    state={dir === 'up' ? 'good' : dir === 'down' ? 'warn' : 'neutral'}
+                    delta={card.delta?.text}
+                    deltaDir={dir}
+                    upIsGood
+                    sparkline={card.sparkline}
+                    onClick={() => openSectionById('mkt-efficiency-friction')}
+                  />
+                )
+              })}
+            </TileGrid>
+          </section>
 
           {/* ---- Clarity Degraded Banner (conditional) ---- */}
           {clarityDegraded ? (
