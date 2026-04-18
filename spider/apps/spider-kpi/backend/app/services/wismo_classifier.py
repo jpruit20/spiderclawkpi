@@ -42,10 +42,10 @@ WISMO_PHRASES = [
     r"has(n't| not) (arrived|shipped|been sent)",
     r"not (yet )?(received|arrived|shipped)",
     r"(still )?waiting (for|on) (my|the) (order|shipment|package|delivery)",
-    r"order (number )?(status|update)",
+    r"order (number )?status",
     r"order\s*#?\s*\d+\s*(status|update|where|when|tracking)",
     r"tracking (number|info|info\?|information)",
-    r"shipping (status|update|delay|info)",
+    r"shipping (status|delay|info)",
     r"where can i (track|find)",
     r"check (on )?(my|the) (order|shipment|package)",
     r"(didn'?t|did not) (receive|get)",
@@ -84,6 +84,21 @@ NON_WISMO_OVERRIDES = [
     "shipment (notification|confirmation)",
     # Military discount-type inquiries
     "military discount",
+]
+
+
+# Subjects that are OUR outbound notifications. Customers replying to
+# these threads usually aren't filing a fresh WISMO — they might be
+# thanking, asking a follow-up, or just acknowledging. Without reading
+# the body we can't tell, so we suppress these to avoid false positives
+# in the KPI. Better to under-count our failures than over-count them.
+OUTBOUND_THREAD_MARKERS = [
+    r"^re:\s*.*kettle cart shipping update",
+    r"^re:\s*.*spider grills .*shipping update",
+    r"^re:\s*.*shipment from order #?\d+",
+    r"^re:\s*.*is on the way",
+    r"^re:\s*.*has (been )?(delivered|shipped)",
+    r"^re:\s*.*order\s*#?\s*\d+\s*confirmed",
 ]
 
 
@@ -134,6 +149,14 @@ def classify_wismo(
     # 3) Delivered-already phrases suppress WISMO regardless of other signals.
     if _any_match(combined, DELIVERED_PHRASES):
         return WismoResult(False, 0.0, matched_rule=None, override_rule="delivered_phrase")
+
+    # 3b) Customer replying to OUR proactive notification thread — we
+    # already told them something. Without body text we can't tell if
+    # they're asking a follow-up WISMO or saying thanks; default to
+    # not-WISMO to avoid counting our own proactive efforts against us.
+    outbound_marker = _any_match(subject.lower(), OUTBOUND_THREAD_MARKERS)
+    if outbound_marker:
+        return WismoResult(False, 0.0, matched_rule=None, override_rule=f"outbound_thread: {outbound_marker}")
 
     # 4) Strong WISMO phrases (subject OR body).
     rule = _any_match(combined, WISMO_PHRASES)
