@@ -1,15 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { LineChart, Line, ResponsiveContainer } from 'recharts'
 import { ApiError, api } from '../lib/api'
 import { currency, fmtInt, fmtPct, formatDateTimeET, formatFreshness } from '../lib/format'
-import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
-import type { MorningBriefResponse } from '../lib/types'
+import {
+  AnomalyBar, DivisionTile, MetricTile, SparklineHero, StatusLight, TileGrid,
+} from '../components/tiles'
+import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 
 /**
- * Executive morning brief — "coffee in hand, 8am, what needs my attention."
- * Aggregates the top items from every integrated source into a single
- * scrollable view. Pure synthesis of already-materialized data.
+ * Executive cockpit — the "coffee in hand, 8am" landing view.
+ *
+ * Design intent: at-a-glance visuals first, novel-length detail only
+ * on drill-down. Every panel points somewhere deeper (either a
+ * division page or an expanded in-context view). Reader should be
+ * able to scan the page in 5-10 seconds and know whether today
+ * needs attention.
+ *
+ * Layout (top → bottom):
+ *   1) Warning lights row — 4 status lights, always visible
+ *   2) Business + Fleet heroes — two big visual cards side by side
+ *   3) AI Insights & Telemetry Anomalies — compact visuals that
+ *      click through to deep pages
+ *   4) Division tiles — 6 big navigate-to-page tiles with live state
+ *   5) Today's 3 things — compact triage
  */
 export function CommandCenter() {
   const [data, setData] = useState<MorningBriefResponse | null>(null)
@@ -27,429 +40,498 @@ export function CommandCenter() {
     return () => { cancelled = true }
   }, [])
 
-  if (loading) return <div className="page-grid"><section className="card"><div className="state-message">Loading morning brief…</div></section></div>
+  if (loading) return <div className="page-grid"><section className="card"><div className="state-message">Loading…</div></section></div>
   if (error || !data) return <div className="page-grid"><section className="card"><div className="state-message error">{error || 'No data'}</div></section></div>
 
   const h = data.headline
-  const revWoWColor = h.revenue_wow_pct == null ? 'var(--muted)' : h.revenue_wow_pct >= 0 ? 'var(--green)' : 'var(--red)'
-  const veloWoWColor = h.clickup_wow_delta === 0 ? 'var(--muted)' : h.clickup_wow_delta > 0 ? 'var(--green)' : 'var(--red)'
+  const revSparkline = (data.revenue.sparkline || []).map(p => p.revenue)
+
+  // Derive division status from morning brief data.
+  const pe = derivePEStatus(data)
+  const cx = deriveCXStatus(data)
+  const mkt = deriveMarketingStatus(data)
+  const ops = deriveOpsStatus()
 
   return (
     <div className="page-grid">
-      <div className="page-head">
-        <h2>Good morning — here's what needs you</h2>
-        <p>As of {formatDateTimeET(data.generated_at)}. One screen, everything material.</p>
+      <div className="page-head" style={{ marginBottom: 2 }}>
+        <h2 style={{ marginBottom: 2 }}>Good morning — here's what needs you</h2>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
+          As of {formatDateTimeET(data.generated_at)} · {data.business_date}
+        </p>
       </div>
 
-      {/* Dashboard-style hero: each tile is a car-gauge — number + color
-          state + trend arrow. Tiles are clickable where a collapsible
-          drill-down exists below. */}
-      <section className="card" style={{ padding: '14px 16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
-          <strong style={{ fontSize: 13 }}>Overnight at a glance</strong>
-          <span style={{ fontSize: 11, color: 'var(--muted)' }}>{data.business_date}</span>
-        </div>
-        <TileGrid cols={6}>
-          <MetricTile
-            label="Drafts"
-            value={fmtInt(h.drafts_awaiting_review)}
-            sublabel="awaiting your review"
-            state={h.drafts_awaiting_review > 0 ? 'info' : 'neutral'}
-            icon="📝"
-            href="/deci"
-          />
-          <StatusLight
-            label="Critical (24h)"
-            count={h.critical_signals_24h}
-            alertState="bad"
-            sublabel="issue-radar signals"
-            icon="🚨"
-            href="/issues"
-          />
-          <StatusLight
-            label="Overdue tasks"
-            count={h.overdue_urgent_or_high}
-            alertState="bad"
-            sublabel="urgent + high priority"
-            icon="⏰"
+      {/* ── ROW 1 · WARNING LIGHTS ─────────────────────────────────────
+          4 status lights: glanceable health scan. Always visible
+          regardless of data volume. */}
+      <TileGrid cols={4}>
+        <StatusLight
+          label="Critical signals"
+          count={h.critical_signals_24h}
+          alertState="bad"
+          sublabel="last 24 hours · Issue Radar"
+          icon="🚨"
+          href="/issues"
+        />
+        <StatusLight
+          label="Telemetry anomalies"
+          count={h.anomalies_count}
+          alertState={h.anomalies_critical > 0 ? 'bad' : 'warn'}
+          sublabel={h.anomalies_critical > 0 ? `${h.anomalies_critical} critical` : '14-day z-score'}
+          icon="📉"
+          href="/division/product-engineering"
+        />
+        <StatusLight
+          label="WISMO (7d, target 0)"
+          count={h.wismo_last_7}
+          alertState={h.wismo_last_7 > 3 ? 'bad' : 'warn'}
+          sublabel={h.wismo_last_7 === 0 ? 'nobody chasing their order' : `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d`}
+          icon="📦"
+          href="/division/customer-experience"
+        />
+        <StatusLight
+          label="Drafts to review"
+          count={h.drafts_awaiting_review}
+          alertState="warn"
+          sublabel="DECI awaiting decision"
+          icon="📝"
+          href="/deci"
+        />
+      </TileGrid>
+
+      {/* ── ROW 2 · BUSINESS + FLEET HEROES ────────────────────────────
+          Two big visual cards that dominate the fold. Sparklines,
+          gauge arcs, trend arrows. Click → deep page. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gap: 10,
+        }}
+      >
+        <SparklineHero
+          title="Revenue · trailing 7d"
+          primaryValue={currency(data.revenue.trailing_7)}
+          secondaryValue={`vs ${currency(data.revenue.prior_7)} prior 7d`}
+          delta={
+            data.revenue.wow_pct != null
+              ? `${data.revenue.wow_pct >= 0 ? '+' : ''}${data.revenue.wow_pct.toFixed(0)}%`
+              : undefined
+          }
+          deltaDir={
+            data.revenue.wow_delta > 0 ? 'up' : data.revenue.wow_delta < 0 ? 'down' : 'flat'
+          }
+          upIsGood
+          values={revSparkline}
+          state={
+            data.revenue.wow_pct == null ? 'neutral'
+            : data.revenue.wow_pct >= 5 ? 'good'
+            : data.revenue.wow_pct >= -5 ? 'neutral'
+            : 'bad'
+          }
+          icon="💰"
+          href="/revenue"
+        />
+        {data.telemetry ? (
+          <SparklineHero
+            title={`Fleet · ${data.telemetry.business_date}`}
+            primaryValue={fmtInt(data.telemetry.active_devices)}
+            secondaryValue={`active devices · ${fmtInt(data.telemetry.engaged_devices)} cooking`}
+            delta={
+              data.telemetry.cook_success_rate != null
+                ? `${fmtPct(data.telemetry.cook_success_rate)} success`
+                : undefined
+            }
+            deltaDir={
+              data.telemetry.cook_success_rate != null && data.telemetry.cook_success_rate >= 0.69
+                ? 'up'
+                : 'down'
+            }
+            upIsGood
+            values={[]}
+            state={
+              data.telemetry.cook_success_rate == null ? 'neutral'
+              : data.telemetry.cook_success_rate >= 0.69 ? 'good'
+              : data.telemetry.cook_success_rate >= 0.60 ? 'warn'
+              : 'bad'
+            }
+            subtitle={
+              data.telemetry.error_rate != null
+                ? `err rate ${fmtPct(data.telemetry.error_rate)}`
+                : undefined
+            }
+            icon="🔥"
             href="/division/product-engineering"
           />
-          <MetricTile
-            label="Revenue WoW"
-            value={h.revenue_wow_pct == null ? '—' : `${h.revenue_wow_pct >= 0 ? '+' : ''}${h.revenue_wow_pct.toFixed(0)}%`}
-            sublabel={`${currency(data.revenue.trailing_7)} last 7d`}
-            state={h.revenue_wow_pct == null ? 'neutral' : h.revenue_wow_pct >= 5 ? 'good' : h.revenue_wow_pct >= -5 ? 'neutral' : 'bad'}
-            delta={data.revenue.wow_delta ? `${currency(Math.abs(data.revenue.wow_delta))} vs prior` : undefined}
-            deltaDir={data.revenue.wow_delta > 0 ? 'up' : data.revenue.wow_delta < 0 ? 'down' : 'flat'}
-            sparkline={data.revenue.sparkline?.map(p => p.revenue) || []}
-            icon="💰"
-            href="/revenue"
+        ) : (
+          <SparklineHero
+            title="Fleet · telemetry"
+            primaryValue="—"
+            secondaryValue="waiting on latest materializer run"
+            values={[]}
+            state="neutral"
+            icon="🔥"
+            href="/division/product-engineering"
           />
-          <MetricTile
-            label="Tasks closed WoW"
-            value={`${h.clickup_wow_delta >= 0 ? '+' : ''}${h.clickup_wow_delta}`}
-            sublabel={`${data.clickup_velocity.closed_last_7} closed last 7d`}
-            state={h.clickup_wow_delta > 0 ? 'good' : h.clickup_wow_delta === 0 ? 'neutral' : 'warn'}
-            deltaDir={h.clickup_wow_delta > 0 ? 'up' : h.clickup_wow_delta < 0 ? 'down' : 'flat'}
-            icon="✓"
-          />
-          <MetricTile
-            label="WISMO (7d)"
-            value={fmtInt(h.wismo_last_7)}
-            sublabel={h.wismo_last_7 === 0 ? 'target: 0 — hit it' : 'target: 0'}
-            state={h.wismo_last_7 === 0 ? 'good' : h.wismo_last_7 <= 3 ? 'warn' : 'bad'}
-            delta={`${h.wismo_wow_delta > 0 ? '+' : ''}${h.wismo_wow_delta} vs prior`}
-            deltaDir={h.wismo_wow_delta > 0 ? 'up' : h.wismo_wow_delta < 0 ? 'down' : 'flat'}
-            upIsGood={false}
-            icon="📦"
-            href="/division/customer-experience"
-          />
-        </TileGrid>
-      </section>
+        )}
+      </div>
 
-      {data.anomalies && data.anomalies.length > 0 && (
+      {/* ── ROW 3 · ANOMALIES + INSIGHTS ───────────────────────────────
+          Anomalies as centered-baseline z-score bars (no prose).
+          Insights condensed to a card with click-to-expand-on-page. */}
+      {(data.anomalies?.length ?? 0) > 0 && (
         <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
           <div className="venom-panel-head">
-            <strong>Telemetry anomalies — trailing-14d baseline ({data.anomalies.length})</strong>
-            <span className="venom-panel-hint">Modified z-score (median + MAD)</span>
+            <strong>Telemetry anomalies</strong>
+            <Link to="/division/product-engineering" className="analysis-link">
+              Product Engineering →
+            </Link>
           </div>
-          <div className="stack-list compact">
-            {data.anomalies.map(a => {
-              const statusClass = a.severity === 'critical' ? 'status-bad' : a.severity === 'warn' ? 'status-warn' : 'status-neutral'
-              const badgeClass = a.severity === 'critical' ? 'badge-bad' : a.severity === 'warn' ? 'badge-warn' : 'badge-muted'
-              return (
-                <div key={a.id} className={`list-item ${statusClass}`}>
-                  <div className="item-head">
-                    <strong style={{ fontSize: 12 }}>{a.metric.replace(/_/g, ' ')} · {a.direction} on {a.business_date}</strong>
-                    <div className="inline-badges">
-                      <span className={`badge ${badgeClass}`} style={{ fontSize: 10 }}>{a.severity}</span>
-                      <span className="badge badge-muted" style={{ fontSize: 10 }}>z={a.modified_z_score >= 0 ? '+' : ''}{a.modified_z_score.toFixed(1)}</span>
-                    </div>
-                  </div>
-                  {a.summary && <p style={{ fontSize: 11, margin: '4px 0 0' }}>{a.summary}</p>}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
-
-      {data.insights && data.insights.length > 0 && (
-        <section className="card" style={{ borderLeft: '3px solid var(--purple, #b88bff)' }}>
-          <div className="venom-panel-head">
-            <strong>AI insights — cross-source observations ({data.insights.length})</strong>
-            <span className="venom-panel-hint">Claude Opus · {data.insights[0]?.business_date}</span>
-          </div>
-          <div className="stack-list compact">
-            {data.insights.map(ins => {
-              const urgencyClass =
-                ins.urgency === 'high' ? 'status-bad' :
-                ins.urgency === 'medium' ? 'status-warn' : 'status-neutral'
-              const urgencyBadge =
-                ins.urgency === 'high' ? 'badge-bad' :
-                ins.urgency === 'medium' ? 'badge-warn' : 'badge-muted'
-              return (
-                <div key={ins.id} className={`list-item ${urgencyClass}`}>
-                  <div className="item-head">
-                    <strong style={{ fontSize: 13 }}>{ins.title}</strong>
-                    <div className="inline-badges">
-                      <span className={`badge ${urgencyBadge}`} style={{ fontSize: 10 }}>{ins.urgency}</span>
-                      <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                        {Math.round(ins.confidence * 100)}% conf
-                      </span>
-                    </div>
-                  </div>
-                  <p style={{ fontSize: 12, lineHeight: 1.5 }}>{ins.observation}</p>
-                  {ins.evidence && ins.evidence.length > 0 && (
-                    <ul style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0 0', paddingLeft: 18 }}>
-                      {ins.evidence.slice(0, 4).map((e, i) => (
-                        <li key={i}>{e}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {ins.suggested_action && (
-                    <p style={{ fontSize: 11, marginTop: 6, color: 'var(--blue)' }}>
-                      <strong>Suggested:</strong> {ins.suggested_action}
-                    </p>
-                  )}
-                  {ins.sources_used && ins.sources_used.length > 0 && (
-                    <div className="inline-badges" style={{ marginTop: 6 }}>
-                      {ins.sources_used.map(src => (
-                        <span key={src} className="badge badge-muted" style={{ fontSize: 9 }}>{src}</span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
-
-      {data.drafts.length > 0 && (
-        <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
-          <div className="venom-panel-head">
-            <strong>Drafts awaiting your review ({h.drafts_awaiting_review})</strong>
-            <Link to="/deci" className="analysis-link">Open DECI ↗</Link>
-          </div>
-          <div className="stack-list compact">
-            {data.drafts.map(d => (
-              <Link key={d.id} to="/deci" className="list-item status-neutral" style={{ textDecoration: 'none', color: 'inherit' }}>
-                <div className="item-head">
-                  <strong style={{ fontSize: 13 }}>{d.title}</strong>
-                  <div className="inline-badges">
-                    {d.origin_signal_type && (
-                      <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                        {d.origin_signal_type.split('.')[0]}
-                      </span>
-                    )}
-                    <span className="badge badge-neutral" style={{ fontSize: 10 }}>{d.priority}</span>
-                    {d.department && (
-                      <span className="badge badge-muted" style={{ fontSize: 10 }}>{d.department}</span>
-                    )}
-                  </div>
-                </div>
-                {d.auto_drafted_at && (
-                  <p style={{ fontSize: 11, color: 'var(--muted)' }}>auto-drafted {formatFreshness(d.auto_drafted_at)}</p>
-                )}
-              </Link>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {data.anomalies.slice(0, 4).map(a => (
+              <AnomalyBar
+                key={a.id}
+                metric={a.metric}
+                direction={a.direction}
+                severity={a.severity === 'critical' ? 'bad' : a.severity === 'warn' ? 'warn' : 'info'}
+                zScore={a.modified_z_score}
+                businessDate={a.business_date}
+                summary={a.summary || undefined}
+                href="/division/product-engineering"
+              />
             ))}
           </div>
+          {data.anomalies.length > 4 && (
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', textAlign: 'right' }}>
+              + {data.anomalies.length - 4} more — click through to see all
+            </p>
+          )}
         </section>
       )}
 
-      {(data.critical_signals.length > 0 || data.stale_tasks.length > 0) && (
-        <div className="two-col two-col-equal">
-          {data.critical_signals.length > 0 && (
-            <section className="card" style={{ borderLeft: '3px solid var(--red)' }}>
-              <div className="venom-panel-head">
-                <strong>Critical signals — last 24h</strong>
-                <Link to="/issues" className="analysis-link">Issue Radar ↗</Link>
-              </div>
-              <div className="stack-list compact">
-                {data.critical_signals.map(s => {
-                  const content = (
-                    <>
-                      <div className="item-head">
-                        <strong style={{ fontSize: 12 }}>{(s.title || '').slice(0, 100)}</strong>
-                        <span className="badge badge-bad" style={{ fontSize: 10 }}>{s.source}</span>
-                      </div>
-                      <p style={{ fontSize: 11 }}>
-                        {(s.summary || '').slice(0, 140)}
-                        {s.created_at && <span style={{ color: 'var(--muted)', marginLeft: 6 }}>· {formatFreshness(s.created_at)}</span>}
-                      </p>
-                    </>
-                  )
-                  if (s.metadata.url) {
-                    return (
-                      <a key={s.id} href={s.metadata.url} target="_blank" rel="noopener noreferrer" className="list-item status-bad" style={{ textDecoration: 'none', color: 'inherit' }}>
-                        {content}
-                      </a>
-                    )
-                  }
-                  return <div key={s.id} className="list-item status-bad">{content}</div>
-                })}
-              </div>
-            </section>
-          )}
-
-          {data.stale_tasks.length > 0 && (
-            <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
-              <div className="venom-panel-head">
-                <strong>Overdue urgent/high tasks</strong>
-                <span className="venom-panel-hint">ClickUp</span>
-              </div>
-              <div className="stack-list compact">
-                {data.stale_tasks.map(t => (
-                  <a key={t.task_id} href={t.url || '#'} target="_blank" rel="noopener noreferrer" className={`list-item status-${t.priority === 'urgent' ? 'bad' : 'warn'}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                    <div className="item-head">
-                      <strong style={{ fontSize: 12 }}>{(t.name || '(untitled)').slice(0, 100)}</strong>
-                      <div className="inline-badges">
-                        <span className={`badge ${t.priority === 'urgent' ? 'badge-bad' : 'badge-warn'}`} style={{ fontSize: 10 }}>{t.priority}</span>
-                        <span className="badge badge-bad" style={{ fontSize: 10 }}>{t.days_overdue}d overdue</span>
-                      </div>
-                    </div>
-                    <p style={{ fontSize: 11 }}>
-                      {[t.space_name, t.list_name].filter(Boolean).join(' · ')}
-                      {t.assignees.length > 0 && ` · ${t.assignees.filter(Boolean).join(', ')}`}
-                    </p>
-                  </a>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
+      {(data.insights?.length ?? 0) > 0 && (
+        <InsightsPanel insights={data.insights} highCount={h.insights_high_urgency} />
       )}
 
-      <div className="two-col two-col-equal">
-        <section className="card">
-          <div className="venom-panel-head">
-            <strong>Revenue trailing 7 days</strong>
-            <Link to="/revenue" className="analysis-link">Details ↗</Link>
-          </div>
-          <div className="venom-kpi-strip" style={{ marginBottom: 10 }}>
-            <div className="venom-kpi">
-              <div className="venom-kpi-label">Last 7d</div>
-              <div className="venom-kpi-value">{currency(data.revenue.trailing_7)}</div>
-            </div>
-            <div className="venom-kpi">
-              <div className="venom-kpi-label">Prior 7d</div>
-              <div className="venom-kpi-value" style={{ color: 'var(--muted)' }}>{currency(data.revenue.prior_7)}</div>
-            </div>
-            <div className="venom-kpi">
-              <div className="venom-kpi-label">Delta</div>
-              <div className="venom-kpi-value" style={{ color: revWoWColor }}>
-                {data.revenue.wow_delta >= 0 ? '+' : ''}{currency(data.revenue.wow_delta)}
-                {data.revenue.wow_pct != null && (
-                  <span style={{ fontSize: 12, marginLeft: 6 }}>({data.revenue.wow_pct >= 0 ? '+' : ''}{data.revenue.wow_pct.toFixed(0)}%)</span>
-                )}
-              </div>
-            </div>
-          </div>
-          {data.revenue.sparkline.length > 0 && (
-            <ResponsiveContainer width="100%" height={60}>
-              <LineChart data={data.revenue.sparkline}>
-                <Line type="monotone" dataKey="revenue" stroke="var(--green)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </section>
-
-        {data.telemetry && (
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Fleet telemetry — {data.telemetry.business_date}</strong>
-              <Link to="/division/product-engineering" className="analysis-link">Product/Eng ↗</Link>
-            </div>
-            <div className="venom-bar-list">
-              <div className="venom-breakdown-row">
-                <span className="venom-bar-label">Active devices</span>
-                <span className="venom-breakdown-val">{fmtInt(data.telemetry.active_devices)}</span>
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtInt(data.telemetry.engaged_devices)} cooking</span>
-              </div>
-              <div className="venom-breakdown-row">
-                <span className="venom-bar-label">Cook success rate</span>
-                <span className="venom-breakdown-val" style={{
-                  color: data.telemetry.cook_success_rate != null
-                    ? (data.telemetry.cook_success_rate >= 0.85 ? 'var(--green)' : data.telemetry.cook_success_rate >= 0.7 ? 'var(--orange)' : 'var(--red)')
-                    : 'var(--muted)'
-                }}>
-                  {data.telemetry.cook_success_rate != null ? fmtPct(data.telemetry.cook_success_rate) : '—'}
-                </span>
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>of {fmtInt(data.telemetry.session_count || 0)} sessions</span>
-              </div>
-              <div className="venom-breakdown-row">
-                <span className="venom-bar-label">Error rate</span>
-                <span className="venom-breakdown-val" style={{
-                  color: data.telemetry.error_rate != null
-                    ? (data.telemetry.error_rate >= 0.05 ? 'var(--red)' : data.telemetry.error_rate >= 0.02 ? 'var(--orange)' : 'var(--green)')
-                    : 'var(--muted)'
-                }}>
-                  {data.telemetry.error_rate != null ? fmtPct(data.telemetry.error_rate) : '—'}
-                </span>
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtInt(data.telemetry.error_events)} of {fmtInt(data.telemetry.total_events)} events</span>
-              </div>
-            </div>
-          </section>
-        )}
+      {/* ── ROW 4 · DIVISION TILES ─────────────────────────────────────
+          Each tile = a page. Status dot + 1-2 key numbers give the
+          at-a-glance health; click = navigation to deep detail. */}
+      <div>
+        <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+          Jump to a division
+        </div>
+        <TileGrid cols={3}>
+          <DivisionTile
+            name="Product / Engineering"
+            icon="⚙"
+            href="/division/product-engineering"
+            state={pe.state}
+            primary={pe.primary}
+            secondary={pe.secondary}
+          />
+          <DivisionTile
+            name="Customer Experience"
+            icon="☎"
+            href="/division/customer-experience"
+            state={cx.state}
+            primary={cx.primary}
+            secondary={cx.secondary}
+          />
+          <DivisionTile
+            name="Marketing"
+            icon="📣"
+            href="/division/marketing"
+            state={mkt.state}
+            primary={mkt.primary}
+            secondary={mkt.secondary}
+          />
+          <DivisionTile
+            name="Operations"
+            icon="📦"
+            href="/division/operations"
+            state={ops.state}
+            primary={ops.primary}
+            secondary={ops.secondary}
+          />
+          <DivisionTile
+            name="DECI"
+            icon="✓"
+            href="/deci"
+            state={h.drafts_awaiting_review > 0 ? 'info' : 'neutral'}
+            primary={`${h.drafts_awaiting_review} drafts`}
+            secondary="awaiting review"
+          />
+          <DivisionTile
+            name="Issue Radar"
+            icon="⚠"
+            href="/issues"
+            state={h.critical_signals_24h > 0 ? 'bad' : 'good'}
+            primary={`${h.critical_signals_24h} critical`}
+            secondary="cross-source signals · 24h"
+          />
+        </TileGrid>
       </div>
 
-      <div className="two-col two-col-equal">
-        <section className="card">
-          <div className="venom-panel-head">
-            <strong>ClickUp velocity — last 7d</strong>
-            <Link to="/division/product-engineering" className="analysis-link">Details ↗</Link>
-          </div>
-          <div className="venom-kpi-strip">
-            <div className="venom-kpi">
-              <div className="venom-kpi-label">Closed</div>
-              <div className="venom-kpi-value">{fmtInt(data.clickup_velocity.closed_last_7)}</div>
-              <div className="venom-kpi-trend" style={{ color: veloWoWColor }}>
-                {data.clickup_velocity.wow_delta >= 0 ? '+' : ''}{data.clickup_velocity.wow_delta} vs prior 7
-              </div>
-            </div>
-            <div className="venom-kpi">
-              <div className="venom-kpi-label">Prior 7d</div>
-              <div className="venom-kpi-value" style={{ color: 'var(--muted)' }}>{fmtInt(data.clickup_velocity.closed_prior_7)}</div>
-            </div>
-          </div>
-          {data.compliance && data.compliance.taxonomy_configured && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Tagging compliance</div>
-              <div className="venom-breakdown-row">
-                <span className="venom-bar-label">Closed + tagged (14d)</span>
-                <span className="venom-breakdown-val" style={{
-                  color: data.compliance.rate_closed_in_window == null ? 'var(--muted)' :
-                    data.compliance.rate_closed_in_window >= 0.9 ? 'var(--green)' :
-                    data.compliance.rate_closed_in_window >= 0.7 ? 'var(--orange)' : 'var(--red)'
-                }}>
-                  {data.compliance.rate_closed_in_window != null ? fmtPct(data.compliance.rate_closed_in_window) : '—'}
-                </span>
-                {data.compliance.wow_delta_rate != null && (
-                  <span style={{ color: data.compliance.wow_delta_rate >= 0 ? 'var(--green)' : 'var(--red)', fontSize: 11 }}>
-                    {data.compliance.wow_delta_rate >= 0 ? '+' : ''}{(data.compliance.wow_delta_rate * 100).toFixed(0)}pp
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-          {data.compliance && !data.compliance.taxonomy_configured && (
-            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted)' }}>
-              Taxonomy not yet configured — <Link to="/division/product-engineering" className="analysis-link">setup runbook</Link>
-            </div>
-          )}
-        </section>
-
-        {data.slack_hot && (
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Hottest Slack thread — last 24h</strong>
-              <span className="venom-panel-hint">{data.slack_hot.reactions} reactions</span>
-            </div>
-            <div className="list-item status-muted">
-              <div className="item-head">
-                <strong style={{ fontSize: 12 }}>{data.slack_hot.user_name || '?'}</strong>
-                {data.slack_hot.ts_dt && (
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{formatFreshness(data.slack_hot.ts_dt)}</span>
-                )}
-              </div>
-              <p style={{ fontSize: 11 }}>{data.slack_hot.text}</p>
-            </div>
-          </section>
-        )}
-      </div>
-
-      <section className="card">
-        <div className="venom-panel-head">
-          <strong>Jump into a division</strong>
-        </div>
-        <div className="venom-drill-grid">
-          <Link to="/division/product-engineering" className="venom-drill-tile">
-            <span className="venom-drill-icon">⚙</span>
-            <div><strong>Product / Engineering</strong><small>Telemetry, firmware, NPD</small></div>
-          </Link>
-          <Link to="/division/customer-experience" className="venom-drill-tile">
-            <span className="venom-drill-icon">☎</span>
-            <div><strong>Customer Experience</strong><small>Support, complaints, CSAT</small></div>
-          </Link>
-          <Link to="/division/marketing" className="venom-drill-tile">
-            <span className="venom-drill-icon">📣</span>
-            <div><strong>Marketing</strong><small>Campaigns, content, ads</small></div>
-          </Link>
-          <Link to="/division/operations" className="venom-drill-tile">
-            <span className="venom-drill-icon">📦</span>
-            <div><strong>Operations</strong><small>Inventory, fulfillment</small></div>
-          </Link>
-          <Link to="/deci" className="venom-drill-tile">
-            <span className="venom-drill-icon">✓</span>
-            <div><strong>DECI</strong><small>Decision tracking</small></div>
-          </Link>
-          <Link to="/issues" className="venom-drill-tile">
-            <span className="venom-drill-icon">⚠</span>
-            <div><strong>Issue Radar</strong><small>Cross-source signals</small></div>
-          </Link>
-        </div>
-      </section>
+      {/* ── ROW 5 · COMPACT SECONDARY DETAIL ───────────────────────────
+          Things that are useful but shouldn't occupy primary real estate:
+          top drafts, critical signals, hot Slack thread. Shown as very
+          compact rows rather than bulky cards. */}
+      <SecondaryDetail data={data} />
     </div>
   )
+}
+
+/* ─── Helper sub-components ─────────────────────────────────────────── */
+
+function InsightsPanel({
+  insights,
+  highCount,
+}: {
+  insights: MorningBriefResponse['insights']
+  highCount: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  if (!insights || insights.length === 0) return null
+  const accent = highCount > 0 ? '#ef4444' : '#b88bff'
+
+  return (
+    <section className="card" style={{ borderLeft: `3px solid ${accent}` }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(x => !x)}
+        style={{ background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit', textAlign: 'left' }}
+      >
+        <div className="venom-panel-head">
+          <div>
+            <strong>AI cross-source insights</strong>{' '}
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+              · {insights.length} observation{insights.length === 1 ? '' : 's'}
+              {highCount > 0 && <span style={{ color: '#ef4444' }}> · {highCount} high-urgency</span>}
+            </span>
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>{expanded ? 'hide ▴' : 'show ▾'}</span>
+        </div>
+      </button>
+      {/* Summary view when collapsed: one-line per insight, urgency-colored dot. */}
+      {!expanded && (
+        <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+          {insights.map(ins => (
+            <div key={ins.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, lineHeight: 1.4 }}>
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: ins.urgency === 'high' ? '#ef4444' : ins.urgency === 'medium' ? '#f59e0b' : '#9ca3af',
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ flex: 1 }}>{ins.title}</span>
+              <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>{ins.category}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* Full detail when expanded. */}
+      {expanded && (
+        <div className="stack-list compact" style={{ marginTop: 8 }}>
+          {insights.map(ins => (
+            <div
+              key={ins.id}
+              className={`list-item ${ins.urgency === 'high' ? 'status-bad' : ins.urgency === 'medium' ? 'status-warn' : 'status-neutral'}`}
+            >
+              <div className="item-head">
+                <strong style={{ fontSize: 13 }}>{ins.title}</strong>
+                <div className="inline-badges">
+                  <span className={`badge ${ins.urgency === 'high' ? 'badge-bad' : ins.urgency === 'medium' ? 'badge-warn' : 'badge-muted'}`} style={{ fontSize: 10 }}>
+                    {ins.urgency}
+                  </span>
+                  <span className="badge badge-muted" style={{ fontSize: 10 }}>
+                    {Math.round(ins.confidence * 100)}%
+                  </span>
+                </div>
+              </div>
+              <p style={{ fontSize: 12 }}>{ins.observation}</p>
+              {ins.suggested_action && (
+                <p style={{ fontSize: 11, color: 'var(--blue)', marginTop: 4 }}>
+                  <strong>Suggested:</strong> {ins.suggested_action}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function SecondaryDetail({ data }: { data: MorningBriefResponse }) {
+  const drafts = data.drafts || []
+  const crits = data.critical_signals || []
+  const stale = data.stale_tasks || []
+  const slackHot = data.slack_hot
+  if (!drafts.length && !crits.length && !stale.length && !slackHot) return null
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+        gap: 10,
+      }}
+    >
+      {drafts.length > 0 && (
+        <MiniListCard
+          title="Drafts awaiting review"
+          count={drafts.length}
+          accentColor="#4a7aff"
+          href="/deci"
+          items={drafts.slice(0, 3).map(d => ({
+            key: String(d.id),
+            title: d.title,
+            meta: d.priority,
+          }))}
+        />
+      )}
+      {crits.length > 0 && (
+        <MiniListCard
+          title="Critical signals · 24h"
+          count={crits.length}
+          accentColor="#ef4444"
+          href="/issues"
+          items={crits.slice(0, 3).map(s => ({
+            key: String(s.id),
+            title: (s.title || '').slice(0, 80),
+            meta: s.source || '',
+          }))}
+        />
+      )}
+      {stale.length > 0 && (
+        <MiniListCard
+          title="Overdue tasks"
+          count={stale.length}
+          accentColor="#f59e0b"
+          href="/division/product-engineering"
+          items={stale.slice(0, 3).map(t => ({
+            key: t.task_id,
+            title: (t.name || '').slice(0, 80),
+            meta: `${t.days_overdue}d overdue`,
+          }))}
+        />
+      )}
+      {slackHot && (
+        <section className="card" style={{ borderLeft: '3px solid #4a154b' }}>
+          <div className="venom-panel-head">
+            <strong>Hottest Slack thread</strong>
+            <span className="venom-panel-hint">{slackHot.reactions} reactions</span>
+          </div>
+          <p style={{ fontSize: 12, margin: '6px 0 4px' }}>
+            <strong>{slackHot.user_name || '?'}</strong>
+            {slackHot.ts_dt && <span style={{ color: 'var(--muted)', marginLeft: 6, fontSize: 11 }}>· {formatFreshness(slackHot.ts_dt)}</span>}
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0, lineHeight: 1.45 }}>
+            {(slackHot.text || '').slice(0, 180)}
+          </p>
+        </section>
+      )}
+    </div>
+  )
+}
+
+function MiniListCard({
+  title,
+  count,
+  accentColor,
+  items,
+  href,
+}: {
+  title: string
+  count: number
+  accentColor: string
+  items: { key: string; title: string; meta: string }[]
+  href: string
+}) {
+  return (
+    <section className="card" style={{ borderLeft: `3px solid ${accentColor}`, padding: '10px 14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <strong style={{ fontSize: 12 }}>{title}</strong>
+        <Link to={href} className="analysis-link" style={{ fontSize: 11 }}>
+          {count} total →
+        </Link>
+      </div>
+      <div style={{ display: 'grid', gap: 3 }}>
+        {items.map(item => (
+          <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
+            <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 0 }}>
+              {item.meta}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+/* ─── Division-status derivation ────────────────────────────────────── */
+
+type DivStatus = {
+  state: 'good' | 'warn' | 'bad' | 'info' | 'neutral'
+  primary: string
+  secondary: string
+}
+
+function derivePEStatus(data: MorningBriefResponse): DivStatus {
+  const tel = data.telemetry
+  if (!tel) return { state: 'neutral', primary: '—', secondary: 'awaiting next materializer' }
+  const cs = tel.cook_success_rate
+  const state: DivStatus['state'] =
+    cs == null ? 'neutral'
+    : cs >= 0.69 ? 'good'
+    : cs >= 0.60 ? 'warn'
+    : 'bad'
+  return {
+    state,
+    primary: `${fmtInt(tel.active_devices)} active`,
+    secondary: cs != null ? `cook success ${fmtPct(cs)}` : 'no session data yet',
+  }
+}
+
+function deriveCXStatus(data: MorningBriefResponse): DivStatus {
+  const h = data.headline
+  const w = h.wismo_last_7
+  const state: DivStatus['state'] =
+    w > 3 ? 'bad'
+    : w > 0 ? 'warn'
+    : 'good'
+  return {
+    state,
+    primary: `${w} WISMO`,
+    secondary: `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d · target 0`,
+  }
+}
+
+function deriveMarketingStatus(data: MorningBriefResponse): DivStatus {
+  const wow = data.revenue.wow_pct
+  const state: DivStatus['state'] =
+    wow == null ? 'neutral'
+    : wow >= 5 ? 'good'
+    : wow >= -5 ? 'neutral'
+    : 'warn'
+  return {
+    state,
+    primary: currency(data.revenue.trailing_7),
+    secondary: wow == null
+      ? 'last 7d · no prior baseline'
+      : `last 7d · ${wow >= 0 ? '+' : ''}${wow.toFixed(0)}% WoW`,
+  }
+}
+
+function deriveOpsStatus(): DivStatus {
+  return {
+    state: 'neutral',
+    primary: 'Coming soon',
+    secondary: 'late-ship risk · order aging · inventory',
+  }
 }

@@ -383,6 +383,262 @@ export function StatusLight({ label, count, alertState = 'warn', sublabel, onCli
 
 // ─── helper: open a collapsible by id ──────────────────────────────────
 
+// ─── SparklineHero ────────────────────────────────────────────────────
+// Big hero card: caption, primary value, delta, large-area sparkline.
+// Used on the executive dashboard for revenue, fleet headline charts, etc.
+
+type SparklineHeroProps = {
+  title: string
+  primaryValue: string
+  secondaryValue?: string     // e.g. "$8,430 prior 7d"
+  delta?: string
+  deltaDir?: 'up' | 'down' | 'flat'
+  upIsGood?: boolean
+  values: number[]
+  /** Optional horizontal reference line at this value (e.g. a benchmark). */
+  benchmark?: number
+  benchmarkLabel?: string
+  state?: TileState           // border + sparkline color
+  height?: number
+  href?: string
+  onClick?: () => void
+  subtitle?: string           // small gray explainer
+  icon?: string
+}
+
+export function SparklineHero({
+  title, primaryValue, secondaryValue,
+  delta, deltaDir = 'flat', upIsGood = true,
+  values, benchmark, benchmarkLabel,
+  state = 'info', height = 80,
+  href, onClick, subtitle, icon,
+}: SparklineHeroProps) {
+  const color = STATE_COLOR[state]
+
+  const deltaColor = !delta || deltaDir === 'flat'
+    ? 'var(--muted)'
+    : (deltaDir === 'up') === upIsGood ? STATE_COLOR.good : STATE_COLOR.bad
+  const deltaArrow = deltaDir === 'up' ? '▲' : deltaDir === 'down' ? '▼' : ''
+
+  const width = 440
+  const sparkHeight = height
+  const { linePath, areaPath, benchmarkY } = useMemo(() => {
+    if (!values || values.length === 0) return { linePath: '', areaPath: '', benchmarkY: null as null | number }
+    const min = Math.min(...values, benchmark ?? Infinity)
+    const max = Math.max(...values, benchmark ?? -Infinity)
+    const range = (max - min) || 1
+    const step = width / Math.max(values.length - 1, 1)
+    const pts = values.map((v, i) => [i * step, sparkHeight - ((v - min) / range) * sparkHeight] as [number, number])
+    const line = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
+    const area = `${line} L ${pts[pts.length - 1][0].toFixed(1)} ${sparkHeight} L 0 ${sparkHeight} Z`
+    const benchY = benchmark != null ? sparkHeight - ((benchmark - min) / range) * sparkHeight : null
+    return { linePath: line, areaPath: area, benchmarkY: benchY }
+  }, [values, benchmark, width, sparkHeight])
+
+  const interactive = !!(onClick || href)
+  const commonStyle: CSSProperties = {
+    padding: '14px 16px 10px',
+    background: STATE_BG[state],
+    borderRadius: 10,
+    borderLeft: `3px solid ${color}`,
+    cursor: interactive ? 'pointer' : 'default',
+    textAlign: 'left',
+    color: 'inherit',
+    font: 'inherit',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    transition: 'transform 80ms ease',
+    width: '100%',
+    border: 'none',
+  }
+
+  const inner = (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            {icon && <span style={{ marginRight: 6 }}>{icon}</span>}{title}
+          </div>
+          {subtitle && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{subtitle}</div>}
+        </div>
+        {delta && (
+          <span style={{ fontSize: 12, color: deltaColor, fontWeight: 600 }}>
+            {deltaArrow} {delta}
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 2 }}>
+        <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color }}>{primaryValue}</span>
+        {secondaryValue && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{secondaryValue}</span>}
+      </div>
+      {values && values.length > 1 && (
+        <svg width="100%" viewBox={`0 0 ${width} ${sparkHeight}`} preserveAspectRatio="none" style={{ marginTop: 8, height: sparkHeight, display: 'block' }} aria-hidden="true">
+          {areaPath && <path d={areaPath} fill={color} opacity={0.14} />}
+          {benchmarkY != null && (
+            <>
+              <line x1={0} y1={benchmarkY} x2={width} y2={benchmarkY} stroke="rgba(255,255,255,0.22)" strokeDasharray="3 4" strokeWidth={1} />
+              {benchmarkLabel && (
+                <text x={width - 4} y={benchmarkY - 3} fontSize="9" fill="rgba(255,255,255,0.45)" textAnchor="end">{benchmarkLabel}</text>
+              )}
+            </>
+          )}
+          {linePath && <path d={linePath} stroke={color} strokeWidth={2} fill="none" strokeLinejoin="round" />}
+        </svg>
+      )}
+    </>
+  )
+
+  if (href) return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  if (onClick) return <button type="button" onClick={onClick} style={commonStyle}>{inner}</button>
+  return <div style={commonStyle}>{inner}</div>
+}
+
+// ─── AnomalyBar ────────────────────────────────────────────────────────
+// Compact horizontal z-score visual. Severity-colored bar that extends
+// from a centered baseline (zero) either left (low anomaly) or right
+// (high anomaly). Scale clamps at ±6 for readability.
+
+type AnomalyBarProps = {
+  metric: string
+  direction: 'high' | 'low'
+  severity: TileState
+  zScore: number
+  businessDate: string
+  summary?: string
+  onClick?: () => void
+  href?: string
+}
+
+export function AnomalyBar({ metric, direction, severity, zScore, businessDate, summary, onClick, href }: AnomalyBarProps) {
+  const color = STATE_COLOR[severity]
+  // Center bar at 50%, scale abs(z) / 6 to find offset
+  const pct = Math.min(Math.abs(zScore) / 6, 1)
+  const barWidth = pct * 48            // up to 48% of track (half-bar max)
+  const fromLeft = direction === 'low' ? 50 - barWidth : 50
+
+  const interactive = !!(onClick || href)
+  const commonStyle: CSSProperties = {
+    padding: '10px 14px',
+    background: STATE_BG[severity],
+    borderRadius: 8,
+    borderLeft: `3px solid ${color}`,
+    cursor: interactive ? 'pointer' : 'default',
+    textAlign: 'left',
+    color: 'inherit',
+    font: 'inherit',
+    width: '100%',
+    border: 'none',
+    display: 'block',
+  }
+
+  const inner = (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>
+          {metric.replace(/_/g, ' ')}{' '}
+          <span style={{ fontSize: 10, color, fontWeight: 700, textTransform: 'uppercase', marginLeft: 4 }}>
+            {direction}
+          </span>
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+          {businessDate} · z={zScore >= 0 ? '+' : ''}{zScore.toFixed(1)}
+        </span>
+      </div>
+      {/* Centered-baseline bar visual */}
+      <div style={{ position: 'relative', height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: `${fromLeft}%`,
+            width: `${barWidth}%`,
+            background: color,
+            borderRadius: 3,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            top: -2,
+            bottom: -2,
+            left: '50%',
+            width: 1,
+            background: 'rgba(255,255,255,0.3)',
+          }}
+        />
+      </div>
+      {summary && <p style={{ fontSize: 11, margin: '6px 0 0', color: 'var(--muted)', lineHeight: 1.35 }}>{summary}</p>}
+    </>
+  )
+
+  if (href) return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  if (onClick) return <button type="button" onClick={onClick} style={commonStyle}>{inner}</button>
+  return <div style={commonStyle}>{inner}</div>
+}
+
+// ─── DivisionTile ──────────────────────────────────────────────────────
+// Larger tile for the division drill grid. Icon + name + status dot +
+// 1-2 key numbers + "Open →" affordance.
+
+type DivisionTileProps = {
+  name: string
+  icon: string
+  href: string
+  state: TileState
+  primary?: string            // big headline number, e.g. "287 devices"
+  secondary?: string          // smaller line, e.g. "4 anomalies open"
+  /** Whether to render the pulsing status dot. */
+  showDot?: boolean
+}
+
+export function DivisionTile({ name, icon, href, state, primary, secondary, showDot = true }: DivisionTileProps) {
+  const color = STATE_COLOR[state]
+  return (
+    <a
+      href={href}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '14px 16px',
+        borderRadius: 10,
+        background: STATE_BG[state],
+        borderLeft: `3px solid ${color}`,
+        textDecoration: 'none',
+        color: 'inherit',
+        minHeight: 110,
+        justifyContent: 'space-between',
+        transition: 'transform 80ms ease, background 80ms ease',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 18 }}>{icon}</span>
+          {name}
+        </span>
+        {showDot && (
+          <span
+            style={{
+              width: 9,
+              height: 9,
+              borderRadius: '50%',
+              background: color,
+              boxShadow: state === 'bad' ? `0 0 8px ${color}` : undefined,
+              animation: state === 'bad' ? 'pulse-alert 1.4s ease-in-out infinite' : undefined,
+            }}
+          />
+        )}
+      </div>
+      {primary && <div style={{ fontSize: 20, fontWeight: 700, color, lineHeight: 1.1 }}>{primary}</div>}
+      {secondary && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{secondary}</div>}
+      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', display: 'flex', justifyContent: 'flex-end' }}>
+        Open →
+      </div>
+    </a>
+  )
+}
+
 /** Call from a tile's onClick to expand a <CollapsibleSection id=id> below.
  *  Dispatches a 'spider-kpi:collapsible' event that the section listens for,
  *  then scrolls the section into view. No page reload. */
