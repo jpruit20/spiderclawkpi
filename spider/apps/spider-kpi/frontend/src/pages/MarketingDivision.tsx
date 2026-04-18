@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
@@ -504,6 +505,14 @@ export function MarketingDivision() {
             </section>
           </div>
 
+          {/* Progressive disclosure — everything below the hero lives in
+              collapsibles so the page opens clean. */}
+          <CollapsibleSection
+            id="mkt-efficiency-friction"
+            title="Marketing efficiency & website friction"
+            subtitle="Campaign/channel efficiency, UX friction from Clarity, blocked-state diagnostics, industry pulse"
+            accentColor="#6ea8ff"
+          >
           {/* ---- Marketing Efficiency ---- */}
           <section className="card">
             <div className="venom-panel-head">
@@ -634,6 +643,14 @@ export function MarketingDivision() {
             )}
           </section>
 
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="mkt-coordination"
+            title="Team coordination & navigation"
+            subtitle="ClickUp marketing tasks + velocity + compliance, Slack marketing-customer-service + general-news, cross-page navigation"
+            accentColor="#a78bfa"
+          >
           {/* ClickUp tasks + velocity — Marketing space */}
           <ClickUpTasksCard
             title="ClickUp tasks — Marketing"
@@ -693,6 +710,7 @@ export function MarketingDivision() {
               ))}
             </div>
           </section>
+          </CollapsibleSection>
         </>
       ) : null}
     </div>
