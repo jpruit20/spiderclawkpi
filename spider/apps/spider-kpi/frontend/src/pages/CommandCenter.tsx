@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, api } from '../lib/api'
 import { currency, fmtInt, fmtPct, formatDateTimeET, formatFreshness } from '../lib/format'
@@ -46,6 +46,19 @@ export function CommandCenter() {
   const h = data.headline
   const revSparkline = (data.revenue.sparkline || []).map(p => p.revenue)
 
+  // Greeting updates with ET time-of-day. Re-evaluated once per mount;
+  // a page refresh (every morning-brief refetch) will pick up the
+  // current bucket. For a page open all day, it re-renders on other
+  // state changes frequently enough to feel live.
+  const greeting = useMemo(() => {
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    const hour = nowET.getHours()
+    if (hour >= 5 && hour < 12) return "Good morning — here's what needs you"
+    if (hour >= 12 && hour < 17) return "Good afternoon — here's where things stand"
+    if (hour >= 17 && hour < 22) return "Good evening — here's the wrap-up"
+    return "Burning the midnight oil — here's the state of things"
+  }, [data.generated_at])
+
   // Derive division status from morning brief data.
   const pe = derivePEStatus(data)
   const cx = deriveCXStatus(data)
@@ -55,7 +68,7 @@ export function CommandCenter() {
   return (
     <div className="page-grid">
       <div className="page-head" style={{ marginBottom: 2 }}>
-        <h2 style={{ marginBottom: 2 }}>Good morning — here's what needs you</h2>
+        <h2 style={{ marginBottom: 2 }}>{greeting}</h2>
         <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
           As of {formatDateTimeET(data.generated_at)} · {data.business_date}
         </p>
@@ -134,9 +147,9 @@ export function CommandCenter() {
         />
         {data.telemetry ? (
           <SparklineHero
-            title={`Fleet · ${data.telemetry.business_date}`}
+            title="Fleet · active right now"
             primaryValue={fmtInt(data.telemetry.active_devices)}
-            secondaryValue={`active devices · ${fmtInt(data.telemetry.engaged_devices)} cooking`}
+            secondaryValue={`active devices (last 15m) · ${fmtInt(data.telemetry.engaged_devices)} cooking yesterday`}
             delta={
               data.telemetry.cook_success_rate != null
                 ? `${fmtPct(data.telemetry.cook_success_rate)} success`

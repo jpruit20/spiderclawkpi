@@ -1,4 +1,13 @@
 import { CSSProperties, ReactNode, useMemo } from 'react'
+import { Link } from 'react-router-dom'
+
+// Classify an href as internal (SPA route) vs external (real link).
+// Internal paths start with '/' and don't have a protocol; those should
+// render <Link to="..."> so react-router does client-side navigation
+// instead of doing a full page reload.
+function _isInternal(href: string): boolean {
+  return href.startsWith('/') && !href.startsWith('//')
+}
 
 /**
  * Car-dashboard-style visual primitives for page heroes.
@@ -189,6 +198,13 @@ export function MetricTile({
   )
 
   if (href) {
+    if (_isInternal(href)) {
+      return (
+        <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>
+          {inner}
+        </Link>
+      )
+    }
     return (
       <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>
         {inner}
@@ -296,6 +312,7 @@ export function GaugeTile({
   )
 
   if (href) {
+    if (_isInternal(href)) return <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</Link>
     return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
   }
   if (onClick) {
@@ -369,6 +386,7 @@ export function StatusLight({ label, count, alertState = 'warn', sublabel, onCli
   )
 
   if (href) {
+    if (_isInternal(href)) return <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</Link>
     return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
   }
   if (onClick) {
@@ -489,7 +507,10 @@ export function SparklineHero({
     </>
   )
 
-  if (href) return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  if (href) {
+    if (_isInternal(href)) return <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</Link>
+    return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  }
   if (onClick) return <button type="button" onClick={onClick} style={commonStyle}>{inner}</button>
   return <div style={commonStyle}>{inner}</div>
 }
@@ -573,7 +594,10 @@ export function AnomalyBar({ metric, direction, severity, zScore, businessDate, 
     </>
   )
 
-  if (href) return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  if (href) {
+    if (_isInternal(href)) return <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</Link>
+    return <a href={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</a>
+  }
   if (onClick) return <button type="button" onClick={onClick} style={commonStyle}>{inner}</button>
   return <div style={commonStyle}>{inner}</div>
 }
@@ -708,9 +732,11 @@ type DivisionTileProps = {
 
 export function DivisionTile({ name, icon, href, state, primary, secondary, showDot = true }: DivisionTileProps) {
   const color = STATE_COLOR[state]
+  const Wrapper: any = _isInternal(href) ? Link : 'a'
+  const wrapperProps = _isInternal(href) ? { to: href } : { href }
   return (
-    <a
-      href={href}
+    <Wrapper
+      {...wrapperProps}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -748,7 +774,7 @@ export function DivisionTile({ name, icon, href, state, primary, secondary, show
       <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', display: 'flex', justifyContent: 'flex-end' }}>
         Open →
       </div>
-    </a>
+    </Wrapper>
   )
 }
 

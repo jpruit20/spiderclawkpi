@@ -1055,7 +1055,11 @@ export interface MorningRevenue {
 
 export interface MorningTelemetry {
   business_date: string
+  /** Live 15-min active-device count (matches PE page) when available;
+   *  falls back to yesterday's complete daily rollup count. */
   active_devices: number
+  active_devices_live_15m?: number
+  active_devices_yesterday?: number
   engaged_devices: number
   total_events: number
   error_events: number

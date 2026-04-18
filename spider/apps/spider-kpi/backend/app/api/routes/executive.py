@@ -154,12 +154,33 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
         ],
     }
 
-    # --- Telemetry headline (latest row from telemetry_history_daily) ----
+    # --- Telemetry headline ---------------------------------------------
+    # Two sources combined into one payload:
+    #   1) The latest COMPLETE day from telemetry_history_daily. If today's
+    #      row exists and is partial (materializer runs 4am ET, so today
+    #      is under-reported until tomorrow), we skip it and use yesterday.
+    #      Cook-success, error-rate, session counts come from this.
+    #   2) Live "active right now" count from the last 15 minutes of
+    #      telemetry_stream_events, matching what the PE page shows as
+    #      'active cooks'. Prevents the CC vs PE number mismatch Joseph
+    #      flagged (CC saying 21, PE saying 70+).
+    today_et = datetime.now(BUSINESS_TZ).date()
     tel_row = db.execute(
         select(TelemetryHistoryDaily)
+        .where(TelemetryHistoryDaily.business_date < today_et)  # skip partial "today"
         .order_by(TelemetryHistoryDaily.business_date.desc())
         .limit(1)
     ).scalars().first()
+
+    # Live active-device count over the last 15 minutes (matches PE).
+    live_cutoff = now - timedelta(minutes=15)
+    live_active_devices = int(db.execute(text("""
+        SELECT COUNT(DISTINCT device_id)
+          FROM telemetry_stream_events
+         WHERE sample_timestamp >= :c
+           AND device_id IS NOT NULL
+    """), {"c": live_cutoff}).scalar() or 0)
+
     telemetry_payload = None
     if tel_row:
         error_rate = (tel_row.error_events / tel_row.total_events) if (tel_row.total_events or 0) > 0 else None
@@ -168,7 +189,12 @@ def morning_brief(db: Session = Depends(db_session)) -> dict[str, Any]:
             cook_success = (tel_row.successful_sessions or 0) / tel_row.session_count
         telemetry_payload = {
             "business_date": tel_row.business_date.isoformat(),
-            "active_devices": tel_row.active_devices,
+            # active_devices now reflects "right now" (live 15m window) —
+            # what PE shows. The historical-day count is still available
+            # via `active_devices_yesterday`.
+            "active_devices": live_active_devices if live_active_devices > 0 else tel_row.active_devices,
+            "active_devices_live_15m": live_active_devices,
+            "active_devices_yesterday": tel_row.active_devices,
             "engaged_devices": tel_row.engaged_devices,
             "total_events": tel_row.total_events,
             "error_events": tel_row.error_events,
