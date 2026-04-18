@@ -578,6 +578,119 @@ export function AnomalyBar({ metric, direction, severity, zScore, businessDate, 
   return <div style={commonStyle}>{inner}</div>
 }
 
+// ─── DailyHeatmap ──────────────────────────────────────────────────────
+// GitHub-contributions-style calendar grid. One cell per day, color
+// intensity = value. Useful for WISMO (days with tickets) or any
+// count-per-day metric. Caller supplies an array of {date, value}.
+
+type DailyCell = { date: string; value: number }
+
+type DailyHeatmapProps = {
+  /** Days in chronological order (oldest → newest). */
+  days: DailyCell[]
+  /** Max bucket value for saturation scaling. Clamped values above this
+   *  render at full intensity. Auto-picked if not given. */
+  maxValue?: number
+  /** Color for non-zero cells. Cell with value 0 uses a muted track color. */
+  color?: string
+  /** Cell square size in px. */
+  cellSize?: number
+  /** Render weeks as columns (Sun-top ↓). */
+  orientation?: 'weeks-as-cols' | 'linear-row'
+  /** Optional tooltip label formatter. */
+  labelFormatter?: (cell: DailyCell) => string
+}
+
+export function DailyHeatmap({
+  days,
+  maxValue,
+  color = '#ef4444',
+  cellSize = 12,
+  orientation = 'weeks-as-cols',
+  labelFormatter,
+}: DailyHeatmapProps) {
+  if (!days || days.length === 0) return null
+  const max = maxValue ?? Math.max(1, ...days.map(d => d.value))
+
+  const cellFor = (d: DailyCell) => {
+    if (d.value <= 0) {
+      return { bg: 'rgba(255, 255, 255, 0.05)', intensity: 0 }
+    }
+    const intensity = Math.min(d.value / max, 1)
+    // Step intensity into 4 buckets for clearer visual banding
+    const step = intensity >= 0.75 ? 1 : intensity >= 0.5 ? 0.75 : intensity >= 0.25 ? 0.5 : 0.3
+    return { bg: color, intensity: step }
+  }
+
+  if (orientation === 'linear-row') {
+    return (
+      <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+        {days.map(d => {
+          const { bg, intensity } = cellFor(d)
+          const title = labelFormatter ? labelFormatter(d) : `${d.date}: ${d.value}`
+          return (
+            <div
+              key={d.date}
+              title={title}
+              style={{
+                width: cellSize,
+                height: cellSize,
+                background: bg,
+                opacity: intensity === 0 ? 1 : intensity,
+                borderRadius: 2,
+                flexShrink: 0,
+              }}
+            />
+          )
+        })}
+      </div>
+    )
+  }
+
+  // weeks-as-cols: build a grid with rows = weekday (Sun 0 … Sat 6)
+  // and columns = weeks. Leading blank cells for the first week's
+  // non-Sunday start offset.
+  const firstWeekday = new Date(days[0].date + 'T00:00:00Z').getUTCDay()
+  const padded: (DailyCell | null)[] = Array(firstWeekday).fill(null)
+  padded.push(...days)
+  while (padded.length % 7 !== 0) padded.push(null)
+
+  const weekCount = padded.length / 7
+  const cols: (DailyCell | null)[][] = []
+  for (let w = 0; w < weekCount; w++) {
+    cols.push(padded.slice(w * 7, w * 7 + 7))
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 2 }}>
+      {cols.map((weekCells, wi) => (
+        <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {weekCells.map((cell, di) => {
+            if (!cell) {
+              return <div key={di} style={{ width: cellSize, height: cellSize }} />
+            }
+            const { bg, intensity } = cellFor(cell)
+            const title = labelFormatter ? labelFormatter(cell) : `${cell.date}: ${cell.value}`
+            return (
+              <div
+                key={di}
+                title={title}
+                style={{
+                  width: cellSize,
+                  height: cellSize,
+                  background: bg,
+                  opacity: intensity === 0 ? 1 : intensity,
+                  borderRadius: 2,
+                }}
+              />
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── DivisionTile ──────────────────────────────────────────────────────
 // Larger tile for the division drill grid. Icon + name + status dot +
 // 1-2 key numbers + "Open →" affordance.

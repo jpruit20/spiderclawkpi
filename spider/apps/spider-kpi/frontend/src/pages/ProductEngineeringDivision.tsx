@@ -691,18 +691,45 @@ export function ProductEngineeringDivision() {
             </div>
           )}
 
-          {/* Intelligence Briefing */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Product Intelligence Briefing</strong>
-              <span className="venom-panel-hint">{productInsights.length} signal{productInsights.length !== 1 ? 's' : ''}</span>
+          {/* Intelligence Briefing — signal-per-row chips, icon-prefixed,
+              severity-colored left border. More scannable than text bullets. */}
+          <section className="card" style={{ padding: '14px 16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+              <strong style={{ fontSize: 13 }}>Product intelligence briefing</strong>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                {productInsights.length} signal{productInsights.length !== 1 ? 's' : ''}
+              </span>
             </div>
-            <div className="stack-list compact">
-              {productInsights.map((insight, i) => (
-                <div key={i} className={`list-item status-${insight.severity === 'good' ? 'good' : insight.severity === 'warn' ? 'warn' : insight.severity === 'bad' ? 'bad' : 'muted'}`}>
-                  <span>{insight.icon} {insight.text}</span>
-                </div>
-              ))}
+            <div style={{ display: 'grid', gap: 6 }}>
+              {productInsights.map((insight, i) => {
+                const sevColor =
+                  insight.severity === 'good' ? '#22c55e'
+                  : insight.severity === 'warn' ? '#f59e0b'
+                  : insight.severity === 'bad' ? '#ef4444'
+                  : '#9ca3af'
+                const sevBg =
+                  insight.severity === 'good' ? 'rgba(34,197,94,0.08)'
+                  : insight.severity === 'warn' ? 'rgba(245,158,11,0.08)'
+                  : insight.severity === 'bad' ? 'rgba(239,68,68,0.08)'
+                  : 'rgba(255,255,255,0.03)'
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      gap: 12,
+                      padding: '8px 12px',
+                      background: sevBg,
+                      borderLeft: `3px solid ${sevColor}`,
+                      borderRadius: 6,
+                      alignItems: 'flex-start',
+                    }}
+                  >
+                    <span style={{ fontSize: 18, lineHeight: 1.2, flexShrink: 0 }}>{insight.icon}</span>
+                    <span style={{ fontSize: 12.5, lineHeight: 1.45, flex: 1 }}>{insight.text}</span>
+                  </div>
+                )
+              })}
             </div>
           </section>
 

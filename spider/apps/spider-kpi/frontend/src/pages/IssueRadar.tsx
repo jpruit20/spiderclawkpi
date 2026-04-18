@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthLegend } from '../components/TruthLegend'
+import { MetricTile, StatusLight, TileGrid } from '../components/tiles'
 import { fmtPct, fmtInt, formatFreshness } from '../lib/format'
 import { ApiError, api } from '../lib/api'
 import { frictionRankingScore } from '../lib/operatingModel'
@@ -173,35 +174,103 @@ export function IssueRadar() {
         <>
           <TruthLegend />
 
-          {/* KPI Strip */}
-          <VenomKpiStrip cards={kpiCards} cols={3} />
+          {/* Warning-lights row — glanceable radar state */}
+          <TileGrid cols={4}>
+            <StatusLight
+              label="Priority queue"
+              count={sortedClusters.length}
+              alertState={sortedClusters.length > 5 ? 'bad' : 'warn'}
+              sublabel="clusters escalating"
+              icon="📡"
+            />
+            <StatusLight
+              label="Rising clusters"
+              count={data.fastest_rising.length}
+              alertState="warn"
+              sublabel={data.fastest_rising.length > 0 ? (String(data.fastest_rising[0]?.details_json?.trend_label || 'rising')) : 'no trends rising'}
+              icon="📈"
+            />
+            <MetricTile
+              label="Source coverage"
+              value={`${data.live_sources.length} / ${totalSources}`}
+              sublabel="live data sources reporting"
+              state={
+                data.live_sources.length === totalSources ? 'good'
+                : data.live_sources.length > 0 ? 'warn'
+                : 'bad'
+              }
+              icon="🔌"
+            />
+            <MetricTile
+              label="Top-risk severity"
+              value={topThree[0]?.severity?.toUpperCase() || '—'}
+              sublabel={topThree[0]?.owner_team ? `owner: ${topThree[0].owner_team}` : 'no high-risk cluster'}
+              state={
+                topThree[0]?.severity === 'high' ? 'bad'
+                : topThree[0]?.severity === 'medium' ? 'warn'
+                : 'good'
+              }
+              icon="🎯"
+            />
+          </TileGrid>
 
-          {/* Escalation Queue */}
+          {/* Escalate First — top 3 visualized as severity bars with score
+              scaled against max; click through to each cluster source. */}
           <section className="card">
             <div className="venom-panel-head">
-              <strong>Escalate First</strong>
-              <span className="venom-panel-hint">Top 3 by business risk</span>
+              <strong>Escalate first</strong>
+              <span className="venom-panel-hint">top 3 by business risk</span>
             </div>
             {topThree.length > 0 ? (
-              <div className="stack-list">
-                {topThree.map((cluster) => {
+              <div style={{ display: 'grid', gap: 10 }}>
+                {topThree.map((cluster, idx) => {
                   const score = Number(cluster.details_json?.priority_score || 0)
                   const burden = cluster.details_json?.tickets_per_100_orders ?? cluster.details_json?.tickets_per_100_orders_by_theme
                   const trendLabel = String(cluster.details_json?.trend_label || 'stable')
+                  const severityColor =
+                    cluster.severity === 'high' ? '#ef4444'
+                    : cluster.severity === 'medium' ? '#f59e0b'
+                    : '#22c55e'
+                  const pct = Math.min(score / maxPriorityScore * 100, 100)
+                  const trendColor = trendLabel === 'rising' ? '#ef4444' : trendLabel === 'falling' ? '#22c55e' : '#9ca3af'
                   return (
-                    <div className={`list-item ${severityStatusClass(cluster.severity)}`} key={cluster.id}>
-                      <div className="item-head">
-                        <strong>{cluster.title}</strong>
-                        <span className={severityBadgeClass(cluster.severity)}>{cluster.severity}</span>
+                    <div
+                      key={cluster.id}
+                      style={{
+                        padding: '12px 14px',
+                        background: cluster.severity === 'high' ? 'rgba(239, 68, 68, 0.08)'
+                          : cluster.severity === 'medium' ? 'rgba(245, 158, 11, 0.08)'
+                          : 'rgba(34, 197, 94, 0.06)',
+                        borderLeft: `3px solid ${severityColor}`,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>
+                          <span style={{ color: severityColor, marginRight: 8, fontWeight: 700 }}>#{idx + 1}</span>
+                          {cluster.title}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexShrink: 0, fontSize: 11 }}>
+                          <span style={{ color: 'var(--muted)' }}>score</span>
+                          <span style={{ color: severityColor, fontWeight: 700, fontSize: 16 }}>{score}</span>
+                        </div>
                       </div>
-                      <p>{String(cluster.details_json?.priority_reason_summary || 'No priority reason')}</p>
-                      <div className="inline-badges">
-                        <span className="badge badge-neutral">score {score}</span>
-                        <span className="badge badge-neutral">{burden ?? '--'} / 100 orders</span>
-                        <span className={`badge ${trendLabel === 'rising' ? 'badge-bad' : trendLabel === 'falling' ? 'badge-good' : 'badge-neutral'}`}>{trendLabel}</span>
+                      {/* Score bar scaled against max priority */}
+                      <div style={{ position: 'relative', height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, marginTop: 10 }}>
+                        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: `${pct}%`, background: severityColor, borderRadius: 3 }} />
                       </div>
-                      <BarIndicator value={score} max={maxPriorityScore} color={cluster.severity === 'high' ? 'var(--red)' : cluster.severity === 'medium' ? 'var(--orange)' : 'var(--green)'} />
-                      <small>Owner: {cluster.owner_team || 'TBD'}</small>
+                      <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--muted)', marginTop: 8, flexWrap: 'wrap' }}>
+                        <span>🎯 owner: {cluster.owner_team || 'TBD'}</span>
+                        <span>📊 {burden ?? '—'} / 100 orders</span>
+                        <span style={{ color: trendColor, fontWeight: 600 }}>
+                          {trendLabel === 'rising' ? '▲' : trendLabel === 'falling' ? '▼' : '▬'} {trendLabel}
+                        </span>
+                      </div>
+                      {String(cluster.details_json?.priority_reason_summary || '') && (
+                        <p style={{ fontSize: 12, margin: '8px 0 0', color: 'var(--text)', lineHeight: 1.45 }}>
+                          {String(cluster.details_json?.priority_reason_summary)}
+                        </p>
+                      )}
                     </div>
                   )
                 })}

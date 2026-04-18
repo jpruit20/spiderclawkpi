@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { DeciDraftsCard } from '../components/DeciDraftsCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
+import { MetricTile, StatusLight, TileGrid } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct } from '../lib/format'
 import type {
@@ -324,7 +325,41 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
 
   return (
     <>
-      <VenomKpiStrip cards={kpiCards} />
+      {/* Visual tile row — glanceable state of the decision operating system.
+          Governance gaps (no driver) and blocked/stale items use StatusLight
+          so they pulse when non-zero. Click-through to the Active Decisions
+          view would be ideal; left as-is for now since filters are coupled
+          to that view's local state. */}
+      <TileGrid cols={4}>
+        <MetricTile
+          label="Total decisions"
+          value={fmtInt(totalDecisions)}
+          sublabel={`${fmtInt(inProgress)} active · ${fmtInt(complete)} done`}
+          state="info"
+          icon="🎯"
+        />
+        <StatusLight
+          label="No driver"
+          count={noDriver}
+          alertState="bad"
+          sublabel={noDriver > 0 ? 'governance gap — assign a driver' : 'every decision has a driver'}
+          icon="🚫"
+        />
+        <StatusLight
+          label="Blocked"
+          count={blocked}
+          alertState="bad"
+          sublabel="need escalation"
+          icon="⛔"
+        />
+        <StatusLight
+          label="Stale (>7d)"
+          count={stale}
+          alertState="warn"
+          sublabel="no update in 7+ days"
+          icon="⏳"
+        />
+      </TileGrid>
 
       {/* Seed domains if empty */}
       {domains.length === 0 ? (
@@ -541,43 +576,65 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
         </section>
       </div>
 
-      {/* Velocity Metrics */}
+      {/* Velocity Metrics — converted to visual tile grid. Faster decisions =
+          green (benchmark: Creation→Decision < 72h, Decision→Complete < 240h).
+          Escalations + cross-functional counts render as status lights. */}
       {overview?.velocity ? (
-        <section className="card">
-          <div className="venom-panel-head">
-            <strong>Decision Velocity</strong>
+        <section className="card" style={{ padding: '14px 16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+            <strong style={{ fontSize: 13 }}>Decision velocity</strong>
             <TruthBadge state="estimated" />
           </div>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{overview.velocity.avg_creation_to_decision_hours != null ? `${Math.round(overview.velocity.avg_creation_to_decision_hours)}h` : '—'}</span>
-              <span className="mini-stat-label">Avg Creation → Decision</span>
+          <TileGrid cols={4}>
+            <MetricTile
+              label="Creation → Decision"
+              value={overview.velocity.avg_creation_to_decision_hours != null ? `${Math.round(overview.velocity.avg_creation_to_decision_hours)}h` : '—'}
+              sublabel="avg time to first decision"
+              state={
+                overview.velocity.avg_creation_to_decision_hours == null ? 'neutral'
+                : overview.velocity.avg_creation_to_decision_hours < 72 ? 'good'
+                : overview.velocity.avg_creation_to_decision_hours < 168 ? 'warn'
+                : 'bad'
+              }
+              icon="⚡"
+            />
+            <MetricTile
+              label="Decision → Complete"
+              value={overview.velocity.avg_decision_to_complete_hours != null ? `${Math.round(overview.velocity.avg_decision_to_complete_hours)}h` : '—'}
+              sublabel="avg execution time"
+              state={
+                overview.velocity.avg_decision_to_complete_hours == null ? 'neutral'
+                : overview.velocity.avg_decision_to_complete_hours < 240 ? 'good'
+                : overview.velocity.avg_decision_to_complete_hours < 504 ? 'warn'
+                : 'bad'
+              }
+              icon="🏁"
+            />
+            <MetricTile
+              label="Completion rate"
+              value={overview.velocity.total_decisions > 0 ? fmtPct(overview.velocity.completed_decisions / overview.velocity.total_decisions) : '—'}
+              sublabel={`${fmtInt(overview.velocity.completed_decisions)} of ${fmtInt(overview.velocity.total_decisions)} decisions`}
+              state={
+                overview.velocity.total_decisions === 0 ? 'neutral'
+                : (overview.velocity.completed_decisions / overview.velocity.total_decisions) >= 0.7 ? 'good'
+                : (overview.velocity.completed_decisions / overview.velocity.total_decisions) >= 0.5 ? 'warn'
+                : 'bad'
+              }
+              icon="✓"
+            />
+            <StatusLight
+              label="Escalations"
+              count={escalated}
+              alertState="bad"
+              sublabel="needing leadership attention"
+              icon="🚨"
+            />
+          </TileGrid>
+          {crossFunctional > 0 && (
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
+              Cross-functional decisions in flight: <strong style={{ color: 'var(--text)' }}>{fmtInt(crossFunctional)}</strong>
             </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{overview.velocity.avg_decision_to_complete_hours != null ? `${Math.round(overview.velocity.avg_decision_to_complete_hours)}h` : '—'}</span>
-              <span className="mini-stat-label">Avg Decision → Complete</span>
-            </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{fmtInt(overview.velocity.total_decisions)}</span>
-              <span className="mini-stat-label">Total Decisions</span>
-            </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{fmtInt(overview.velocity.completed_decisions)}</span>
-              <span className="mini-stat-label">Completed</span>
-            </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{overview.velocity.total_decisions > 0 ? fmtPct(overview.velocity.completed_decisions / overview.velocity.total_decisions) : '—'}</span>
-              <span className="mini-stat-label">Completion Rate</span>
-            </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value" style={{ color: escalated > 0 ? 'var(--red)' : undefined }}>{fmtInt(escalated)}</span>
-              <span className="mini-stat-label">Escalations</span>
-            </div>
-            <div className="mini-stat">
-              <span className="mini-stat-value">{fmtInt(crossFunctional)}</span>
-              <span className="mini-stat-label">Cross-Functional</span>
-            </div>
-          </div>
+          )}
         </section>
       ) : null}
     </>

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, ComposedChart, Bar } from 'recharts'
 import { api } from '../lib/api'
 import { formatFreshness } from '../lib/format'
+import { DailyHeatmap } from './tiles'
 import type { WismoKpiResponse } from '../lib/types'
 
 /**
@@ -104,16 +105,42 @@ export function WismoKpiCard({ days = 30 }: { days?: number }) {
       </div>
 
       {data.trend.length > 0 && (
-        <div className="chart-wrap" style={{ marginBottom: 12 }}>
-          <ResponsiveContainer width="100%" height={120}>
-            <ComposedChart data={data.trend}>
-              <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--muted)" tickFormatter={(d: string) => (d || '').slice(5)} />
-              <YAxis tick={{ fontSize: 10 }} stroke="var(--muted)" allowDecimals={false} />
-              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
-              <Bar name="WISMO tickets" dataKey="wismo" fill="var(--orange)" />
-            </ComposedChart>
-          </ResponsiveContainer>
+        <div style={{ marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}>
+          {/* Left: daily bar chart (quantitative trend). */}
+          <div className="chart-wrap" style={{ margin: 0 }}>
+            <ResponsiveContainer width="100%" height={120}>
+              <ComposedChart data={data.trend}>
+                <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--muted)" tickFormatter={(d: string) => (d || '').slice(5)} />
+                <YAxis tick={{ fontSize: 10 }} stroke="var(--muted)" allowDecimals={false} />
+                <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
+                <Bar name="WISMO tickets" dataKey="wismo" fill="var(--orange)" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          {/* Right: calendar-style heatmap (pattern — which days? weekends?). */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+              Daily pattern
+            </div>
+            <DailyHeatmap
+              days={data.trend.map(d => ({ date: d.date, value: d.wismo }))}
+              color="#f59e0b"
+              cellSize={11}
+              labelFormatter={(c) => `${c.date}: ${c.value} WISMO ticket${c.value === 1 ? '' : 's'}`}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--muted)' }}>
+              <span>less</span>
+              <div style={{ display: 'flex', gap: 2 }}>
+                <span style={{ width: 10, height: 10, background: 'rgba(255,255,255,0.05)', borderRadius: 2 }} />
+                <span style={{ width: 10, height: 10, background: '#f59e0b', opacity: 0.3, borderRadius: 2 }} />
+                <span style={{ width: 10, height: 10, background: '#f59e0b', opacity: 0.5, borderRadius: 2 }} />
+                <span style={{ width: 10, height: 10, background: '#f59e0b', opacity: 0.75, borderRadius: 2 }} />
+                <span style={{ width: 10, height: 10, background: '#f59e0b', opacity: 1, borderRadius: 2 }} />
+              </div>
+              <span>more</span>
+            </div>
+          </div>
         </div>
       )}
 
