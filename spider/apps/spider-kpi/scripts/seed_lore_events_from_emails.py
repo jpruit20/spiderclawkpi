@@ -57,9 +57,11 @@ sys.path.insert(0, str(APP_ROOT / "backend"))
 from sqlalchemy import and_, func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from app.core.config import settings  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.models import EmailMessage, LoreEvent  # noqa: E402
+
+settings = get_settings()
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
