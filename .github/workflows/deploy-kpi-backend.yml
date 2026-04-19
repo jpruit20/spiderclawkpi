@@ -35,39 +35,91 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.DO_KPI_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy backend on droplet
+      - name: Deploy backend on droplet (with auto-rollback + notify)
+        id: deploy
         env:
           DO_KPI_HOST: ${{ secrets.DO_KPI_HOST }}
           DO_KPI_USER: ${{ secrets.DO_KPI_USER }}
           DO_KPI_PORT: ${{ secrets.DO_KPI_PORT != '' && secrets.DO_KPI_PORT || '22' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          ssh -p "$DO_KPI_PORT" "$DO_KPI_USER@$DO_KPI_HOST" <<'EOF'
-          set -euo pipefail
-          cd /opt/spiderclawkpi/spider/apps/spider-kpi
-          git fetch origin
-          git checkout master
-          git pull --ff-only origin master
-          # Ensure YouTube API key is present in .env
-          grep -q '^YOUTUBE_API_KEY=' .env 2>/dev/null || echo 'YOUTUBE_API_KEY=AIzaSyBms6_Y8DAtnCql3PRI2XSRB39p_kvYQUI' >> .env
-          ./.venv/bin/pip install -r backend/requirements.txt
-          if [ -x ./.venv/bin/alembic ]; then
-            (cd backend && ../.venv/bin/alembic upgrade head)
+          # Drive the droplet-side deploy via SSH. On health-check failure,
+          # revert to the previous SHA, restart, re-check, and notify.
+          # Always notify — success, rolled_back, or failure — via the
+          # notifier script on the droplet (email + Slack to allowlist).
+          ssh -p "$DO_KPI_PORT" \
+            -o SendEnv=RUN_URL -o SendEnv=SOURCE_TAG \
+            "$DO_KPI_USER@$DO_KPI_HOST" \
+            "RUN_URL='$RUN_URL' SOURCE_TAG='gha-deploy-backend' bash -s" <<'EOF'
+          set -u
+          REPO_ROOT=/opt/spiderclawkpi/spider
+          APP_DIR="$REPO_ROOT/apps/spider-kpi"
+          cd "$APP_DIR"
+          NOTIFIER="$APP_DIR/scripts/notify_deploy_outcome.py"
+          VENV_PY="$APP_DIR/.venv/bin/python"
+
+          notify() {
+            local outcome="$1"; shift
+            local error_msg="${1:-}"
+            if [ -x "$VENV_PY" ] && [ -f "$NOTIFIER" ]; then
+              "$VENV_PY" "$NOTIFIER" \
+                --outcome "$outcome" \
+                --old-sha "$OLD_SHA" \
+                --new-sha "$NEW_SHA" \
+                --source "$SOURCE_TAG" \
+                ${RUN_URL:+--run-url "$RUN_URL"} \
+                ${error_msg:+--error "$error_msg"} || true
+            fi
+          }
+
+          health_ok() {
+            for _ in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
+          # Capture SHA before touching the working tree.
+          OLD_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
+          NEW_SHA="$OLD_SHA"  # set real value after pull; used by notify()
+          git -C "$REPO_ROOT" fetch origin
+          git -C "$REPO_ROOT" checkout master
+          git -C "$REPO_ROOT" pull --ff-only origin master
+          NEW_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
+
+          set -e
+          "$APP_DIR/.venv/bin/pip" install -r backend/requirements.txt
+          if [ -x "$APP_DIR/.venv/bin/alembic" ]; then
+            (cd backend && "$APP_DIR/.venv/bin/alembic" upgrade head)
           fi
           if [ -f frontend/package.json ] && command -v npm &>/dev/null; then
             (cd frontend && npm ci --prefer-offline && npm run build)
           fi
+          set +e
+
           systemctl restart spider-kpi.service
-          systemctl is-active spider-kpi.service
-          for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:8000/health; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "backend health check did not recover in time" >&2
+          if health_ok; then
+            notify success
+            exit 0
+          fi
+
+          echo "NEW SHA $NEW_SHA UNHEALTHY — rolling back to $OLD_SHA" >&2
           systemctl status spider-kpi.service --no-pager || true
           journalctl -u spider-kpi.service -n 80 --no-pager || true
-          exit 1
+
+          git -C "$REPO_ROOT" checkout "$OLD_SHA" --quiet
+          "$APP_DIR/.venv/bin/pip" install -r backend/requirements.txt || true
+          systemctl restart spider-kpi.service
+          if health_ok; then
+            notify rolled_back "new SHA $NEW_SHA failed health check"
+            exit 1
+          fi
+
+          notify failure "deploy + rollback both failed"
+          exit 2
           EOF
 
       - name: Post-deploy connector sync + validation
