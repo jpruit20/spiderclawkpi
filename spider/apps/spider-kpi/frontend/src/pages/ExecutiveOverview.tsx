@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
+import { BaselineBand } from '../components/BaselineBand'
 import { Card } from '../components/Card'
 import { KpiGrid } from '../components/KpiGrid'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { StaleDataBanner } from '../components/StaleDataBanner'
 import { TrendChart } from '../components/TrendChart'
 import { EventAnnotationList } from '../components/EventAnnotationList'
@@ -259,7 +261,19 @@ export function ExecutiveOverview() {
       <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
       {!loading && !error && data ? (
         <div className="three-col">
-          <Card title="Revenue in Scope"><div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div><div className="state-message">Top-line revenue for the visible executive scope</div></Card>
+          <Card title="Revenue in Scope">
+            <div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+              <div className="state-message" style={{ margin: 0 }}>Top-line revenue for the visible executive scope</div>
+              {latestCompleteDay?.business_date && latestCompleteDay?.revenue != null ? (
+                <SeasonalContextBadge
+                  metric="revenue"
+                  onDate={latestCompleteDay.business_date}
+                  value={latestCompleteDay.revenue}
+                />
+              ) : null}
+            </div>
+          </Card>
           <Card title="Trustworthy Live Connectors"><div className="hero-metric">{liveConnectors.filter((row) => isTruthfullyHealthy(row)).length}/{liveConnectors.length || 0}</div><div className="state-message">Live source trust before acting on KPI movement</div></Card>
           <Card title="Current Decision Focus"><div className="state-message">{actionItems[0]}</div></Card>
         </div>
@@ -323,6 +337,19 @@ export function ExecutiveOverview() {
               ) : <div className="state-message">No KPI rows available for selected range</div>}
             </Card>
           </div>
+          {range.preset !== 'today' && range.startDate && range.endDate && rangeRows.length ? (
+            <Card title="Revenue vs Seasonal Baseline">
+              <BaselineBand
+                metric="revenue"
+                start={range.startDate}
+                end={range.endDate}
+                currentSeries={rangeRows.map((r) => ({ date: r.business_date, value: r.revenue }))}
+                currentLabel="Revenue"
+                color="#6ea8ff"
+                valueFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
+              />
+            </Card>
+          ) : null}
           <div className="two-col">
             <Card title="Top Alerts">
               <div className="stack-list">

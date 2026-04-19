@@ -45,7 +45,10 @@ import type {
   IssueRadarResponse,
   KPIIntraday,
   KPIDaily,
+  LoreMetricsResponse,
+  MetricContextResponse,
   OverviewResponse,
+  SeasonalBaselineResponse,
   SocialMention,
   SocialPulse,
   SocialTrendsResponse,
@@ -516,5 +519,18 @@ export const api = {
     if (end) params.set('end', end)
     const qs = params.toString()
     return request<AppSideFleetResponse>(`/api/telemetry/app-side${qs ? `?${qs}` : ''}`, { signal })
+  },
+
+  // Company Lore: seasonality ------------------------------------------
+  loreMetrics: (signal?: AbortSignal) =>
+    request<LoreMetricsResponse>('/api/lore/metrics', { signal }),
+  loreSeasonalBaseline: (metric: string, start: string, end: string, signal?: AbortSignal) => {
+    const p = new URLSearchParams({ metric, start, end })
+    return request<SeasonalBaselineResponse>(`/api/lore/seasonal-baseline?${p.toString()}`, { signal })
+  },
+  loreMetricContext: (metric: string, on_date: string, value?: number, signal?: AbortSignal) => {
+    const p = new URLSearchParams({ metric, on_date })
+    if (value != null) p.set('value', String(value))
+    return request<MetricContextResponse>(`/api/lore/metric-context?${p.toString()}`, { signal })
   },
 }

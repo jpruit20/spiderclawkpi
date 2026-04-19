@@ -1699,3 +1699,60 @@ export interface AppSideFleetResponse {
     combined: string
   }
 }
+
+// --- Company Lore: seasonality --------------------------------------------
+
+export interface LoreMetric {
+  name: string
+  source: string
+}
+
+export interface LoreMetricsResponse {
+  metrics: LoreMetric[]
+}
+
+export interface SeasonalBaselineRow {
+  date: string
+  day_of_year: number
+  p10: number | null
+  p25: number | null
+  p50: number | null
+  p75: number | null
+  p90: number | null
+  year_count: number
+}
+
+export interface SeasonalBaselineResponse {
+  metric: string
+  window: { start: string; end: string; days: number }
+  years_in_baseline: number[]
+  baseline: SeasonalBaselineRow[]
+}
+
+export type SeasonalVerdict =
+  | 'running_very_hot'
+  | 'running_hot'
+  | 'normal'
+  | 'running_cold'
+  | 'running_very_cold'
+  | 'no_baseline'
+
+export interface MetricContextResponse {
+  metric: string
+  on_date: string
+  day_of_year: number
+  current_value: number | null
+  baseline: {
+    p10: number | null
+    p25: number | null
+    p50: number | null
+    p75: number | null
+    p90: number | null
+    mean: number | null
+    stddev: number | null
+  }
+  year_count: number
+  verdict: SeasonalVerdict
+  percentile_rank: number | null
+  delta_vs_median_pct: number | null
+}
