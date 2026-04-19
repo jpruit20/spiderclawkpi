@@ -59,6 +59,11 @@ import type {
   RecommendationItem,
   SourceHealthItem,
   SupportOverviewResponse,
+  LoreEvent,
+  LoreEventsResponse,
+  LoreEventCreate,
+  LoreEventUpdate,
+  LoreEventStats,
 } from './types'
 
 const DEFAULT_API_BASE = ''
@@ -532,5 +537,46 @@ export const api = {
     const p = new URLSearchParams({ metric, on_date })
     if (value != null) p.set('value', String(value))
     return request<MetricContextResponse>(`/api/lore/metric-context?${p.toString()}`, { signal })
+  },
+
+  // Company Lore: event timeline --------------------------------------
+  loreEvents: (
+    opts: { start?: string; end?: string; division?: string; event_type?: string; confidence?: string; limit?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.start) p.set('start', opts.start)
+    if (opts.end) p.set('end', opts.end)
+    if (opts.division) p.set('division', opts.division)
+    if (opts.event_type) p.set('event_type', opts.event_type)
+    if (opts.confidence) p.set('confidence', opts.confidence)
+    if (opts.limit != null) p.set('limit', String(opts.limit))
+    const qs = p.toString()
+    return request<LoreEventsResponse>(`/api/lore/events${qs ? `?${qs}` : ''}`, { signal })
+  },
+  loreEventGet: (id: number, signal?: AbortSignal) =>
+    request<LoreEvent>(`/api/lore/events/${id}`, { signal }),
+  loreEventCreate: (body: LoreEventCreate, signal?: AbortSignal) =>
+    request<LoreEvent>('/api/lore/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  loreEventUpdate: (id: number, body: LoreEventUpdate, signal?: AbortSignal) =>
+    request<LoreEvent>(`/api/lore/events/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  loreEventDelete: (id: number, signal?: AbortSignal) =>
+    request<void>(`/api/lore/events/${id}`, { method: 'DELETE', signal }),
+  loreEventStats: (opts: { start?: string; end?: string } = {}, signal?: AbortSignal) => {
+    const p = new URLSearchParams()
+    if (opts.start) p.set('start', opts.start)
+    if (opts.end) p.set('end', opts.end)
+    const qs = p.toString()
+    return request<LoreEventStats>(`/api/lore/events/stats/summary${qs ? `?${qs}` : ''}`, { signal })
   },
 }

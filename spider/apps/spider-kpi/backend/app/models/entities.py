@@ -1263,3 +1263,32 @@ class EmailSyncState(TimestampMixin, Base):
     last_sync_status: Mapped[Optional[str]] = mapped_column(String(32))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
     total_imported: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class LoreEvent(TimestampMixin, Base):
+    """Institutional-memory timeline of business events. Overlaid on any
+    time-series chart so anomalies are explainable at a glance — "revenue
+    spiked because of Memorial Day sale", "active_devices dropped because
+    of the April firmware bug", "tickets_created doubled when we shipped
+    the new probes". Built 2026-04-19 as Phase 1 piece 2 of the company-
+    lore surface. Sourced manually (Joseph), from connector signals
+    (email/slack/clickup), or auto-extracted by Opus from the email
+    archive with a confidence score the human can upgrade/downgrade.
+    """
+    __tablename__ = "lore_events"
+    __table_args__ = (
+        UniqueConstraint("title", "start_date", name="uq_lore_events_title_start"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    confidence: Mapped[str] = mapped_column(String(16), default="confirmed", nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    source_refs_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(String(128))

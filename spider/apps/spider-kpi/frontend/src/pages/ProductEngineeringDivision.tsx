@@ -17,6 +17,8 @@ import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { BaselineBand } from '../components/BaselineBand'
+import { EventTimelinePanel } from '../components/EventTimelinePanel'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
@@ -1053,6 +1055,17 @@ export function ProductEngineeringDivision() {
                     currentLabel="Active devices"
                     color="#39d08f"
                   />
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                      Events during this window:
+                    </div>
+                    <EventTimelineStrip
+                      start={dateStart}
+                      end={dateEnd}
+                      division="product_engineering"
+                      showStates={false}
+                    />
+                  </div>
                 </section>
               ) : null}
 
@@ -2049,6 +2062,14 @@ export function ProductEngineeringDivision() {
               </CollapsibleSection>
             </>
           )}
+          {dateStart && dateEnd ? (
+            <EventTimelinePanel
+              title="Product Engineering event timeline"
+              division="product_engineering"
+              defaultStart={dateStart}
+              defaultEnd={dateEnd}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

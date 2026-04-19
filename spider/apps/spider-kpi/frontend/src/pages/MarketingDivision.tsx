@@ -14,6 +14,8 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { BaselineBand } from '../components/BaselineBand'
+import { EventTimelinePanel } from '../components/EventTimelinePanel'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
@@ -529,6 +531,17 @@ export function MarketingDivision() {
                 color="#ff6d7a"
                 valueFormatter={(v) => `$${v.toLocaleString()}`}
               />
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                  Events during this window:
+                </div>
+                <EventTimelineStrip
+                  start={range.startDate}
+                  end={range.endDate}
+                  division="marketing"
+                  showStates={false}
+                />
+              </div>
             </section>
           ) : null}
 
@@ -850,6 +863,14 @@ export function MarketingDivision() {
             </div>
           </section>
           </CollapsibleSection>
+          {range.startDate && range.endDate ? (
+            <EventTimelinePanel
+              title="Marketing event timeline"
+              division="marketing"
+              defaultStart={range.startDate}
+              defaultEnd={range.endDate}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

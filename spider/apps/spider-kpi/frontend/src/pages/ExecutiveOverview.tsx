@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { BaselineBand } from '../components/BaselineBand'
 import { Card } from '../components/Card'
+import { EventTimelinePanel } from '../components/EventTimelinePanel'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { KpiGrid } from '../components/KpiGrid'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
@@ -348,7 +350,24 @@ export function ExecutiveOverview() {
                 color="#6ea8ff"
                 valueFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
               />
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                  Events during this window:
+                </div>
+                <EventTimelineStrip
+                  start={range.startDate}
+                  end={range.endDate}
+                  showStates={false}
+                />
+              </div>
             </Card>
+          ) : null}
+          {range.startDate && range.endDate ? (
+            <EventTimelinePanel
+              title="Company event timeline"
+              defaultStart={range.startDate}
+              defaultEnd={range.endDate}
+            />
           ) : null}
           <div className="two-col">
             <Card title="Top Alerts">

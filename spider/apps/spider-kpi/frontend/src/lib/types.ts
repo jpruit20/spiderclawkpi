@@ -1756,3 +1756,64 @@ export interface MetricContextResponse {
   percentile_rank: number | null
   delta_vs_median_pct: number | null
 }
+
+// --- Company Lore: event timeline -----------------------------------------
+
+export type LoreEventType =
+  | 'launch'
+  | 'incident'
+  | 'campaign'
+  | 'promotion'
+  | 'firmware'
+  | 'hardware_revision'
+  | 'personnel'
+  | 'press'
+  | 'external'
+  | 'holiday'
+  | 'other'
+
+export type LoreConfidence = 'confirmed' | 'inferred' | 'rumored'
+
+export interface LoreEvent {
+  id: number
+  event_type: LoreEventType | string
+  title: string
+  description: string | null
+  start_date: string
+  end_date: string | null
+  division: string | null
+  confidence: LoreConfidence
+  source_type: string
+  source_refs: Record<string, any>
+  metadata: Record<string, any>
+  created_by: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface LoreEventsResponse {
+  events: LoreEvent[]
+  count: number
+}
+
+export interface LoreEventCreate {
+  event_type: string
+  title: string
+  description?: string | null
+  start_date: string
+  end_date?: string | null
+  division?: string | null
+  confidence?: LoreConfidence
+  source_type?: string
+  source_refs?: Record<string, any>
+  metadata?: Record<string, any>
+}
+
+export type LoreEventUpdate = Partial<LoreEventCreate>
+
+export interface LoreEventStats {
+  total: number
+  by_type: Record<string, number>
+  by_confidence: Record<string, number>
+  by_division: Record<string, number>
+}

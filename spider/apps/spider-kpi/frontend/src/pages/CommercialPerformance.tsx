@@ -10,6 +10,8 @@ import { StatePanel } from '../components/StatePanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { TrendChart } from '../components/TrendChart'
 import { BaselineBand } from '../components/BaselineBand'
+import { EventTimelinePanel } from '../components/EventTimelinePanel'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
@@ -239,6 +241,17 @@ export function CommercialPerformance() {
             color="#6ea8ff"
             valueFormatter={(v) => `$${v.toLocaleString()}`}
           />
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+              Events during this window:
+            </div>
+            <EventTimelineStrip
+              start={range.startDate}
+              end={range.endDate}
+              division="commercial"
+              showStates={false}
+            />
+          </div>
         </Card>
       ) : null}
       <div className="two-col two-col-equal">
@@ -304,6 +317,14 @@ export function CommercialPerformance() {
         ) : null}
         {!loading && !error && !currentRows.length ? <div className="state-message">No KPI rows returned.</div> : null}
       </Card>
+      {range.startDate && range.endDate ? (
+        <EventTimelinePanel
+          title="Commercial event timeline"
+          division="commercial"
+          defaultStart={range.startDate}
+          defaultEnd={range.endDate}
+        />
+      ) : null}
     </div>
   )
 }
