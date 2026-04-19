@@ -54,6 +54,17 @@ jobs:
           set -u
           REPO_ROOT=/opt/spiderclawkpi/spider
           APP_DIR="$REPO_ROOT/apps/spider-kpi"
+          REJECTED_MARKER=/var/lib/spider-kpi/.deploy-rejected-sha
+          mkdir -p "$(dirname "$REJECTED_MARKER")"
+
+          # Share the auto-pull cron's lock so we never deploy concurrently.
+          # -w 300: wait up to 5 min for cron to finish if it's mid-run.
+          exec 200>/tmp/spider-kpi-autopull.lock
+          flock -x -w 300 200 || {
+            echo "could not acquire deploy lock within 300s — another deploy in progress" >&2
+            exit 1
+          }
+
           cd "$APP_DIR"
           NOTIFIER="$APP_DIR/scripts/notify_deploy_outcome.py"
           VENV_PY="$APP_DIR/.venv/bin/python"
@@ -82,11 +93,30 @@ jobs:
             return 1
           }
 
+          # Recover from any prior detached-HEAD rollback before we touch
+          # the working tree.
+          if ! git -C "$REPO_ROOT" symbolic-ref -q HEAD >/dev/null; then
+            echo "detached HEAD detected — returning to master"
+            git -C "$REPO_ROOT" checkout master --quiet
+          fi
+
           # Capture SHA before touching the working tree.
           OLD_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
           NEW_SHA="$OLD_SHA"  # set real value after pull; used by notify()
           git -C "$REPO_ROOT" fetch origin
           git -C "$REPO_ROOT" checkout master
+          REMOTE=$(git -C "$REPO_ROOT" rev-parse origin/master)
+
+          # Poison-pill: if origin/master is a SHA we already rejected,
+          # don't redeploy it. Wait for master to advance.
+          if [ -f "$REJECTED_MARKER" ]; then
+            REJECTED=$(tr -d '[:space:]' < "$REJECTED_MARKER" 2>/dev/null || true)
+            if [ -n "$REJECTED" ] && [ "$REMOTE" = "$REJECTED" ]; then
+              echo "origin/master ($REMOTE) matches rejected SHA — skipping deploy"
+              exit 0
+            fi
+          fi
+
           git -C "$REPO_ROOT" pull --ff-only origin master
           NEW_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
 
@@ -102,6 +132,8 @@ jobs:
 
           systemctl restart spider-kpi.service
           if health_ok; then
+            # Clear any stale rejection marker on successful deploy.
+            rm -f "$REJECTED_MARKER"
             notify success
             exit 0
           fi
@@ -110,10 +142,12 @@ jobs:
           systemctl status spider-kpi.service --no-pager || true
           journalctl -u spider-kpi.service -n 80 --no-pager || true
 
-          git -C "$REPO_ROOT" checkout "$OLD_SHA" --quiet
+          # Reset (stays on master), NOT checkout (detaches HEAD).
+          git -C "$REPO_ROOT" reset --hard "$OLD_SHA" --quiet
           "$APP_DIR/.venv/bin/pip" install -r backend/requirements.txt || true
           systemctl restart spider-kpi.service
           if health_ok; then
+            echo "$NEW_SHA" > "$REJECTED_MARKER"
             notify rolled_back "new SHA $NEW_SHA failed health check"
             exit 1
           fi
