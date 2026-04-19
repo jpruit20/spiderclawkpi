@@ -296,12 +296,28 @@ def _retry_individual(svc, gmail_ids: list[str]) -> tuple[list[dict], list[str]]
 
 
 def _persist_messages(db: Session, mailbox: str, messages: Iterable[dict]) -> int:
-    """Insert normalized message dicts (idempotent). Returns count inserted."""
+    """Insert normalized message dicts (idempotent). Returns count inserted.
+
+    Guards against two dup sources:
+      1. Message already in DB from a prior run (SELECT check)
+      2. Message appearing twice in the current in-memory batch — Gmail
+         returns the same RFC 5322 Message-ID across multiple gmail
+         message IDs when the same email is labeled into multiple
+         folders (INBOX + a tag, SENT + a draft copy, etc.). The
+         per-row SELECT above misses these because the earlier
+         db.add() hasn't flushed yet.
+    """
     inserted = 0
+    seen_in_batch: set[str] = set()
+
     for raw in messages:
         norm = _normalize_message(mailbox, raw)
         if norm is None:
             continue
+        mid = norm.get("message_id")
+        if not mid or mid in seen_in_batch:
+            continue
+
         cls = classify_email(
             subject=norm.get("subject"),
             body_text=norm.get("body_text") or norm.get("snippet"),
@@ -314,12 +330,12 @@ def _persist_messages(db: Session, mailbox: str, messages: Iterable[dict]) -> in
         norm["classified_at"] = datetime.now(timezone.utc)
 
         existing = db.execute(
-            select(EmailMessage).where(EmailMessage.message_id == norm["message_id"])
-        ).scalars().first()
+            select(EmailMessage.id).where(EmailMessage.message_id == mid)
+        ).first()
         if existing is not None:
-            # Refresh classification on already-stored messages? Skip for
-            # bulk — re-classify separately if rules change.
             continue
+
+        seen_in_batch.add(mid)
         db.add(EmailMessage(**norm))
         inserted += 1
     db.flush()
