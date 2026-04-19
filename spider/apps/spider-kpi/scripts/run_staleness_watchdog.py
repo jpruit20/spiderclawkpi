@@ -39,6 +39,7 @@ if str(BACKEND) not in sys.path:
 
 from app.compute.staleness_watchdog import format_slack_message, run  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
+from app.core.email_allowlist import assert_allowed  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.services.push_alerts import send_slack_dm_to_email  # noqa: E402
 
@@ -50,7 +51,7 @@ def main() -> int:
     args = p.parse_args()
 
     settings = get_settings()
-    recipient = settings.push_alerts_recipient_email
+    recipient = assert_allowed(settings.push_alerts_recipient_email)[0]
 
     db = SessionLocal()
     try:

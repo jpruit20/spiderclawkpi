@@ -53,6 +53,13 @@ RECIPIENT = "joseph@spidergrills.com"
 SENDER = os.environ.get("AUTH_EMAIL_FROM", "no-reply@spidergrills.app")
 AWS_REGION = os.environ.get("AUTH_EMAIL_REGION") or os.environ.get("AWS_REGION") or "us-east-2"
 
+# Allowlist enforcement — hard-fails if RECIPIENT is ever edited to an
+# address not approved in backend/app/core/email_allowlist.py.
+_backend = Path(__file__).resolve().parents[1] / "backend"
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
+from app.core.email_allowlist import assert_allowed  # noqa: E402
+
 
 def _run(cmd: list[str], cwd: str = REPO_DIR) -> str:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
@@ -633,6 +640,8 @@ def send_report() -> None:
     week_end = now.strftime("%b %d")
     subject = f"KPI Dashboard AI Weekly — {week_end} ({len(commits)} edits, {len(escalations)} escalations)"
 
+    to_addresses = assert_allowed(RECIPIENT)
+
     client = boto3.client(
         "sesv2",
         region_name=AWS_REGION,
@@ -642,7 +651,7 @@ def send_report() -> None:
     try:
         client.send_email(
             FromEmailAddress=SENDER,
-            Destination={"ToAddresses": [RECIPIENT]},
+            Destination={"ToAddresses": to_addresses},
             Content={
                 "Simple": {
                     "Subject": {"Data": subject},
