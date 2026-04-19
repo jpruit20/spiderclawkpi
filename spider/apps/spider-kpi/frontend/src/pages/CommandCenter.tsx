@@ -6,6 +6,51 @@ import {
   AnomalyBar, DivisionTile, MetricTile, SparklineHero, StatusLight, TileGrid,
 } from '../components/tiles'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
+import type { StatusLightDetail, TileState } from '../components/tiles'
+
+/* ─── Severity taxonomy ──────────────────────────────────────────────────
+ *
+ * The Command Center is a triage surface. A red pulsing dot should mean
+ * "something broken or business-impacting is happening right now" — not
+ * "a metric moved this week." We split signals into three tiers:
+ *
+ *   CRITICAL (bad)  — outage, urgent overdue DECI, critical IssueSignals,
+ *                     WISMO spike, error-rate spike on an impact metric.
+ *   WARN (warn)     — draft backlog, moderate z-scores on impact metrics,
+ *                     revenue WoW drop >5%.
+ *   INFO (info)     — interesting drift on a non-impact metric
+ *                     (active_devices, cook_temp, cook_count seasonality).
+ *                     Useful to glance at, not something to alert on.
+ *
+ * The IMPACT_METRICS allowlist is the single knob controlling this. Any
+ * telemetry anomaly on a metric *not* in this list caps at `info` —
+ * regardless of z-score magnitude — so cook-temp drift and device-count
+ * wiggles stop masquerading as critical alerts.
+ */
+const IMPACT_METRICS = new Set<string>([
+  'revenue',
+  'orders',
+  'aov',
+  'cart_conversion',
+  'support_tickets_created',
+  'wismo_tickets_created',
+  'error_rate',
+  'cook_failure_rate',
+  'cook_success_rate',
+])
+
+function calibratedAnomalySeverity(a: TelemetryAnomaly): TileState {
+  const isImpact = IMPACT_METRICS.has(a.metric)
+  if (!isImpact) return 'info'
+  if (a.severity === 'critical') return 'bad'
+  if (a.severity === 'warn') return 'warn'
+  return 'info'
+}
+
+/** Prettify metric slug for one-line display in popovers. */
+function prettyMetric(metric: string): string {
+  return metric.replace(/_/g, ' ')
+}
 
 /**
  * Executive cockpit — the "coffee in hand, 8am" landing view.
@@ -66,6 +111,47 @@ export function CommandCenter() {
   const mkt = deriveMarketingStatus(data)
   const ops = deriveOpsStatus()
 
+  // ── Severity-calibrated counts & paraphrases for the top status lights.
+  // Telemetry anomalies: only those on impact metrics count toward the
+  // "alert" number; info-tier drift (cook_temp, active_devices) still
+  // shows up in the popover but doesn't trigger red/warn color.
+  const calibratedAnomalies = (data.anomalies || []).map(a => ({
+    a, tier: calibratedAnomalySeverity(a),
+  }))
+  const alertingAnomalies = calibratedAnomalies.filter(x => x.tier === 'bad' || x.tier === 'warn')
+  const infoAnomalies     = calibratedAnomalies.filter(x => x.tier === 'info')
+  const anomaliesAlertState: TileState =
+    alertingAnomalies.some(x => x.tier === 'bad') ? 'bad'
+    : alertingAnomalies.length > 0 ? 'warn'
+    : 'info' // all remaining are info-tier drift — blue, not red
+
+  // Build the popover rows for each StatusLight.
+  const critDetails: StatusLightDetail[] = (data.critical_signals || []).slice(0, 5).map(s => ({
+    key: String(s.id),
+    title: (s.title || s.signal_type || 'critical signal').slice(0, 80),
+    meta: s.source || s.signal_type || undefined,
+  }))
+  const anomalyDetails: StatusLightDetail[] = [
+    ...alertingAnomalies,
+    ...infoAnomalies, // still show info drift in the popover, just uncolored
+  ].slice(0, 5).map(({ a, tier }) => ({
+    key: String(a.id),
+    title: `${prettyMetric(a.metric)} ${a.direction} · z=${a.modified_z_score >= 0 ? '+' : ''}${a.modified_z_score.toFixed(1)}`,
+    meta: tier === 'info' ? 'informational' : `${a.severity} · ${a.business_date}`,
+  }))
+  const wismoDetails: StatusLightDetail[] = h.wismo_last_7 > 0
+    ? [{
+        key: 'wismo-summary',
+        title: `${h.wismo_last_7} "where is my order" ticket${h.wismo_last_7 === 1 ? '' : 's'} (7d)`,
+        meta: `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d · target 0`,
+      }]
+    : []
+  const draftDetails: StatusLightDetail[] = (data.drafts || []).slice(0, 5).map(d => ({
+    key: String(d.id),
+    title: d.title.slice(0, 80),
+    meta: d.priority ? `${d.priority}${d.department ? ` · ${d.department}` : ''}` : d.department || undefined,
+  }))
+
   return (
     <div className="page-grid">
       <div className="page-head" style={{ marginBottom: 2 }}>
@@ -86,14 +172,24 @@ export function CommandCenter() {
           sublabel="last 24 hours · Issue Radar"
           icon="🚨"
           href="/issues"
+          details={critDetails}
+          viewAllHref="/issues"
+          viewAllLabel="Open Issue Radar"
         />
         <StatusLight
           label="Telemetry anomalies"
           count={h.anomalies_count}
-          alertState={h.anomalies_critical > 0 ? 'bad' : 'warn'}
-          sublabel={h.anomalies_critical > 0 ? `${h.anomalies_critical} critical` : '14-day z-score'}
+          alertState={anomaliesAlertState}
+          sublabel={
+            alertingAnomalies.length === 0
+              ? `${infoAnomalies.length} informational${infoAnomalies.length === 1 ? '' : ''} · no impact alerts`
+              : `${alertingAnomalies.length} on impact metrics`
+          }
           icon="📉"
           href="/division/product-engineering"
+          details={anomalyDetails}
+          viewAllHref="/division/product-engineering"
+          viewAllLabel="Open Product Engineering"
         />
         <StatusLight
           label="WISMO (7d, target 0)"
@@ -102,14 +198,20 @@ export function CommandCenter() {
           sublabel={h.wismo_last_7 === 0 ? 'nobody chasing their order' : `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d`}
           icon="📦"
           href="/division/customer-experience"
+          details={wismoDetails}
+          viewAllHref="/division/customer-experience"
+          viewAllLabel="Open Customer Experience"
         />
         <StatusLight
           label="Drafts to review"
           count={h.drafts_awaiting_review}
-          alertState="warn"
+          alertState="info"
           sublabel="DECI awaiting decision"
           icon="📝"
           href="/deci"
+          details={draftDetails}
+          viewAllHref="/deci"
+          viewAllLabel="Open DECI"
         />
       </TileGrid>
 
@@ -166,7 +268,7 @@ export function CommandCenter() {
             state={
               data.telemetry.cook_success_rate == null ? 'neutral'
               : data.telemetry.cook_success_rate >= 0.69 ? 'good'
-              : data.telemetry.cook_success_rate >= 0.60 ? 'warn'
+              : data.telemetry.cook_success_rate >= 0.55 ? 'warn'
               : 'bad'
             }
             subtitle={
@@ -193,35 +295,49 @@ export function CommandCenter() {
       {/* ── ROW 3 · ANOMALIES + INSIGHTS ───────────────────────────────
           Anomalies as centered-baseline z-score bars (no prose).
           Insights condensed to a card with click-to-expand-on-page. */}
-      {(data.anomalies?.length ?? 0) > 0 && (
-        <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
-          <div className="venom-panel-head">
-            <strong>Telemetry anomalies</strong>
-            <Link to="/division/product-engineering" className="analysis-link">
-              Product Engineering →
-            </Link>
-          </div>
-          <div style={{ display: 'grid', gap: 6 }}>
-            {data.anomalies.slice(0, 4).map(a => (
-              <AnomalyBar
-                key={a.id}
-                metric={a.metric}
-                direction={a.direction}
-                severity={a.severity === 'critical' ? 'bad' : a.severity === 'warn' ? 'warn' : 'info'}
-                zScore={a.modified_z_score}
-                businessDate={a.business_date}
-                summary={a.summary || undefined}
-                href="/division/product-engineering"
-              />
-            ))}
-          </div>
-          {data.anomalies.length > 4 && (
-            <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', textAlign: 'right' }}>
-              + {data.anomalies.length - 4} more — click through to see all
-            </p>
-          )}
-        </section>
-      )}
+      {(data.anomalies?.length ?? 0) > 0 && (() => {
+        // Re-sort so impact-metric anomalies (warn/bad) rise to the top —
+        // non-impact drift (cook_temp, active_devices) is informational
+        // and shouldn't dominate the fold.
+        const priorityRank: Record<TileState, number> = {
+          bad: 0, warn: 1, info: 2, neutral: 3, good: 4,
+        }
+        const sorted = [...data.anomalies]
+          .map(a => ({ a, tier: calibratedAnomalySeverity(a) }))
+          .sort((x, y) => priorityRank[x.tier] - priorityRank[y.tier])
+        const top = sorted.slice(0, 4)
+        const anyAlerting = sorted.some(x => x.tier === 'bad' || x.tier === 'warn')
+        const accent = anyAlerting ? 'var(--orange)' : '#4a7aff'
+        return (
+          <section className="card" style={{ borderLeft: `3px solid ${accent}` }}>
+            <div className="venom-panel-head">
+              <strong>Telemetry anomalies</strong>
+              <Link to="/division/product-engineering" className="analysis-link">
+                Product Engineering →
+              </Link>
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              {top.map(({ a, tier }) => (
+                <AnomalyBar
+                  key={a.id}
+                  metric={a.metric}
+                  direction={a.direction}
+                  severity={tier}
+                  zScore={a.modified_z_score}
+                  businessDate={a.business_date}
+                  summary={a.summary || (tier === 'info' ? 'non-impact metric — informational only' : undefined)}
+                  href="/division/product-engineering"
+                />
+              ))}
+            </div>
+            {sorted.length > 4 && (
+              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', textAlign: 'right' }}>
+                + {sorted.length - 4} more — click through to see all
+              </p>
+            )}
+          </section>
+        )
+      })()}
 
       {(data.insights?.length ?? 0) > 0 && (
         <InsightsPanel insights={data.insights} highCount={h.insights_high_urgency} />
@@ -500,10 +616,13 @@ function derivePEStatus(data: MorningBriefResponse): DivStatus {
   const tel = data.telemetry
   if (!tel) return { state: 'neutral', primary: '—', secondary: 'awaiting next materializer' }
   const cs = tel.cook_success_rate
+  // Cook success is a true impact metric, so it can go bad; but the tile's
+  // *primary* number is active-device count, which is drift-informational —
+  // keep the color driven by cs only.
   const state: DivStatus['state'] =
     cs == null ? 'neutral'
     : cs >= 0.69 ? 'good'
-    : cs >= 0.60 ? 'warn'
+    : cs >= 0.55 ? 'warn'
     : 'bad'
   return {
     state,
@@ -528,11 +647,14 @@ function deriveCXStatus(data: MorningBriefResponse): DivStatus {
 
 function deriveMarketingStatus(data: MorningBriefResponse): DivStatus {
   const wow = data.revenue.wow_pct
+  // Revenue is an impact metric, so large drops earn warn/bad colors, but
+  // a modest week-over-week wiggle is informational, not an alert.
   const state: DivStatus['state'] =
     wow == null ? 'neutral'
     : wow >= 5 ? 'good'
-    : wow >= -5 ? 'neutral'
-    : 'warn'
+    : wow >= -10 ? 'neutral'
+    : wow >= -25 ? 'warn'
+    : 'bad'
   return {
     state,
     primary: currency(data.revenue.trailing_7),

@@ -1,4 +1,4 @@
-import { CSSProperties, ReactNode, useMemo } from 'react'
+import { CSSProperties, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 // Classify an href as internal (SPA route) vs external (real link).
@@ -327,6 +327,14 @@ export function GaugeTile({
 
 // ─── StatusLight ───────────────────────────────────────────────────────
 
+export type StatusLightDetail = {
+  key: string
+  /** Short paraphrase — keep to ~5 words for readability. */
+  title: string
+  /** Optional second-line context (source, severity, date, etc). */
+  meta?: string
+}
+
 type StatusLightProps = {
   label: string
   /** Number to display center-stage (e.g. "2" critical alerts, "0" anomalies). */
@@ -337,24 +345,67 @@ type StatusLightProps = {
   onClick?: () => void
   href?: string
   icon?: string
+  /** Items driving the click-popover and the auto-paraphrase sublabel. When
+   *  non-empty, the tile becomes click-to-expand (overrides `onClick`) and
+   *  the sublabel shows the top item's title + "+N more". */
+  details?: StatusLightDetail[]
+  /** Where the "View all →" link in the popover points. Defaults to `href`. */
+  viewAllHref?: string
+  viewAllLabel?: string
 }
 
-export function StatusLight({ label, count, alertState = 'warn', sublabel, onClick, href, icon }: StatusLightProps) {
+export function StatusLight({
+  label, count, alertState = 'warn', sublabel, onClick, href, icon,
+  details, viewAllHref, viewAllLabel = 'View all',
+}: StatusLightProps) {
   const state: TileState = count === 0 ? 'good' : alertState
   const color = STATE_COLOR[state]
   const bg = STATE_BG[state]
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const hasDetails = !!details && details.length > 0
+  const destHref = viewAllHref || href
+
+  // Close popover on outside click or Escape.
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  // Paraphrase: when details present, use top item title + "+N more" as sublabel.
+  const derivedSublabel: ReactNode = useMemo(() => {
+    if (!hasDetails) return sublabel
+    const top = details![0]
+    const extras = count > 1 ? ` · +${count - 1} more` : ''
+    return (
+      <span>
+        <span style={{ color: 'var(--text)', fontWeight: 500 }}>{top.title}</span>
+        <span style={{ color: 'var(--muted)' }}>{extras}</span>
+      </span>
+    )
+  }, [hasDetails, details, count, sublabel])
 
   const commonStyle: CSSProperties = {
     padding: '12px 14px',
     background: bg,
     borderRadius: 8,
     borderLeft: `3px solid ${color}`,
-    cursor: onClick || href ? 'pointer' : 'default',
+    cursor: onClick || href || hasDetails ? 'pointer' : 'default',
     textAlign: 'left',
     color: 'inherit',
     font: 'inherit',
     display: 'flex',
     flexDirection: 'column',
+    position: 'relative',
   }
 
   const inner = (
@@ -380,10 +431,83 @@ export function StatusLight({ label, count, alertState = 'warn', sublabel, onCli
           />
         )}
       </div>
-      {sublabel && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.35 }}>{sublabel}</div>}
+      {derivedSublabel && (
+        <div
+          style={{
+            fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.35,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+        >
+          {derivedSublabel}
+        </div>
+      )}
       <style>{`@keyframes pulse-alert { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
     </>
   )
+
+  // If details were supplied, click opens an in-place popover — ignoring href,
+  // because the popover itself offers a "View all →" link to the same target.
+  if (hasDetails) {
+    return (
+      <div ref={rootRef} style={{ position: 'relative' }}>
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          style={{ ...commonStyle, border: 'none', width: '100%' }}
+          aria-expanded={open}
+        >
+          {inner}
+        </button>
+        {open && (
+          <div
+            role="dialog"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              left: 0,
+              right: 0,
+              zIndex: 50,
+              background: 'var(--bg-elevated, #1a1d24)',
+              border: `1px solid ${color}55`,
+              borderRadius: 8,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              padding: 10,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            {details!.slice(0, 5).map(d => (
+              <div key={d.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.3 }}>{d.title}</span>
+                {d.meta && (
+                  <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                    {d.meta}
+                  </span>
+                )}
+              </div>
+            ))}
+            {destHref && (
+              <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 6, marginTop: 2 }}>
+                {_isInternal(destHref) ? (
+                  <Link
+                    to={destHref}
+                    onClick={() => setOpen(false)}
+                    style={{ fontSize: 11, color, textDecoration: 'none', fontWeight: 600 }}
+                  >
+                    {viewAllLabel} →
+                  </Link>
+                ) : (
+                  <a href={destHref} style={{ fontSize: 11, color, textDecoration: 'none', fontWeight: 600 }}>
+                    {viewAllLabel} →
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (href) {
     if (_isInternal(href)) return <Link to={href} style={{ ...commonStyle, textDecoration: 'none' }}>{inner}</Link>
