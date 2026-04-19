@@ -1179,3 +1179,55 @@ class CommunityMessage(TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="new", nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class EmailMessage(TimestampMixin, Base):
+    """Normalized archive of email from shared inboxes (info@spidergrills.com
+    and any future additions). Input to the lore system — never surfaced as
+    a dashboard widget per 2026-04-19 design decision. Feeds archetype
+    classification, sender profiles, Event Timeline, and future Opus passes.
+    """
+    __tablename__ = "email_messages"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_email_messages_message_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    gmail_message_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    thread_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    mailbox: Mapped[str] = mapped_column(String(255), nullable=False)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    direction: Mapped[Optional[str]] = mapped_column(String(16))
+    from_address: Mapped[Optional[str]] = mapped_column(String(512))
+    from_domain: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    to_addresses: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    cc_addresses: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    subject: Mapped[Optional[str]] = mapped_column(Text)
+    body_text: Mapped[Optional[str]] = mapped_column(Text)
+    body_preview: Mapped[Optional[str]] = mapped_column(String(500))
+    snippet: Mapped[Optional[str]] = mapped_column(Text)
+    headers_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    labels_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    attachments_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    archetype: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    topic_tags_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    mentioned_entities_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw_size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(32), default="gmail_api", nullable=False)
+
+
+class EmailSyncState(TimestampMixin, Base):
+    """Per-mailbox watermark for incremental Gmail sync. historyId is the
+    Gmail-canonical resume point; see
+    https://developers.google.com/gmail/api/guides/sync.
+    """
+    __tablename__ = "email_sync_state"
+    __table_args__ = (UniqueConstraint("mailbox", name="uq_email_sync_state_mailbox"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mailbox: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_history_id: Mapped[Optional[str]] = mapped_column(String(64))
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_sync_status: Mapped[Optional[str]] = mapped_column(String(32))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    total_imported: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
