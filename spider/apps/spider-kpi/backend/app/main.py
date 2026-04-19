@@ -17,6 +17,7 @@ from app.api.routes.clickup import router as clickup_router, webhook_router as c
 from app.api.routes.executive import router as executive_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.health import router as health_router
+from app.api.routes.lore import router as lore_router
 from app.api.routes.marketing import router as marketing_router
 from app.api.routes.overview import router as overview_router
 from app.api.routes.personal_intelligence import router as personal_intelligence_router
@@ -91,6 +92,7 @@ app.include_router(app_side_router)
 app.include_router(clickup_router)
 app.include_router(clickup_webhook_router)
 app.include_router(executive_router)
+app.include_router(lore_router)
 app.include_router(marketing_router)
 app.include_router(slack_router)
 app.include_router(slack_webhook_router)

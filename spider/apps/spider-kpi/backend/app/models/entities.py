@@ -1216,6 +1216,38 @@ class EmailMessage(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(32), default="gmail_api", nullable=False)
 
 
+class SeasonalityBaseline(TimestampMixin, Base):
+    """Per-metric, per-day-of-year historical distribution for seasonal
+    interpretation of current values. Built 2026-04-19 as Phase 1 of
+    the company-lore surface: every KPI tile gets a hot/cold verdict
+    vs the same day-of-year across prior years, every time-series gets
+    an optional p25-p75 baseline band. Materialized nightly from
+    kpi_daily / telemetry_history_daily / freshdesk_tickets_daily.
+    """
+    __tablename__ = "seasonality_baselines"
+    __table_args__ = (
+        UniqueConstraint("metric_name", "day_of_year", name="uq_seasonality_baselines_metric_doy"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    metric_source: Mapped[str] = mapped_column(String(128), nullable=False)
+    day_of_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    iso_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    p10: Mapped[Optional[float]] = mapped_column(Float)
+    p25: Mapped[Optional[float]] = mapped_column(Float)
+    p50: Mapped[Optional[float]] = mapped_column(Float)
+    p75: Mapped[Optional[float]] = mapped_column(Float)
+    p90: Mapped[Optional[float]] = mapped_column(Float)
+    mean: Mapped[Optional[float]] = mapped_column(Float)
+    stddev: Mapped[Optional[float]] = mapped_column(Float)
+    year_samples_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class EmailSyncState(TimestampMixin, Base):
     """Per-mailbox watermark for incremental Gmail sync. historyId is the
     Gmail-canonical resume point; see
