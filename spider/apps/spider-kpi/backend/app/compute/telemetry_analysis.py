@@ -101,12 +101,12 @@ class ReportBundle(BaseModel):
     )
     key_findings: list[Finding] = Field(
         min_length=3,
-        max_length=12,
+        max_length=20,
         description="The 'so what' bullet points — things Joseph should know or act on.",
     )
     recommendations: list[Recommendation] = Field(
         min_length=3,
-        max_length=12,
+        max_length=20,
         description="Concrete next steps: what to change on the dashboard, in firmware, in product, in support. Include effort sizing.",
     )
 
