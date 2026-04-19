@@ -13,6 +13,8 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
 import { ApiError, api, getApiBase } from '../lib/api'
@@ -121,6 +123,8 @@ export function MarketingDivision() {
 
   /* ---- derived data ---- */
   const currentRows = useMemo(() => filterRowsByRange(rows, range), [rows, range])
+  const latestCompleteDay = currentRows[currentRows.length - 1]
+  const seasonalityApplicable = range.preset !== 'today' && !!range.startDate && !!range.endDate && currentRows.length > 0
   const priorRows = useMemo(
     () =>
       compareMode === 'same_day_last_week'
@@ -501,7 +505,32 @@ export function MarketingDivision() {
                 )
               })}
             </TileGrid>
+            {seasonalityApplicable && latestCompleteDay ? (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>Seasonal context ({latestCompleteDay.business_date}):</span>
+                <SeasonalContextBadge metric="ad_spend" onDate={latestCompleteDay.business_date} value={latestCompleteDay.ad_spend} />
+                <SeasonalContextBadge metric="sessions" onDate={latestCompleteDay.business_date} value={latestCompleteDay.sessions} />
+              </div>
+            ) : null}
           </section>
+
+          {seasonalityApplicable ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Ad Spend vs Seasonal Baseline</strong>
+                <span className="venom-panel-hint">Observed spend vs p10–p90 / p25–p75 / median by day-of-year</span>
+              </div>
+              <BaselineBand
+                metric="ad_spend"
+                start={range.startDate}
+                end={range.endDate}
+                currentSeries={currentRows.map((row) => ({ date: row.business_date, value: Number(row.ad_spend) || 0 }))}
+                currentLabel="Ad spend"
+                color="#ff6d7a"
+                valueFormatter={(v) => `$${v.toLocaleString()}`}
+              />
+            </section>
+          ) : null}
 
           {/* ---- Clarity Degraded Banner (conditional) ---- */}
           {clarityDegraded ? (

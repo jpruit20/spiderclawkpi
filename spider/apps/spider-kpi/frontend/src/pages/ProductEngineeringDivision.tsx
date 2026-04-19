@@ -16,6 +16,8 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { GaugeTile, MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
 import { addDays, fmtPct, fmtInt, fmtDecimal, fmtDuration, formatDateTimeET, formatFreshness, todayET } from '../lib/format'
@@ -904,6 +906,16 @@ export function ProductEngineeringDivision() {
                   </div>
                   {historyStats?.peakDay && <span className="venom-panel-hint">Peak: {historyStats.peakDay.active_devices} on {historyStats.peakDay.business_date}</span>}
                 </div>
+                {dateStart && dateEnd && rangedHistory.length && rangedHistory[rangedHistory.length - 1] ? (
+                  <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>Seasonal context ({rangedHistory[rangedHistory.length - 1].business_date}):</span>
+                    <SeasonalContextBadge
+                      metric="active_devices"
+                      onDate={rangedHistory[rangedHistory.length - 1].business_date}
+                      value={rangedHistory[rangedHistory.length - 1].active_devices}
+                    />
+                  </div>
+                ) : null}
                 {fleetChartRows.length > 0 ? (
                   <div className="chart-wrap">
                     <ResponsiveContainer width="100%" height={300}>
@@ -1024,6 +1036,25 @@ export function ProductEngineeringDivision() {
                   <UniqueDeviceCohortPanel stats={cookDuration} />
                 )}
               </section>
+
+              {dateStart && dateEnd && rangedHistory.length > 0 ? (
+                <section className="card">
+                  <div className="venom-panel-head">
+                    <div>
+                      <strong>Active Devices vs Seasonal Baseline</strong>
+                      <p className="venom-chart-sub">Today's active-device count vs p10–p90 / p25–p75 / median by day-of-year from prior years.</p>
+                    </div>
+                  </div>
+                  <BaselineBand
+                    metric="active_devices"
+                    start={dateStart}
+                    end={dateEnd}
+                    currentSeries={rangedHistory.map((row) => ({ date: row.business_date, value: Number(row.active_devices) || 0 }))}
+                    currentLabel="Active devices"
+                    color="#39d08f"
+                  />
+                </section>
+              ) : null}
 
               {/* Model Mix Over Time — surfaces the Huntsman ramp that was
                   invisible on the active-devices chart (report finding #3).

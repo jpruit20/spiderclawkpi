@@ -9,6 +9,8 @@ import { RangeToolbar } from '../components/RangeToolbar'
 import { StatePanel } from '../components/StatePanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { TrendChart } from '../components/TrendChart'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { CompareMode, compareValue, formatDeltaPct, priorPeriodRows, sameDayLastWeekRows } from '../lib/compare'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
@@ -93,6 +95,8 @@ export function CommercialPerformance() {
   }, [])
 
   const currentRows = useMemo(() => filterRowsByRange(rows, range), [rows, range])
+  const latestCompleteDay = currentRows[currentRows.length - 1]
+  const seasonalityApplicable = range.preset !== 'today' && !!range.startDate && !!range.endDate && currentRows.length > 0
   const currentRevenue = sum(currentRows, 'revenue')
   const currentSessions = sum(currentRows, 'sessions')
   const currentOrders = sum(currentRows, 'orders')
@@ -165,7 +169,15 @@ export function CommercialPerformance() {
 
       {!loading && !error && currentRows.length ? (
         <div className="three-col">
-          <Card title="Revenue in Scope"><div className="hero-metric">${currentRevenue.toFixed(0)}</div><div className="state-message">Selected-range revenue with current compare mode applied below</div></Card>
+          <Card title="Revenue in Scope">
+            <div className="hero-metric">${currentRevenue.toFixed(0)}</div>
+            {seasonalityApplicable && latestCompleteDay ? (
+              <div style={{ marginTop: 4 }}>
+                <SeasonalContextBadge metric="revenue" onDate={latestCompleteDay.business_date} value={latestCompleteDay.revenue} />
+              </div>
+            ) : null}
+            <div className="state-message">Selected-range revenue with current compare mode applied below</div>
+          </Card>
           <Card title="MER in Scope"><div className="hero-metric">{currentMer.toFixed(2)}</div><div className="state-message">Media efficiency at the current range scope</div></Card>
           <Card title="Conversion in Scope"><div className="hero-metric">{currentConversion.toFixed(2)}%</div><div className="state-message">Order-rate signal before traffic expansion decisions</div></Card>
         </div>
@@ -216,8 +228,26 @@ export function CommercialPerformance() {
         ) : null}
         {!loading && !error && !currentRows.length ? <div className="state-message">No KPI rows returned.</div> : null}
       </Card>
+      {seasonalityApplicable ? (
+        <Card title="Revenue vs Seasonal Baseline">
+          <BaselineBand
+            metric="revenue"
+            start={range.startDate}
+            end={range.endDate}
+            currentSeries={currentRows.map((row) => ({ date: row.business_date, value: Number(row.revenue) || 0 }))}
+            currentLabel="Revenue"
+            color="#6ea8ff"
+            valueFormatter={(v) => `$${v.toLocaleString()}`}
+          />
+        </Card>
+      ) : null}
       <div className="two-col two-col-equal">
         <Card title="Orders Trend">
+          {seasonalityApplicable && latestCompleteDay ? (
+            <div style={{ marginBottom: 6 }}>
+              <SeasonalContextBadge metric="orders" onDate={latestCompleteDay.business_date} value={latestCompleteDay.orders} />
+            </div>
+          ) : null}
           {loading ? <div className="state-message">Loading live orders trend…</div> : error ? <div className="state-message error">{error}</div> : currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'orders', label: 'Orders', color: '#39d08f', axisId: 'left' }]} height={220} /> : <div className="state-message">No order rows returned.</div>}
         </Card>
         <Card title="Driver Change Summary">

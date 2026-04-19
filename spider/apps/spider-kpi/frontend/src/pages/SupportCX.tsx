@@ -6,6 +6,8 @@ import { RangeToolbar } from '../components/RangeToolbar'
 import { StatePanel } from '../components/StatePanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { TrendChart } from '../components/TrendChart'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { ApiError, api, getApiBase } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } from '../lib/range'
 import { FreshdeskAgentDailyItem, FreshdeskTicketItem, IssueRadarResponse, KPIDaily } from '../lib/types'
@@ -379,12 +381,34 @@ export function SupportCX() {
 
           <div className="two-col two-col-equal">
             <Card title="Created vs Resolved Trend">
+              {range.preset !== 'today' && range.startDate && range.endDate && currentRows.length && currentRows[currentRows.length - 1] ? (
+                <div style={{ marginBottom: 6 }}>
+                  <SeasonalContextBadge
+                    metric="tickets_created"
+                    onDate={currentRows[currentRows.length - 1].business_date}
+                    value={currentRows[currentRows.length - 1].tickets_created}
+                  />
+                </div>
+              ) : null}
               {currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'tickets_created', label: 'Created', color: '#ffb257', axisId: 'left' }, { key: 'tickets_resolved', label: 'Resolved', color: '#39d08f', axisId: 'right' }]} /> : <div className="state-message">No support trend rows returned.</div>}
             </Card>
             <Card title="Open Backlog Trend">
               {currentRows.length ? <TrendChart rows={currentRows} lines={[{ key: 'open_backlog', label: 'Open Backlog', color: '#ff6d7a', axisId: 'left' }]} height={220} /> : <div className="state-message">No backlog trend rows returned.</div>}
             </Card>
           </div>
+
+          {range.preset !== 'today' && range.startDate && range.endDate && currentRows.length ? (
+            <Card title="Tickets Created vs Seasonal Baseline">
+              <BaselineBand
+                metric="tickets_created"
+                start={range.startDate}
+                end={range.endDate}
+                currentSeries={currentRows.map((row) => ({ date: row.business_date, value: Number(row.tickets_created) || 0 }))}
+                currentLabel="Tickets created"
+                color="#ffb257"
+              />
+            </Card>
+          ) : null}
 
           <div className="two-col two-col-equal">
             <Card title="First Response Time Trend">
