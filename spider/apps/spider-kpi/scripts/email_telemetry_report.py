@@ -42,6 +42,7 @@ if str(BACKEND) not in sys.path:
 import boto3  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
+from app.core.email_allowlist import assert_allowed  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.models import NotificationSend, TelemetryReport  # noqa: E402
 from sqlalchemy import select  # noqa: E402
@@ -191,7 +192,7 @@ def main() -> int:
         print("push_alerts_enabled=false — skipping")
         return 0
 
-    recipient = settings.push_alerts_recipient_email
+    recipient = assert_allowed(settings.push_alerts_recipient_email)[0]
     db = SessionLocal()
     try:
         if args.id:

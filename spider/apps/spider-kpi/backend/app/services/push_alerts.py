@@ -19,6 +19,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.email_allowlist import UnauthorizedRecipientError, assert_allowed
 from app.models import IssueSignal, NotificationSend, SlackUser
 
 
@@ -165,6 +166,11 @@ def send_slack_dm_to_email(
     """
     if not is_enabled():
         return False
+    try:
+        assert_allowed(recipient_email)
+    except UnauthorizedRecipientError:
+        logger.exception("push: blocking DM — %s is not on the KPI allowlist", recipient_email)
+        return False
     user_id = _slack_user_id_by_email(db, recipient_email)
     if not user_id:
         logger.info("push: no slack user_id for %s — skipping", recipient_email)
@@ -228,8 +234,15 @@ def push_critical_signal(db: Session, signal: IssueSignal) -> int:
         if ai.get("is_draft_worthy") is False:
             return 0
 
-    emails = [e.strip() for e in (settings.push_alerts_slack_recipient_emails or "").split(",") if e.strip()]
-    if not emails:
+    raw_emails = [e.strip() for e in (settings.push_alerts_slack_recipient_emails or "").split(",") if e.strip()]
+    if not raw_emails:
+        return 0
+    try:
+        emails = assert_allowed(raw_emails)
+    except UnauthorizedRecipientError:
+        logger.exception(
+            "push: blocking critical-signal DM — configured recipients are not on the KPI allowlist"
+        )
         return 0
 
     text = _signal_dm_text(signal)

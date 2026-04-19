@@ -1,0 +1,25 @@
+# CODEOWNERS — GitHub auto-requests review from the listed owner on any PR
+# that touches the matching paths, and (with branch protection + "Require
+# review from Code Owners" enabled) blocks merge until @jpruit20 approves.
+#
+# The paths below control who can expand the KPI email recipient list.
+# The dashboard surfaces confidential business data — only @jpruit20 can
+# approve changes that widen distribution.
+
+# The allowlist itself — any new recipient must be added here.
+/spider/apps/spider-kpi/backend/app/core/email_allowlist.py @jpruit20
+
+# Settings that reference recipient emails (defaults + env template).
+/spider/apps/spider-kpi/backend/app/core/config.py @jpruit20
+/spider/apps/spider-kpi/.env.example @jpruit20
+
+# Scripts that send KPI digests / alerts via SES or Slack DM.
+/spider/apps/spider-kpi/scripts/weekly_ai_report.py @jpruit20
+/spider/apps/spider-kpi/scripts/daily_morning_email.py @jpruit20
+/spider/apps/spider-kpi/scripts/email_telemetry_report.py @jpruit20
+/spider/apps/spider-kpi/scripts/notify_job_failure.py @jpruit20
+/spider/apps/spider-kpi/scripts/run_staleness_watchdog.py @jpruit20
+/spider/apps/spider-kpi/backend/app/services/push_alerts.py @jpruit20
+
+# This file itself.
+/.github/CODEOWNERS @jpruit20

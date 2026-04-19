@@ -53,6 +53,7 @@ if str(BACKEND) not in sys.path:
 import boto3
 
 from app.core.config import get_settings
+from app.core.email_allowlist import assert_allowed
 from app.db.session import SessionLocal
 from app.api.routes.executive import morning_brief
 from app.models import NotificationSend
@@ -295,7 +296,7 @@ def send_morning_email() -> None:
         print("push_alerts_enabled=false — skipping")
         return
 
-    recipient = settings.push_alerts_recipient_email
+    recipient = assert_allowed(settings.push_alerts_recipient_email)[0]
     today = datetime.now(BUSINESS_TZ).date().isoformat()
 
     db = SessionLocal()

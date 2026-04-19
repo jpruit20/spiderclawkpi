@@ -48,6 +48,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.core.config import get_settings  # noqa: E402
+from app.core.email_allowlist import assert_allowed  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.services.push_alerts import send_slack_dm_to_email  # noqa: E402
 
@@ -91,7 +92,7 @@ def main() -> int:
         return 2
     unit = sys.argv[1]
     settings = get_settings()
-    recipient = settings.push_alerts_recipient_email
+    recipient = assert_allowed(settings.push_alerts_recipient_email)[0]
 
     host = os.environ.get("HOSTNAME") or subprocess.getoutput("hostname").strip()
     now = datetime.now(timezone.utc)
