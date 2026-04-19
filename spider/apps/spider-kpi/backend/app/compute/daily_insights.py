@@ -468,15 +468,18 @@ def generate_insights(db: Session, save: bool = True) -> dict[str, Any]:
 
     client = anthropic.Anthropic(
         api_key=settings.anthropic_api_key,
-        timeout=120,  # insights can take a minute on Opus with adaptive thinking
+        timeout=300,  # effort=max + adaptive thinking can run 2-3 min on Opus 4.7
         max_retries=1,
     )
 
     model_id = "claude-opus-4-7"
     try:
+        # max_tokens must cover thinking + output. With effort=max + adaptive
+        # thinking, Opus 4.7 can easily burn 15-20k tokens on reasoning before
+        # starting to write; 8192 truncated the JSON mid-string on 2026-04-19.
         response = client.messages.parse(
             model=model_id,
-            max_tokens=8192,
+            max_tokens=32000,
             thinking={"type": "adaptive"},
             output_config={"effort": "max"},
             system=[{
