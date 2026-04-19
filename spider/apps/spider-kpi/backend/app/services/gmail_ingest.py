@@ -44,7 +44,15 @@ from app.services.email_classifier import classify_email
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-BATCH_SIZE = 100  # Gmail batch API cap
+# Gmail allows batch sizes up to 100, BUT per-user concurrency limits kick
+# in around ~20-30 parallel requests → 429 "Too many concurrent requests
+# for user" on the rest. 25 is the sweet spot: fast throughput without
+# hitting the concurrency wall.
+BATCH_SIZE = 25
+# Brief pause between batches — pacing, not throttle recovery.
+INTER_BATCH_SLEEP_S = 0.25
+# Retry budget for individual messages that 429'd within a batch.
+RETRY_BACKOFFS_S = (2.0, 5.0, 12.0)
 BODY_TEXT_MAX_CHARS = 500_000  # ~500KB of text, prevents runaway memory on pathological messages
 PREVIEW_CHARS = 500
 
@@ -229,16 +237,22 @@ def _iter_message_ids(svc, query: str) -> Iterator[str]:
             return
 
 
-def _fetch_batch(svc, gmail_ids: list[str]) -> list[dict]:
+def _fetch_batch(svc, gmail_ids: list[str]) -> tuple[list[dict], list[tuple[str, str]]]:
     """Fetch full payloads for up to BATCH_SIZE message IDs.
 
-    Uses the Gmail batch HTTP API (via googleapiclient) under the hood.
+    Returns ``(successful_messages, failed_ids_with_reason)``. Failed
+    messages are the caller's problem — we surface the 429/5xx ids so
+    the caller can retry them individually with backoff.
     """
     results: list[dict] = []
+    failures: list[tuple[str, str]] = []
+    idx_to_id = dict(enumerate(gmail_ids))
 
     def _cb(request_id, response, exception):
+        gid = idx_to_id.get(int(request_id), "?")
         if exception is not None:
-            logger.warning("batch fetch error for %s: %s", request_id, exception)
+            reason = "ratelimited" if "429" in str(exception) else "error"
+            failures.append((gid, reason))
             return
         results.append(response)
 
@@ -249,7 +263,36 @@ def _fetch_batch(svc, gmail_ids: list[str]) -> list[dict]:
             request_id=str(i),
         )
     batch.execute()
-    return results
+    return results, failures
+
+
+def _retry_individual(svc, gmail_ids: list[str]) -> tuple[list[dict], list[str]]:
+    """Retry a set of message IDs individually with exponential backoff.
+    Returns (successfully_fetched, still_failed_ids)."""
+    results: list[dict] = []
+    still_failed: list[str] = []
+    for gid in gmail_ids:
+        attempt = 0
+        fetched = None
+        for backoff in RETRY_BACKOFFS_S:
+            time.sleep(backoff)
+            try:
+                fetched = svc.users().messages().get(
+                    userId="me", id=gid, format="full"
+                ).execute()
+                break
+            except HttpError as exc:
+                status = getattr(exc.resp, "status", 0)
+                attempt += 1
+                if status in (429, 500, 503):
+                    continue  # retry
+                logger.warning("individual retry failed (status=%s) for %s", status, gid)
+                break
+        if fetched is not None:
+            results.append(fetched)
+        else:
+            still_failed.append(gid)
+    return results, still_failed
 
 
 def _persist_messages(db: Session, mailbox: str, messages: Iterable[dict]) -> int:
@@ -347,19 +390,31 @@ def _drain_chunk(
     stats: dict[str, int],
 ) -> None:
     try:
-        fetched = _fetch_batch(svc, chunk)
-        stats["fetched"] += len(fetched)
+        fetched, failures = _fetch_batch(svc, chunk)
     except HttpError as exc:
-        logger.warning("batch fetch HTTP error (will retry): %s", exc)
-        # Simple exponential backoff on rate-limit / 5xx.
+        logger.warning("batch-level HTTP error: %s; retrying whole chunk", exc)
         time.sleep(5)
         try:
-            fetched = _fetch_batch(svc, chunk)
-            stats["fetched"] += len(fetched)
+            fetched, failures = _fetch_batch(svc, chunk)
         except Exception:
-            logger.exception("batch fetch failed twice, dropping chunk of %d", len(chunk))
+            logger.exception("batch retry failed; dropping chunk of %d", len(chunk))
             stats["errors"] += len(chunk)
             return
+    stats["fetched"] += len(fetched)
+
+    # Retry any per-message failures (429s most common) individually with
+    # backoff. Concurrency limits mean bursts fail; serialized retries
+    # succeed.
+    if failures:
+        failed_ids = [gid for gid, _ in failures]
+        retried, still_failed = _retry_individual(svc, failed_ids)
+        fetched.extend(retried)
+        stats["fetched"] += len(retried)
+        stats["errors"] += len(still_failed)
+        if still_failed:
+            logger.warning("%d message(s) still failed after retries: %s",
+                           len(still_failed), still_failed[:5])
+
     inserted = _persist_messages(db, mailbox, fetched)
     stats["inserted"] += inserted
     for m in fetched:
@@ -367,6 +422,8 @@ def _drain_chunk(
         if gid:
             existing.add(f"gmail:{gid}")
     db.commit()
+    if INTER_BATCH_SLEEP_S > 0:
+        time.sleep(INTER_BATCH_SLEEP_S)
 
 
 def _record_sync_state(
