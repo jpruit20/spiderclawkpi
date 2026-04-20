@@ -7,6 +7,8 @@ import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
@@ -189,6 +191,28 @@ export function RevenueEngine() {
               <small className="venom-panel-footer">Prior period shown as bar max reference</small>
             </section>
           </div>
+
+          {/* Seasonal Context — is today's revenue normal for this week of year? */}
+          {currentRows.length >= 3 && (
+            <section className="card">
+              <div className="venom-panel-head">
+                <strong>Seasonal Context · Revenue</strong>
+                <span className="venom-panel-hint" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <SeasonalContextBadge metric="revenue" onDate={currentRows[currentRows.length - 1].business_date} value={currentRows[currentRows.length - 1].revenue} />
+                </span>
+              </div>
+              <BaselineBand
+                metric="revenue"
+                start={currentRows[0].business_date}
+                end={currentRows[currentRows.length - 1].business_date}
+                currentSeries={currentRows.map((r) => ({ date: r.business_date, value: Number(r.revenue) || 0 }))}
+                currentLabel="Revenue (current)"
+                color="#6ea8ff"
+                height={260}
+                valueFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+              />
+            </section>
+          )}
 
           {/* Trend Chart */}
           <section className="card">

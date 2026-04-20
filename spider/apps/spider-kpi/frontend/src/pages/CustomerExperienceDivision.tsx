@@ -13,6 +13,8 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
+import { BaselineBand } from '../components/BaselineBand'
+import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
@@ -1485,6 +1487,32 @@ export function CustomerExperienceDivision() {
             title="Tagging compliance — CX view"
             subtitle="Grades every closed task against the required taxonomy (Division, Customer Impact, Category)."
           />
+
+          {/* Seasonal baseline for ticket volume — is today's load normal for this week? */}
+          {((supportOverview?.rows?.length ?? 0) >= 3) && (() => {
+            const rows = (supportOverview?.rows || []) as KPIDaily[]
+            const first = rows[0]
+            const last = rows[rows.length - 1]
+            return (
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>Seasonal Context · Tickets Created</strong>
+                  <span className="venom-panel-hint" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <SeasonalContextBadge metric="tickets_created" onDate={last.business_date} value={Number(last.tickets_created) || 0} />
+                  </span>
+                </div>
+                <BaselineBand
+                  metric="tickets_created"
+                  start={first.business_date}
+                  end={last.business_date}
+                  currentSeries={rows.map(r => ({ date: r.business_date, value: Number(r.tickets_created) || 0 }))}
+                  currentLabel="Tickets created (current)"
+                  color="#f59e0b"
+                  height={240}
+                />
+              </section>
+            )
+          })()}
 
           {/* CX ticket volume overlaid with ClickUp task completions — did
               closing the direct-customer-impact task actually reduce ticket load? */}
