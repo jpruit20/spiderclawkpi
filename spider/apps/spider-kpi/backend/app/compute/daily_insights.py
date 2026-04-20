@@ -38,12 +38,14 @@ from app.models import (
     FreshdeskTicketsDaily,
     IssueSignal,
     KPIDaily,
+    LoreEvent,
     ReviewMention,
     SlackActivityDaily,
     SlackMessage,
     SocialMention,
     TelemetryHistoryDaily,
 )
+from app.services.seasonality import metric_context
 
 
 logger = logging.getLogger(__name__)
@@ -400,6 +402,63 @@ def build_context(db: Session, lookback_days: int = 30) -> tuple[str, list[str]]
                 lines.append(f"  - #{name}: {vals['msgs']} msgs, {vals['reactions']} reactions")
             lines.append("")
 
+    # --- LORE EVENTS (company timeline) ----------------------------------
+    # Range-overlap: event (start_date, end_date) intersects [start, today].
+    # end_date NULL = single-day; treat as a point event.
+    lore_rows = db.execute(
+        select(LoreEvent)
+        .where(
+            or_(
+                LoreEvent.end_date >= start,
+                and_(LoreEvent.end_date.is_(None), LoreEvent.start_date >= start),
+            ),
+            LoreEvent.start_date <= today,
+        )
+        .order_by(LoreEvent.start_date.desc())
+    ).scalars().all()
+    if lore_rows:
+        sources.append("lore")
+        lines.append("## LORE EVENTS (last {}d — launches, incidents, campaigns, firmware, promotions)".format(lookback_days))
+        lines.append("  Use these to explain anomalies. If a metric shifts within 3 days of an event, cite the event.")
+        for ev in lore_rows[:40]:
+            span = ev.start_date.isoformat()
+            if ev.end_date and ev.end_date != ev.start_date:
+                span += f"→{ev.end_date.isoformat()}"
+            div = ev.division or "company"
+            conf = "" if ev.confidence == "confirmed" else f" ({ev.confidence})"
+            title = (ev.title or "")[:140]
+            lines.append(f"  - [{span}] {ev.event_type}/{div}: {title}{conf}")
+        if len(lore_rows) > 40:
+            lines.append(f"  - …+{len(lore_rows) - 40} more in window")
+        lines.append("")
+
+    # --- SEASONAL CONTEXT (today vs prior-year baseline) -----------------
+    # Latest business date for which we have KPI data (usually today-1 in ET).
+    seasonal_lines: list[str] = []
+    for metric_name in ("revenue", "orders", "tickets_created", "active_devices"):
+        try:
+            ctx = metric_context(db, metric_name, today)
+        except Exception:
+            ctx = None
+        if ctx is None or ctx.current_value is None or ctx.year_count == 0:
+            continue
+        p50 = ctx.baseline.get("p50")
+        delta = ctx.delta_vs_median_pct
+        pct = ctx.percentile_rank
+        cv_fmt = f"{ctx.current_value:,.0f}"
+        p50_fmt = f"{p50:,.0f}" if p50 is not None else "—"
+        delta_fmt = f"{delta:+.1f}%" if delta is not None else "—"
+        pct_fmt = f"p{round(pct * 100)}" if pct is not None else "—"
+        seasonal_lines.append(
+            f"  - {metric_name} today: {cv_fmt} (vs p50={p50_fmt}, delta={delta_fmt}, rank={pct_fmt} vs {ctx.year_count} prior years, verdict={ctx.verdict})"
+        )
+    if seasonal_lines:
+        sources.append("seasonality")
+        lines.append("## SEASONAL CONTEXT (today vs prior-year same-day-of-year baseline)")
+        lines.append("  Use this to tell 'unusual vs normal' apart. A -10% WoW drop might still be +20% above seasonal p50.")
+        lines.extend(seasonal_lines)
+        lines.append("")
+
     lines.append("=== END CONTEXT ===")
     return "\n".join(lines), sources
 
@@ -431,6 +490,10 @@ Your job is to surface **3-5 non-obvious observations** that a human reading one
 - Urgency: `high` = needs action this week, `medium` = notable but not blocking, `low` = worth tracking
 - Confidence: use 0.8+ only when the correlation is strong (multiple data points + clear temporal alignment)
 - Suggested action should be CONCRETE: "schedule a firmware review with Kyle" not "look into this"
+
+**Lore events (company timeline):** The context now includes a LORE EVENTS section listing launches, incidents, campaigns, firmware, promotions, and personnel events within the analysis window. When a metric shifts within ±3 days of one of these events, CITE the event in your evidence and suggested_action. A revenue drop on the day a promotion ended is not a mystery — say so.
+
+**Seasonal context:** The context now includes a SEASONAL CONTEXT section showing today's value for key metrics vs the prior-year baseline (p50 / percentile rank / verdict). Use this to distinguish "unusual" from "normal for this time of year". A -10% WoW drop that still sits at p70 of seasonal is not a meaningful regression; flag it only if WoW is down AND the seasonal rank also slipped.
 
 Be direct. Be terse. Be specific with numbers and dates."""
 
