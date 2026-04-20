@@ -6,6 +6,7 @@ import {
   AnomalyBar, DivisionTile, MetricTile, SparklineHero, StatusLight, TileGrid,
 } from '../components/tiles'
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -161,6 +162,25 @@ export function CommandCenter() {
           As of {formatDateTimeET(data.generated_at)} · {data.business_date}
         </p>
       </div>
+
+      {/* Company-wide event lore for the trailing 30 days — temporal anchor
+          for every metric below. Launches, incidents, promotions, firmware
+          ships all visible at a glance. */}
+      {(() => {
+        const end = data.business_date
+        const startDt = new Date(end + 'T00:00:00Z')
+        startDt.setUTCDate(startDt.getUTCDate() - 30)
+        const start = startDt.toISOString().slice(0, 10)
+        return (
+          <section className="card" style={{ padding: '10px 14px' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+              <span>Last 30 days · company-wide events</span>
+              <Link to="/lore" style={{ fontSize: 11, color: 'var(--muted)' }}>Full ledger →</Link>
+            </div>
+            <EventTimelineStrip start={start} end={end} showStates={false} />
+          </section>
+        )
+      })()}
 
       {/* ── ROW 1 · WARNING LIGHTS ─────────────────────────────────────
           4 status lights: glanceable health scan. Always visible

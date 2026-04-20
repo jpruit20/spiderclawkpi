@@ -15,6 +15,7 @@ import { MetricTile, StatusLight, TileGrid, openSectionById } from '../component
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { BaselineBand } from '../components/BaselineBand'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
@@ -1510,6 +1511,17 @@ export function CustomerExperienceDivision() {
                   color="#f59e0b"
                   height={240}
                 />
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                    Events during this window:
+                  </div>
+                  <EventTimelineStrip
+                    start={first.business_date}
+                    end={last.business_date}
+                    division="support"
+                    showStates={false}
+                  />
+                </div>
               </section>
             )
           })()}

@@ -9,6 +9,7 @@ import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
 import { BaselineBand } from '../components/BaselineBand'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
+import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
@@ -211,6 +212,17 @@ export function RevenueEngine() {
                 height={260}
                 valueFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
               />
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                  Events during this window:
+                </div>
+                <EventTimelineStrip
+                  start={currentRows[0].business_date}
+                  end={currentRows[currentRows.length - 1].business_date}
+                  division="commercial"
+                  showStates={false}
+                />
+              </div>
             </section>
           )}
 
