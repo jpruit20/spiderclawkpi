@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { DeciDraft } from '../lib/types'
 import { formatFreshness } from '../lib/format'
+import { NearbyEventsBadge } from './NearbyEventsBadge'
 
 /**
  * Auto-generated DECI drafts awaiting review. Drops at the top of the DECI
@@ -155,6 +156,15 @@ export function DeciDraftsCard({ onChange }: Props) {
                     </span>
                   )}
                 </div>
+                {d.auto_drafted_at && (
+                  <div style={{ marginTop: 4 }}>
+                    <NearbyEventsBadge
+                      businessDate={d.auto_drafted_at}
+                      division={d.department}
+                      windowDays={5}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}

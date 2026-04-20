@@ -12,6 +12,7 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
+import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { WismoKpiCard } from '../components/WismoKpiCard'
 import { ApiError, api } from '../lib/api'
@@ -707,6 +708,11 @@ export function CustomerExperienceDivision() {
                     {item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}
                     {item.escalation_owner ? ` · Escalation: ${item.escalation_owner}` : ''}
                   </small>
+                  {item.opened_at && (
+                    <div style={{ marginTop: 4 }}>
+                      <NearbyEventsBadge businessDate={item.opened_at} division="customer-experience" windowDays={3} />
+                    </div>
+                  )}
                 </div>
               ))}
               {!actions.length ? <div className="list-item status-good"><p>No actions in queue.</p></div> : null}

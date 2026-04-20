@@ -33,6 +33,28 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+// Convert any date-ish string (YYYY-MM-DD or full ISO timestamp) to YYYY-MM-DD.
+function toBusinessDate(s: string): string {
+  return s.length >= 10 ? s.slice(0, 10) : s
+}
+
+// Normalize heterogeneous division strings (dashboard slugs, DECI free-form,
+// DB snake_case) to the lore-events DB taxonomy. Lore uses: marketing,
+// commercial, support, product_engineering, executive, (NULL = company-wide).
+function normalizeDivision(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const k = raw.toLowerCase().trim()
+    .replace(/[\s/_-]+/g, '_') // unify separators
+  if (k === 'customer_experience' || k === 'cx' || k === 'support') return 'support'
+  if (k === 'product_engineering' || k === 'product' || k === 'engineering') return 'product_engineering'
+  if (k === 'marketing') return 'marketing'
+  if (k === 'commercial' || k === 'revenue' || k === 'finance') return 'commercial'
+  if (k === 'executive' || k === 'exec') return 'executive'
+  if (k === 'operations') return 'operations'
+  if (k === 'production_manufacturing' || k === 'production' || k === 'manufacturing') return 'production_manufacturing'
+  return k
+}
+
 const TYPE_COLOR: Record<string, string> = {
   launch:            '#22c55e',
   incident:          '#ef4444',
@@ -51,11 +73,14 @@ export function NearbyEventsBadge({ businessDate, division, windowDays = 3, maxI
   const [events, setEvents] = useState<LoreEvent[] | null>(null)
   const [hoverOpen, setHoverOpen] = useState(false)
 
+  const normDivision = normalizeDivision(division)
+  const bizDate = toBusinessDate(businessDate)
+
   useEffect(() => {
     let cancel = false
     const ctrl = new AbortController()
-    const start = addDays(businessDate, -windowDays)
-    const end = addDays(businessDate, windowDays)
+    const start = addDays(bizDate, -windowDays)
+    const end = addDays(bizDate, windowDays)
     // Query everything in the window; we'll client-side filter for
     // same-division OR company-wide (division IS NULL). A single call
     // without the `division` filter returns both, which is what we want —
@@ -65,14 +90,14 @@ export function NearbyEventsBadge({ businessDate, division, windowDays = 3, maxI
       .then((r) => {
         if (cancel) return
         const filtered = r.events.filter((ev) => {
-          if (!division) return true
-          return ev.division === division || ev.division == null
+          if (!normDivision) return true
+          return ev.division === normDivision || ev.division == null
         })
         setEvents(filtered)
       })
       .catch(() => { if (!cancel) setEvents([]) })
     return () => { cancel = true; ctrl.abort() }
-  }, [businessDate, division, windowDays])
+  }, [bizDate, normDivision, windowDays])
 
   if (!events || events.length === 0) return null
 
