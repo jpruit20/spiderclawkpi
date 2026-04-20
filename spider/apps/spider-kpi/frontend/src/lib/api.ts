@@ -15,6 +15,7 @@ import type {
   CookDurationStats,
   CookOutcomesSummary,
   DeciDraftsResponse,
+  EmailPulseResponse,
   FirmwareCohortsResponse,
   FirmwareImpactTimelineResponse,
   InsightsListResponse,
@@ -478,6 +479,19 @@ export const api = {
     const qs = p.toString()
     return request<MarketingChannelMixResponse>(`/api/marketing/channel-mix${qs ? `?${qs}` : ''}`, { signal })
   },
+  emailPulse: (
+    opts: { start?: string; end?: string; days?: number; compare_prior?: boolean } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.start) p.set('start', opts.start)
+    if (opts.end) p.set('end', opts.end)
+    if (opts.days != null) p.set('days', String(opts.days))
+    if (opts.compare_prior === false) p.set('compare_prior', 'false')
+    const qs = p.toString()
+    return request<EmailPulseResponse>(`/api/email/pulse${qs ? `?${qs}` : ''}`, { signal })
+  },
+
   marketingPeriodCompare: (
     opts: { start?: string; end?: string; days?: number; mode?: 'prior_period' | 'same_day_last_week' } = {},
     signal?: AbortSignal,

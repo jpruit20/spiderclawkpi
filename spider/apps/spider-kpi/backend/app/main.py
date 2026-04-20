@@ -16,6 +16,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.clickup import router as clickup_router, webhook_router as clickup_webhook_router
 from app.api.routes.executive import router as executive_router
 from app.api.routes.deci import router as deci_router
+from app.api.routes.email import router as email_router
 from app.api.routes.health import router as health_router
 from app.api.routes.lore import router as lore_router
 from app.api.routes.marketing import router as marketing_router
@@ -87,6 +88,7 @@ app.include_router(overview_router)
 app.include_router(personal_intelligence_router)
 app.include_router(admin_router)
 app.include_router(deci_router)
+app.include_router(email_router)
 app.include_router(ai_router)
 app.include_router(app_side_router)
 app.include_router(clickup_router)

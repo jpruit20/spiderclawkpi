@@ -10,6 +10,7 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { EmailPulseCard } from '../components/EmailPulseCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
@@ -1549,6 +1550,15 @@ export function CustomerExperienceDivision() {
             title="Slack pulse — Customer channels"
             subtitle="Live activity from customer-service-adjacent Slack channels. Message bodies + files are stored; keyword-matched issues bubble into Issue Radar."
             defaultChannelName="marketing-customer-service"
+          />
+
+          {/* Email archive pulse — 14d window, highlight warranty */}
+          <EmailPulseCard
+            range={{
+              startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+              endDate: new Date().toISOString().slice(0, 10),
+            }}
+            highlightArchetype="warranty_issue"
           />
 
           {/* Navigation tiles */}

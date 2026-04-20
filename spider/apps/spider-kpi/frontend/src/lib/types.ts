@@ -1165,6 +1165,29 @@ export interface MarketingChannelMixResponse {
   channels: MarketingChannelRow[]
 }
 
+export interface EmailPulseArchetype {
+  archetype: string
+  label: string
+  count: number
+  prior_count: number
+  delta_pct: number | null
+}
+
+export interface EmailPulseResponse {
+  ok: boolean
+  generated_at: string
+  window: { start: string; end: string; days: number }
+  prior_window: { start: string; end: string; days: number } | null
+  totals: { count: number; prior_count: number; delta_pct: number | null }
+  escalations: {
+    count: number
+    prior_count: number
+    delta_pct: number | null
+    top_domains: Array<{ domain: string; count: number }>
+  }
+  archetypes: EmailPulseArchetype[]
+}
+
 export interface ProbeFailureRateResponse {
   ok: boolean
   generated_at: string
