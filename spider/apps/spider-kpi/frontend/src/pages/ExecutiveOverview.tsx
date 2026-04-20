@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { BaselineBand } from '../components/BaselineBand'
 import { Card } from '../components/Card'
+import { EmailPulseCard } from '../components/EmailPulseCard'
 import { EventTimelinePanel } from '../components/EventTimelinePanel'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { KpiGrid } from '../components/KpiGrid'
@@ -468,6 +469,9 @@ export function ExecutiveOverview() {
               </div>
             </Card>
           </div>
+          {range.startDate && range.endDate ? (
+            <EmailPulseCard range={{ startDate: range.startDate, endDate: range.endDate }} />
+          ) : null}
           <div className="two-col two-col-equal">
             <Card title="Decision Event Annotations">
               <EventAnnotationList diagnostics={data?.diagnostics || []} recommendations={data?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
