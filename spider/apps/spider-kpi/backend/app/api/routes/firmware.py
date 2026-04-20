@@ -3,20 +3,25 @@ program overview (beta/alpha/gamma).
 
 Phase 1 is view-only. All actual firmware *deploy* endpoints (OTA push,
 cohort assignment, alpha promotion) will land in a later phase and will
-be owner-gated the same way the ECR tracker is. For now this route only
-exposes read paths so anyone with a dashboard session can troubleshoot a
-device in the field.
+be owner-gated the same way the ECR tracker is.
 
 Device identity convention:
 
-  * ``mac_normalized`` — lowercase, hex-only (``fcb467f9b456``). Matches
-    AWS IoT ``thingName`` and equals ``TelemetryStreamEvent.device_id``.
-  * Lookup accepts either a free-form MAC (any separators, any case) or
-    an email / user_key that we can resolve through
-    ``AppSideDeviceObservation``.
+  * **MAC** — 12-hex-char lowercase (``fcb467f9b456``). Accepted in any
+    format (colons, dashes, mixed case — ``normalize_mac`` collapses).
+  * **``TelemetryStreamEvent.device_id``** — a 32-char DynamoDB hash,
+    NOT the MAC. The MAC lives at
+    ``raw_payload->device_data->reported->mac``. One physical grill can
+    map to multiple ``device_id`` values (different user accounts pair
+    with the same grill → distinct hashes). Lookup resolves MAC to the
+    full set of associated ``device_id`` values and reads sessions
+    across all of them.
 
-Live shadow freshness is ~15s (AWS poll cadence). The UI should poll the
-shadow endpoint on that cadence while a device detail view is open.
+The JSON path is backed by an expression index
+(``ix_telemetry_stream_events_reported_mac`` — migration 0036).
+
+Live shadow freshness is ~15 s (AWS poll cadence). The UI polls the
+shadow endpoint on that cadence while a device view is open.
 """
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
@@ -41,9 +46,13 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_COOK_WINDOW_SECONDS = 120  # most-recent sample within 2m + engaged/heating = "live cook"
-SHADOW_TRAIL_SAMPLES = 60         # ~15 min of 15s polling; enough for a temperature chart
+ACTIVE_COOK_WINDOW_SECONDS = 120
+SHADOW_TRAIL_SAMPLES = 60
 DEFAULT_SESSION_LIMIT = 20
+# Cap the device_id resolution — if the frontend asks about a MAC that
+# has been paired across hundreds of accounts, we still only hit the top
+# N most-recent device_ids when pulling session history.
+MAX_DEVICE_IDS_PER_MAC = 25
 
 router = APIRouter(prefix="/api/firmware", tags=["firmware"])
 
@@ -56,9 +65,6 @@ _MAC_STRIP_RE = re.compile(r"[^0-9a-fA-F]")
 
 
 def normalize_mac(raw: str | None) -> str | None:
-    """Strip separators and lowercase. Returns None if the result is not
-    a plausible 12-hex-char MAC so callers can fall through to email
-    lookup without raising."""
     if not raw:
         return None
     stripped = _MAC_STRIP_RE.sub("", raw).lower()
@@ -67,19 +73,64 @@ def normalize_mac(raw: str | None) -> str | None:
     return stripped
 
 
-def _latest_app_observation(db: Session, mac: str) -> AppSideDeviceObservation | None:
-    stmt = (
-        select(AppSideDeviceObservation)
-        .where(AppSideDeviceObservation.mac_normalized == mac)
-        .order_by(desc(AppSideDeviceObservation.observed_at))
-        .limit(1)
+# JSON-path expression that matches the expression index. Keep both in
+# sync — see migration 20260420_0036.
+_MAC_EXPR = "lower(raw_payload->'device_data'->'reported'->>'mac')"
+
+
+def _device_ids_for_mac(db: Session, mac: str, limit: int = MAX_DEVICE_IDS_PER_MAC) -> list[str]:
+    """Resolve a MAC to the distinct ``device_id`` hashes that have
+    reported under it. Ordered by most-recent sample first so we keep
+    the freshest association when we cap to ``limit``."""
+    stmt = text(
+        f"""
+        SELECT device_id, MAX(sample_timestamp) AS last_seen
+        FROM telemetry_stream_events
+        WHERE {_MAC_EXPR} = :mac
+        GROUP BY device_id
+        ORDER BY last_seen DESC NULLS LAST
+        LIMIT :lim
+        """
     )
-    return db.execute(stmt).scalar_one_or_none()
+    return [r[0] for r in db.execute(stmt, {"mac": mac, "lim": limit}).all() if r[0]]
+
+
+def _latest_stream_event_for_mac(db: Session, mac: str) -> TelemetryStreamEvent | None:
+    stmt = text(
+        f"""
+        SELECT id FROM telemetry_stream_events
+        WHERE {_MAC_EXPR} = :mac
+        ORDER BY sample_timestamp DESC NULLS LAST
+        LIMIT 1
+        """
+    )
+    row_id = db.execute(stmt, {"mac": mac}).scalar_one_or_none()
+    if row_id is None:
+        return None
+    return db.get(TelemetryStreamEvent, row_id)
+
+
+def _trail_for_mac(db: Session, mac: str, limit: int = SHADOW_TRAIL_SAMPLES) -> list[TelemetryStreamEvent]:
+    stmt = text(
+        f"""
+        SELECT id FROM telemetry_stream_events
+        WHERE {_MAC_EXPR} = :mac
+        ORDER BY sample_timestamp DESC NULLS LAST
+        LIMIT :lim
+        """
+    )
+    ids = [r[0] for r in db.execute(stmt, {"mac": mac, "lim": limit}).all()]
+    if not ids:
+        return []
+    rows = db.execute(
+        select(TelemetryStreamEvent).where(TelemetryStreamEvent.id.in_(ids))
+    ).scalars().all()
+    # Order by timestamp ASC for charting
+    rows.sort(key=lambda r: r.sample_timestamp or datetime.min.replace(tzinfo=timezone.utc))
+    return rows
 
 
 def _observations_summary(db: Session, mac: str) -> dict[str, Any]:
-    """Roll up what we know about this device from app-side observations —
-    self-reported firmware, app version, phone, and what we last saw."""
     stmt = (
         select(AppSideDeviceObservation)
         .where(AppSideDeviceObservation.mac_normalized == mac)
@@ -166,15 +217,6 @@ def device_lookup(
     query: str = Query(..., min_length=3, description="MAC (any separators) or email/user_key"),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    """Resolve a free-form identifier to one or more devices. Returns a
-    list so an email that maps to multiple registered grills still works.
-
-    Resolution order:
-      1. If ``query`` normalizes to a 12-hex MAC, return that single device.
-      2. Otherwise treat as email/user_key and scan
-         ``app_side_device_observations`` for a case-insensitive contains
-         match against ``user_key``.
-    """
     q = query.strip()
     mac = normalize_mac(q)
     macs: list[str] = []
@@ -196,21 +238,20 @@ def device_lookup(
 
     devices: list[dict[str, Any]] = []
     for m in macs:
-        latest_stream = db.execute(
-            select(TelemetryStreamEvent)
-            .where(TelemetryStreamEvent.device_id == m)
-            .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-            .limit(1)
-        ).scalar_one_or_none()
-        session_count = db.execute(
-            select(func.count(TelemetrySession.id)).where(TelemetrySession.device_id == m)
-        ).scalar() or 0
+        latest = _latest_stream_event_for_mac(db, m)
+        device_ids = _device_ids_for_mac(db, m)
+        session_count = 0
+        if device_ids:
+            session_count = db.execute(
+                select(func.count(TelemetrySession.id)).where(TelemetrySession.device_id.in_(device_ids))
+            ).scalar() or 0
         obs = _observations_summary(db, m)
         devices.append({
             "mac": m,
-            "latest_stream_event": _serialize_stream_event(latest_stream),
+            "latest_stream_event": _serialize_stream_event(latest),
             "session_count": int(session_count),
             "app_side": obs,
+            "device_id_count": len(device_ids),
         })
 
     return {"query": q, "resolved_as": "mac" if mac else "user_key", "devices": devices}
@@ -229,15 +270,8 @@ def _require_mac(mac: str) -> str:
 
 @router.get("/device/{mac}/shadow")
 def device_shadow(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]:
-    """Latest telemetry stream event for a device. UI polls this on the
-    15s AWS shadow cadence while a device view is open."""
     m = _require_mac(mac)
-    event = db.execute(
-        select(TelemetryStreamEvent)
-        .where(TelemetryStreamEvent.device_id == m)
-        .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-        .limit(1)
-    ).scalar_one_or_none()
+    event = _latest_stream_event_for_mac(db, m)
     now = datetime.now(timezone.utc)
     age_seconds: int | None = None
     if event and event.sample_timestamp:
@@ -252,18 +286,8 @@ def device_shadow(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]
 
 @router.get("/device/{mac}/active-cook")
 def device_active_cook(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]:
-    """If the device has a recent sample with engaged=true or heating=true,
-    return the last ``SHADOW_TRAIL_SAMPLES`` events as a temperature trail
-    so the UI can chart a live cook. Otherwise return ``active=false`` and
-    the most recent completed session for context."""
     m = _require_mac(mac)
-    latest = db.execute(
-        select(TelemetryStreamEvent)
-        .where(TelemetryStreamEvent.device_id == m)
-        .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-        .limit(1)
-    ).scalar_one_or_none()
-
+    latest = _latest_stream_event_for_mac(db, m)
     now = datetime.now(timezone.utc)
     active = False
     if latest and latest.sample_timestamp:
@@ -272,25 +296,20 @@ def device_active_cook(mac: str, db: Session = Depends(db_session)) -> dict[str,
 
     trail: list[dict[str, Any]] = []
     if active:
-        events = db.execute(
-            select(TelemetryStreamEvent)
-            .where(TelemetryStreamEvent.device_id == m)
-            .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-            .limit(SHADOW_TRAIL_SAMPLES)
-        ).scalars().all()
-        # UI wants oldest → newest for charting
-        trail = [_serialize_stream_event(e) for e in reversed(events)]
+        trail = [_serialize_stream_event(e) for e in _trail_for_mac(db, m, SHADOW_TRAIL_SAMPLES)]
 
     last_session = None
     if not active:
-        sess = db.execute(
-            select(TelemetrySession)
-            .where(TelemetrySession.device_id == m)
-            .order_by(desc(TelemetrySession.session_start))
-            .limit(1)
-        ).scalar_one_or_none()
-        if sess:
-            last_session = _serialize_session(sess)
+        device_ids = _device_ids_for_mac(db, m)
+        if device_ids:
+            sess = db.execute(
+                select(TelemetrySession)
+                .where(TelemetrySession.device_id.in_(device_ids))
+                .order_by(desc(TelemetrySession.session_start))
+                .limit(1)
+            ).scalar_one_or_none()
+            if sess:
+                last_session = _serialize_session(sess)
 
     return {
         "mac": m,
@@ -307,11 +326,13 @@ def device_sessions(
     limit: int = Query(DEFAULT_SESSION_LIMIT, ge=1, le=200),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    """Recent cooking sessions for this device. Newest first."""
     m = _require_mac(mac)
+    device_ids = _device_ids_for_mac(db, m)
+    if not device_ids:
+        return {"mac": m, "count": 0, "sessions": []}
     sessions = db.execute(
         select(TelemetrySession)
-        .where(TelemetrySession.device_id == m)
+        .where(TelemetrySession.device_id.in_(device_ids))
         .order_by(desc(TelemetrySession.session_start))
         .limit(limit)
     ).scalars().all()
@@ -324,40 +345,39 @@ def device_sessions(
 
 @router.get("/device/{mac}/summary")
 def device_summary(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]:
-    """Everything the drill-down view needs in one shot: identity,
-    app-side observations, cohort memberships, session count, firmware
-    version last seen live."""
     m = _require_mac(mac)
-    latest = db.execute(
-        select(TelemetryStreamEvent)
-        .where(TelemetryStreamEvent.device_id == m)
-        .order_by(desc(TelemetryStreamEvent.sample_timestamp))
-        .limit(1)
-    ).scalar_one_or_none()
-    session_count = db.execute(
-        select(func.count(TelemetrySession.id)).where(TelemetrySession.device_id == m)
-    ).scalar() or 0
+    latest = _latest_stream_event_for_mac(db, m)
+    device_ids = _device_ids_for_mac(db, m)
+    session_count = 0
+    if device_ids:
+        session_count = db.execute(
+            select(func.count(TelemetrySession.id)).where(TelemetrySession.device_id.in_(device_ids))
+        ).scalar() or 0
     obs = _observations_summary(db, m)
 
-    cohort_rows = db.execute(
-        select(BetaCohortMember, FirmwareRelease)
-        .join(FirmwareRelease, BetaCohortMember.release_id == FirmwareRelease.id)
-        .where(BetaCohortMember.device_id == m)
-        .order_by(desc(BetaCohortMember.invited_at))
-    ).all()
-    cohorts = [
-        {
-            "release_id": r.id,
-            "release_version": r.version,
-            "release_title": r.title,
-            "state": c.state,
-            "invited_at": c.invited_at.isoformat() if c.invited_at else None,
-            "opted_in_at": c.opted_in_at.isoformat() if c.opted_in_at else None,
-            "ota_pushed_at": c.ota_pushed_at.isoformat() if c.ota_pushed_at else None,
-            "verdict": (c.verdict_json or {}).get("verdict"),
-        }
-        for (c, r) in cohort_rows
-    ]
+    # Beta/alpha/gamma cohort rows are keyed by ``device_id`` in
+    # ``beta_cohort_members`` — check every resolved id.
+    cohorts: list[dict[str, Any]] = []
+    if device_ids:
+        cohort_rows = db.execute(
+            select(BetaCohortMember, FirmwareRelease)
+            .join(FirmwareRelease, BetaCohortMember.release_id == FirmwareRelease.id)
+            .where(BetaCohortMember.device_id.in_(device_ids))
+            .order_by(desc(BetaCohortMember.invited_at))
+        ).all()
+        cohorts = [
+            {
+                "release_id": r.id,
+                "release_version": r.version,
+                "release_title": r.title,
+                "state": c.state,
+                "invited_at": c.invited_at.isoformat() if c.invited_at else None,
+                "opted_in_at": c.opted_in_at.isoformat() if c.opted_in_at else None,
+                "ota_pushed_at": c.ota_pushed_at.isoformat() if c.ota_pushed_at else None,
+                "verdict": (c.verdict_json or {}).get("verdict"),
+            }
+            for (c, r) in cohort_rows
+        ]
 
     return {
         "mac": m,
@@ -365,6 +385,7 @@ def device_summary(mac: str, db: Session = Depends(db_session)) -> dict[str, Any
         "session_count": int(session_count),
         "app_side": obs,
         "cohorts": cohorts,
+        "device_id_count": len(device_ids),
     }
 
 
@@ -374,8 +395,6 @@ def device_summary(mac: str, db: Session = Depends(db_session)) -> dict[str, Any
 
 @router.get("/overview")
 def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
-    """Fleet-wide firmware overview — version distribution (from the last
-    24h of live stream events) + active devices count."""
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     rows = db.execute(
         select(
