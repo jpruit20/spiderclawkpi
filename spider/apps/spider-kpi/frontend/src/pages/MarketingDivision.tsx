@@ -9,6 +9,7 @@ import { TruthLegend } from '../components/TruthLegend'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ChannelMixCard } from '../components/ChannelMixCard'
+import { ChannelTrendsCard, MarketingPacingCard, MerHealthCard } from '../components/MarketingIntelligenceCards'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -74,6 +75,7 @@ export function MarketingDivision() {
   // When the backend applies hour-trimming, this payload's current
   // and prior totals override the daily-sum versions below.
   const [periodCompare, setPeriodCompare] = useState<import('../lib/types').MarketingPeriodCompareResponse | null>(null)
+  const [yoyCompare, setYoyCompare] = useState<import('../lib/types').MarketingPeriodCompareResponse | null>(null)
 
   /* ---- data fetch ---- */
   useEffect(() => {
@@ -122,6 +124,23 @@ export function MarketingDivision() {
       .catch(() => { if (!cancelled) setPeriodCompare(null) })
     return () => { cancelled = true }
   }, [range.startDate, range.endDate, compareMode])
+
+  // YoY fetch — independent of compareMode so the strip always shows a
+  // "vs last year" delta when data is available. Useful on seasonally
+  // sensitive channels like grilling where prior-week compares mask
+  // demand shifts that year-ago comparison catches.
+  useEffect(() => {
+    if (!range.startDate || !range.endDate) return
+    let cancelled = false
+    api.marketingPeriodCompare({
+      start: range.startDate,
+      end: range.endDate,
+      mode: 'yoy',
+    })
+      .then(r => { if (!cancelled) setYoyCompare(r) })
+      .catch(() => { if (!cancelled) setYoyCompare(null) })
+    return () => { cancelled = true }
+  }, [range.startDate, range.endDate])
 
   /* ---- derived data ---- */
   const currentRows = useMemo(() => filterRowsByRange(rows, range), [rows, range])
@@ -377,12 +396,37 @@ export function MarketingDivision() {
   }, [last7Days])
   const adSpendSparkline = useMemo(() => last7Days.map((r) => Number(r.ad_spend) || 0), [last7Days])
 
+  /* ---- YoY helper ---- */
+  // YoY strip text. Silent when the backend didn't have a year-ago window
+  // to compare (e.g., data history too short). For MER we compute from
+  // YoY revenue÷spend since the payload doesn't ship it directly.
+  const yoyCur = yoyCompare?.current
+  const yoyPrior = yoyCompare?.prior
+  const yoyRevStr = yoyCur && yoyPrior && yoyPrior.revenue > 0
+    ? `YoY ${deltaPct(yoyCur.revenue, yoyPrior.revenue)}`
+    : null
+  const yoyConvStr = (() => {
+    if (!yoyCur || !yoyPrior) return null
+    const curConv = yoyCur.sessions > 0 ? (yoyCur.orders / yoyCur.sessions) * 100 : 0
+    const priorConv = yoyPrior.sessions > 0 ? (yoyPrior.orders / yoyPrior.sessions) * 100 : 0
+    return priorConv > 0 ? `YoY ${deltaPct(curConv, priorConv)}` : null
+  })()
+  const yoyMerStr = (() => {
+    if (!yoyCur || !yoyPrior) return null
+    const curMer = yoyCur.ad_spend > 0 ? yoyCur.revenue / yoyCur.ad_spend : 0
+    const priorMer_ = yoyPrior.ad_spend > 0 ? yoyPrior.revenue / yoyPrior.ad_spend : 0
+    return priorMer_ > 0 ? `YoY ${deltaPct(curMer, priorMer_)}` : null
+  })()
+  const yoyAdSpendStr = yoyCur && yoyPrior && yoyPrior.ad_spend > 0
+    ? `YoY ${deltaPct(yoyCur.ad_spend, yoyPrior.ad_spend)}`
+    : null
+
   /* ---- KPI strip cards ---- */
   const kpiCards: KpiCardDef[] = useMemo(() => [
     {
       label: 'Revenue',
       value: currency(revenue),
-      sub: `Prior ${currency(priorRevenue)}`,
+      sub: yoyRevStr ? `Prior ${currency(priorRevenue)} · ${yoyRevStr}` : `Prior ${currency(priorRevenue)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(revenue, priorRevenue), direction: deltaDirection(revenue, priorRevenue) },
       sparkline: revenueSparkline,
@@ -390,7 +434,7 @@ export function MarketingDivision() {
     {
       label: 'Conversion',
       value: `${conversion.toFixed(2)}%`,
-      sub: `Prior ${priorConversion.toFixed(2)}%`,
+      sub: yoyConvStr ? `Prior ${priorConversion.toFixed(2)}% · ${yoyConvStr}` : `Prior ${priorConversion.toFixed(2)}%`,
       truthState: 'canonical',
       delta: { text: deltaPct(conversion, priorConversion), direction: deltaDirection(conversion, priorConversion) },
       sparkline: conversionSparkline,
@@ -398,7 +442,7 @@ export function MarketingDivision() {
     {
       label: 'MER',
       value: mer.toFixed(2),
-      sub: `Prior ${priorMer.toFixed(2)}`,
+      sub: yoyMerStr ? `Prior ${priorMer.toFixed(2)} · ${yoyMerStr}` : `Prior ${priorMer.toFixed(2)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(mer, priorMer), direction: deltaDirection(mer, priorMer) },
       sparkline: merSparkline,
@@ -406,12 +450,12 @@ export function MarketingDivision() {
     {
       label: 'Ad Spend',
       value: currency(adSpend),
-      sub: `Prior ${currency(priorAdSpend)}`,
+      sub: yoyAdSpendStr ? `Prior ${currency(priorAdSpend)} · ${yoyAdSpendStr}` : `Prior ${currency(priorAdSpend)}`,
       truthState: 'canonical',
       delta: { text: deltaPct(adSpend, priorAdSpend), direction: deltaDirection(adSpend, priorAdSpend) },
       sparkline: adSpendSparkline,
     },
-  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend, revenueSparkline, conversionSparkline, merSparkline, adSpendSparkline])
+  ], [revenue, priorRevenue, conversion, priorConversion, mer, priorMer, adSpend, priorAdSpend, revenueSparkline, conversionSparkline, merSparkline, adSpendSparkline, yoyRevStr, yoyConvStr, yoyMerStr, yoyAdSpendStr])
 
   /* ---- dynamic action items ---- */
   const weekActions = useMemo(() => {
@@ -768,6 +812,12 @@ export function MarketingDivision() {
             </section>
 
             <ChannelMixCard range={range} />
+            {/* Smarter TW-driven cards — built on the same TWSummaryDaily
+                data but surface patterns the mix card misses: week-over-week
+                shifts, pacing vs recent baseline, and MER anomaly detection. */}
+            <ChannelTrendsCard days={30} />
+            <MarketingPacingCard />
+            <MerHealthCard days={90} />
           </div>
 
           {/* ---- Industry Pulse — Social Listening ---- */}

@@ -24,6 +24,9 @@ import type {
   WismoKpiResponse,
   ProbeFailureRateResponse,
   MarketingChannelMixResponse,
+  MarketingChannelTrendsResponse,
+  MarketingPacingResponse,
+  MarketingMerHealthResponse,
   MarketingPeriodCompareResponse,
   SlackChannelsResponse,
   SlackMessagesResponse,
@@ -494,7 +497,7 @@ export const api = {
   },
 
   marketingPeriodCompare: (
-    opts: { start?: string; end?: string; days?: number; mode?: 'prior_period' | 'same_day_last_week' } = {},
+    opts: { start?: string; end?: string; days?: number; mode?: 'prior_period' | 'same_day_last_week' | 'yoy' } = {},
     signal?: AbortSignal,
   ) => {
     const p = new URLSearchParams()
@@ -504,6 +507,30 @@ export const api = {
     if (opts.mode) p.set('mode', opts.mode)
     const qs = p.toString()
     return request<MarketingPeriodCompareResponse>(`/api/marketing/period-compare${qs ? `?${qs}` : ''}`, { signal })
+  },
+
+  marketingChannelTrends: (
+    opts: { days?: number; min_spend_total?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.days != null) p.set('days', String(opts.days))
+    if (opts.min_spend_total != null) p.set('min_spend_total', String(opts.min_spend_total))
+    const qs = p.toString()
+    return request<MarketingChannelTrendsResponse>(`/api/marketing/channel-trends${qs ? `?${qs}` : ''}`, { signal })
+  },
+
+  marketingPacing: (signal?: AbortSignal) =>
+    request<MarketingPacingResponse>(`/api/marketing/pacing`, { signal }),
+
+  marketingMerHealth: (
+    opts: { days?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.days != null) p.set('days', String(opts.days))
+    const qs = p.toString()
+    return request<MarketingMerHealthResponse>(`/api/marketing/mer-health${qs ? `?${qs}` : ''}`, { signal })
   },
 
   dismissInsight: (id: number, reason?: string) =>

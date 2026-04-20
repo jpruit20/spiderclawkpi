@@ -352,6 +352,12 @@ def period_compare(
     if mode == "same_day_last_week":
         prior_start = start_d - timedelta(days=7)
         prior_end = end_d - timedelta(days=7)
+    elif mode == "yoy":
+        # Shift the window back 365 days. Not leap-year aware — with
+        # enough year-over-year swing this is close enough for KPI
+        # deltas and avoids edge cases around Feb 29.
+        prior_start = start_d - timedelta(days=365)
+        prior_end = end_d - timedelta(days=365)
     else:
         prior_end = start_d - timedelta(days=1)
         prior_start = prior_end - timedelta(days=window_days - 1)
@@ -391,4 +397,295 @@ def period_compare(
             "sessions_pct": _safe_pct(current["sessions"], prior["sessions"]),
             "ad_spend_pct": _safe_pct(current["ad_spend"], prior["ad_spend"]),
         },
+    }
+
+
+# ───────────────────────────────────────────────────────────────────
+# Channel trends — daily spend series per channel over a window so the
+# Marketing page can render sparklines alongside the channel-mix card.
+# Catches patterns the mix card alone misses: "we ramped TikTok the
+# last three weeks but quietly killed Pinterest" is invisible when
+# you only look at the window total.
+# ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/channel-trends")
+def channel_trends(
+    days: int = Query(30, ge=7, le=180),
+    min_spend_total: float = Query(
+        10.0, ge=0.0,
+        description="drop channels whose total spend over the window is below this threshold",
+    ),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    today = datetime.now(BUSINESS_TZ).date()
+    start_d = today - timedelta(days=days - 1)
+
+    col_select = [getattr(TWSummaryDaily, col) for col, _ in CHANNEL_COLUMNS]
+    rows = db.execute(
+        select(TWSummaryDaily.business_date, *col_select)
+        .where(
+            TWSummaryDaily.business_date >= start_d,
+            TWSummaryDaily.business_date <= today,
+        )
+        .order_by(TWSummaryDaily.business_date)
+    ).all()
+
+    # Pivot row-per-day → column-per-channel with a full date axis so
+    # the frontend can plot zero-spend days (a real "paused" signal),
+    # not skip them.
+    date_axis = [(start_d + timedelta(days=i)).isoformat() for i in range(days)]
+    index_by_date = {d: i for i, d in enumerate(date_axis)}
+
+    series: dict[str, list[float]] = {col: [0.0] * days for col, _ in CHANNEL_COLUMNS}
+    for r in rows:
+        idx = index_by_date.get(r.business_date.isoformat())
+        if idx is None:
+            continue
+        for col, _ in CHANNEL_COLUMNS:
+            val = getattr(r, col, 0.0) or 0.0
+            series[col][idx] = float(val)
+
+    channels = []
+    for col, label in CHANNEL_COLUMNS:
+        daily = series[col]
+        total = sum(daily)
+        if total < min_spend_total:
+            continue
+        # Simple split: first-half vs second-half average to detect
+        # ramp-up/wind-down patterns without pulling in a linregress.
+        mid = days // 2
+        first_half = daily[:mid]
+        second_half = daily[mid:]
+        first_avg = sum(first_half) / max(len(first_half), 1)
+        second_avg = sum(second_half) / max(len(second_half), 1)
+        trend_pct = ((second_avg - first_avg) / first_avg * 100.0) if first_avg > 0 else None
+        recent_7d = sum(daily[-7:])
+        prior_7d = sum(daily[-14:-7]) if days >= 14 else 0.0
+        recent_delta_pct = ((recent_7d - prior_7d) / prior_7d * 100.0) if prior_7d > 0 else None
+        channels.append({
+            "column": col,
+            "label": label,
+            "total_spend": round(total, 2),
+            "daily": [round(v, 2) for v in daily],
+            "first_half_avg": round(first_avg, 2),
+            "second_half_avg": round(second_avg, 2),
+            "trend_pct": round(trend_pct, 1) if trend_pct is not None else None,
+            "recent_7d_spend": round(recent_7d, 2),
+            "recent_7d_delta_pct": round(recent_delta_pct, 1) if recent_delta_pct is not None else None,
+        })
+
+    channels.sort(key=lambda c: c["total_spend"], reverse=True)
+
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": {"start": start_d.isoformat(), "end": today.isoformat(), "days": days},
+        "date_axis": date_axis,
+        "channels": channels,
+    }
+
+
+# ───────────────────────────────────────────────────────────────────
+# Pacing + dormant-channel detection — answers "are we spending at a
+# healthy rate this week vs recent weeks, and is any channel that
+# used to be on now quietly off?". Replaces the need for a manual
+# budget-config surface until one exists.
+# ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/pacing")
+def pacing(
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    today = datetime.now(BUSINESS_TZ).date()
+    # "This week" = trailing 7 days ending today (not ISO week — avoids
+    # a Monday that has only one day of data making the whole week
+    # look underspent).
+    week_start = today - timedelta(days=6)
+    weeks_back = 4
+    baseline_start = today - timedelta(days=7 * (weeks_back + 1) - 1)
+    baseline_end = week_start - timedelta(days=1)
+
+    # This week totals.
+    channel_cols = [getattr(TWSummaryDaily, col) for col, _ in CHANNEL_COLUMNS]
+    this_week_row = db.execute(
+        select(
+            func.coalesce(func.sum(TWSummaryDaily.ad_spend), 0.0).label("ad_spend"),
+            *[func.coalesce(func.sum(c), 0.0).label(c.key) for c in channel_cols],
+        ).where(
+            TWSummaryDaily.business_date >= week_start,
+            TWSummaryDaily.business_date <= today,
+        )
+    ).one()
+
+    # Trailing 4 weeks aggregate (not including this week).
+    baseline_row = db.execute(
+        select(
+            func.coalesce(func.sum(TWSummaryDaily.ad_spend), 0.0).label("ad_spend"),
+            *[func.coalesce(func.sum(c), 0.0).label(c.key) for c in channel_cols],
+        ).where(
+            TWSummaryDaily.business_date >= baseline_start,
+            TWSummaryDaily.business_date <= baseline_end,
+        )
+    ).one()
+
+    # Days of this-week data actually present — projection needs this
+    # because today is likely mid-day. Count distinct business_dates
+    # with any spend so weekends with $0 spend don't inflate the avg.
+    days_present = db.execute(
+        select(func.count(func.distinct(TWSummaryDaily.business_date)))
+        .where(
+            TWSummaryDaily.business_date >= week_start,
+            TWSummaryDaily.business_date <= today,
+            TWSummaryDaily.ad_spend > 0,
+        )
+    ).scalar() or 0
+
+    this_week_spend = float(this_week_row.ad_spend or 0.0)
+    baseline_spend = float(baseline_row.ad_spend or 0.0)
+    baseline_weekly_avg = baseline_spend / weeks_back if weeks_back > 0 else 0.0
+    baseline_daily_avg = baseline_weekly_avg / 7.0 if baseline_weekly_avg > 0 else 0.0
+
+    daily_avg_so_far = this_week_spend / days_present if days_present > 0 else 0.0
+    projected_week_end = daily_avg_so_far * 7.0 if days_present > 0 else 0.0
+
+    pacing_delta_pct: Optional[float] = None
+    if baseline_weekly_avg > 0:
+        pacing_delta_pct = (projected_week_end - baseline_weekly_avg) / baseline_weekly_avg * 100.0
+
+    # Dormant channels: had meaningful spend in the baseline (>$100/wk
+    # avg), but $0 in the last 7 days. This catches "paused" channels
+    # better than a pure 0-vs-0 check.
+    dormant = []
+    active = []
+    for col, label in CHANNEL_COLUMNS:
+        this_val = float(getattr(this_week_row, col, 0.0) or 0.0)
+        base_val = float(getattr(baseline_row, col, 0.0) or 0.0)
+        base_weekly = base_val / weeks_back if weeks_back > 0 else 0.0
+        if base_weekly >= 100.0 and this_val == 0.0:
+            dormant.append({
+                "column": col, "label": label,
+                "baseline_weekly_spend": round(base_weekly, 2),
+                "this_week_spend": 0.0,
+            })
+        elif this_val > 0 or base_weekly > 0:
+            delta_pct = ((this_val - base_weekly) / base_weekly * 100.0) if base_weekly > 0 else None
+            active.append({
+                "column": col, "label": label,
+                "this_week_spend": round(this_val, 2),
+                "baseline_weekly_spend": round(base_weekly, 2),
+                "delta_pct": round(delta_pct, 1) if delta_pct is not None else None,
+            })
+    active.sort(key=lambda c: c["this_week_spend"], reverse=True)
+
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": {
+            "week_start": week_start.isoformat(),
+            "today": today.isoformat(),
+            "days_present": int(days_present),
+        },
+        "baseline_window": {
+            "start": baseline_start.isoformat(),
+            "end": baseline_end.isoformat(),
+            "weeks": weeks_back,
+        },
+        "this_week_spend": round(this_week_spend, 2),
+        "baseline_weekly_avg": round(baseline_weekly_avg, 2),
+        "baseline_daily_avg": round(baseline_daily_avg, 2),
+        "daily_avg_so_far": round(daily_avg_so_far, 2),
+        "projected_week_end": round(projected_week_end, 2),
+        "pacing_delta_pct": round(pacing_delta_pct, 1) if pacing_delta_pct is not None else None,
+        "dormant_channels": dormant,
+        "active_channels": active,
+    }
+
+
+# ───────────────────────────────────────────────────────────────────
+# MER health — compute daily blended MER (KPIDaily.revenue / TW
+# ad_spend) over a 90-day window, build p10/p50/p90 band, and flag
+# whether the most-recent completed day sits outside the band.
+# ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/mer-health")
+def mer_health(
+    days: int = Query(90, ge=28, le=365),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    today = datetime.now(BUSINESS_TZ).date()
+    start_d = today - timedelta(days=days - 1)
+
+    # Join KPIDaily revenue with TW ad_spend on business_date; take
+    # daily MER only for days with both values > 0 so we don't pollute
+    # the band with boot-up zeroes.
+    rows = db.execute(
+        select(
+            KPIDaily.business_date,
+            KPIDaily.revenue.label("revenue"),
+            TWSummaryDaily.ad_spend.label("ad_spend"),
+        )
+        .join(
+            TWSummaryDaily,
+            TWSummaryDaily.business_date == KPIDaily.business_date,
+        )
+        .where(KPIDaily.business_date >= start_d, KPIDaily.business_date <= today)
+        .order_by(KPIDaily.business_date)
+    ).all()
+
+    daily = []
+    for r in rows:
+        rev = float(r.revenue or 0.0)
+        spend = float(r.ad_spend or 0.0)
+        if spend > 0 and rev > 0:
+            daily.append({
+                "date": r.business_date.isoformat(),
+                "revenue": round(rev, 2),
+                "ad_spend": round(spend, 2),
+                "mer": round(rev / spend, 3),
+            })
+
+    mer_values = sorted([d["mer"] for d in daily])
+    n = len(mer_values)
+    def _pct(p: float) -> Optional[float]:
+        if n == 0:
+            return None
+        idx = min(max(int(round(p * (n - 1))), 0), n - 1)
+        return round(mer_values[idx], 3)
+
+    p10, p50, p90 = _pct(0.10), _pct(0.50), _pct(0.90)
+
+    latest = daily[-1] if daily else None
+    # "Latest complete day" gate: if the last row is today and hour is
+    # still early, latest MER may be misleading. Caller can pair with
+    # the period-compare endpoint for intra-day. Here we just surface
+    # the freshest daily value.
+    latest_mer = latest["mer"] if latest else None
+    band_state: str = "unknown"
+    if latest_mer is not None and p10 is not None and p90 is not None:
+        if latest_mer > p90:
+            band_state = "above_band"
+        elif latest_mer < p10:
+            band_state = "below_band"
+        else:
+            band_state = "in_band"
+
+    # Trailing-7d MER (good for "this week is running hot/cold")
+    recent = daily[-7:] if len(daily) >= 7 else daily
+    recent_rev = sum(d["revenue"] for d in recent)
+    recent_spend = sum(d["ad_spend"] for d in recent)
+    recent_mer = round(recent_rev / recent_spend, 3) if recent_spend > 0 else None
+
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": {"start": start_d.isoformat(), "end": today.isoformat(), "days": days},
+        "observations": n,
+        "band": {"p10": p10, "p50": p50, "p90": p90},
+        "latest": latest,
+        "latest_band_state": band_state,
+        "trailing_7d_mer": recent_mer,
+        "daily": daily,
     }

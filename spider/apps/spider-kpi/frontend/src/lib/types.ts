@@ -1165,6 +1165,75 @@ export interface MarketingChannelMixResponse {
   channels: MarketingChannelRow[]
 }
 
+export interface MarketingChannelTrendRow {
+  column: string
+  label: string
+  total_spend: number
+  daily: number[]
+  first_half_avg: number
+  second_half_avg: number
+  trend_pct: number | null
+  recent_7d_spend: number
+  recent_7d_delta_pct: number | null
+}
+
+export interface MarketingChannelTrendsResponse {
+  ok: boolean
+  generated_at: string
+  window: { start: string; end: string; days: number }
+  date_axis: string[]
+  channels: MarketingChannelTrendRow[]
+}
+
+export interface MarketingPacingDormantRow {
+  column: string
+  label: string
+  baseline_weekly_spend: number
+  this_week_spend: number
+}
+
+export interface MarketingPacingActiveRow {
+  column: string
+  label: string
+  this_week_spend: number
+  baseline_weekly_spend: number
+  delta_pct: number | null
+}
+
+export interface MarketingPacingResponse {
+  ok: boolean
+  generated_at: string
+  window: { week_start: string; today: string; days_present: number }
+  baseline_window: { start: string; end: string; weeks: number }
+  this_week_spend: number
+  baseline_weekly_avg: number
+  baseline_daily_avg: number
+  daily_avg_so_far: number
+  projected_week_end: number
+  pacing_delta_pct: number | null
+  dormant_channels: MarketingPacingDormantRow[]
+  active_channels: MarketingPacingActiveRow[]
+}
+
+export interface MarketingMerDailyRow {
+  date: string
+  revenue: number
+  ad_spend: number
+  mer: number
+}
+
+export interface MarketingMerHealthResponse {
+  ok: boolean
+  generated_at: string
+  window: { start: string; end: string; days: number }
+  observations: number
+  band: { p10: number | null; p50: number | null; p90: number | null }
+  latest: MarketingMerDailyRow | null
+  latest_band_state: 'above_band' | 'in_band' | 'below_band' | 'unknown'
+  trailing_7d_mer: number | null
+  daily: MarketingMerDailyRow[]
+}
+
 export interface EmailPulseArchetype {
   archetype: string
   label: string
