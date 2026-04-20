@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import ARRAY, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -1292,3 +1292,58 @@ class LoreEvent(TimestampMixin, Base):
     source_refs_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(128))
+
+
+class FirmwareIssueTag(TimestampMixin, Base):
+    __tablename__ = "firmware_issue_tags"
+    __table_args__ = (UniqueConstraint("slug", name="uq_firmware_issue_tags_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(String(128))
+
+
+class FirmwareRelease(TimestampMixin, Base):
+    __tablename__ = "firmware_releases"
+    __table_args__ = (UniqueConstraint("version", name="uq_firmware_releases_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(256))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    addresses_issues: Mapped[list[str]] = mapped_column(ARRAY(String(64)), default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    clickup_task_id: Mapped[Optional[str]] = mapped_column(String(64))
+    git_commit_sha: Mapped[Optional[str]] = mapped_column(String(64))
+    beta_iot_job_id: Mapped[Optional[str]] = mapped_column(String(128))
+    gamma_iot_job_ids_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    gamma_plan_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    beta_report_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    beta_cohort_target_size: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    created_by: Mapped[Optional[str]] = mapped_column(String(128))
+    approved_by: Mapped[Optional[str]] = mapped_column(String(128))
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class BetaCohortMember(TimestampMixin, Base):
+    __tablename__ = "beta_cohort_members"
+    __table_args__ = (UniqueConstraint("release_id", "device_id", name="uq_beta_cohort_release_device"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey("firmware_releases.id", ondelete="CASCADE"), nullable=False)
+    device_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(128))
+    candidate_score: Mapped[Optional[float]] = mapped_column(Float)
+    candidate_reason_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default="invited", nullable=False, index=True)
+    invited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    opted_in_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    opt_in_source: Mapped[Optional[str]] = mapped_column(String(32))
+    ota_pushed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ota_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    verdict_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)

@@ -12,6 +12,7 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
+import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
@@ -1156,6 +1157,11 @@ export function ProductEngineeringDivision() {
                   colored by dominant firmware each week, with ClickUp
                   firmware-release markers overlaid. */}
               <FirmwareImpactTimeline weeks={26} />
+
+              {/* Firmware Beta + Gamma Waves program — Phase 1 taxonomy,
+                  candidate scoring, cohort management. OTA push + Gamma
+                  scheduler land post-Agustin review 2026-04-21. */}
+              <BetaProgramPanel />
 
               {/* ========================================================= */}
               {/* BELOW-THE-FOLD DETAIL — progressive disclosure.           */}

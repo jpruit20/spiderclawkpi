@@ -654,4 +654,70 @@ export const api = {
       body: JSON.stringify({ ids }),
       signal,
     }),
+
+  // ── Firmware Beta + Gamma Waves program ──────────────────────────
+  betaIssueTags: (signal?: AbortSignal) =>
+    request<{ tags: Array<{ id: number; slug: string; label: string; description: string | null; archived: boolean }> }>(
+      '/api/beta/tags', { signal },
+    ),
+  betaIssueTagCreate: (body: { slug: string; label: string; description?: string }) =>
+    request<{ id: number; slug: string; label: string; description: string | null; archived: boolean }>('/api/beta/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  betaIssueTagUpdate: (id: number, body: { label?: string; description?: string; archived?: boolean }) =>
+    request<{ id: number; slug: string; label: string; description: string | null; archived: boolean }>(`/api/beta/tags/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  betaReleases: (signal?: AbortSignal) =>
+    request<{ releases: BetaReleaseSummary[] }>('/api/beta/releases', { signal }),
+  betaReleaseCreate: (body: { version: string; title?: string; notes?: string; addresses_issues: string[]; beta_cohort_target_size?: number }) =>
+    request<BetaReleaseSummary>('/api/beta/releases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  betaReleaseUpdate: (id: number, body: Partial<{ title: string; notes: string; addresses_issues: string[]; status: string; beta_cohort_target_size: number }>) =>
+    request<BetaReleaseSummary>(`/api/beta/releases/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  betaCandidates: (releaseId: number, limit = 150, signal?: AbortSignal) =>
+    request<{ release_id: number; version: string; addresses_issues: string[]; candidates: Array<{ device_id: string; user_id: string | null; score: number; sessions_30d: number; tenure_days: number; matched_tags: string[] }> }>(
+      `/api/beta/releases/${releaseId}/candidates?limit=${limit}`, { signal },
+    ),
+  betaInvite: (releaseId: number, cohortSize?: number) =>
+    request<{ ok: boolean; invited_count: number; already_invited: number; candidates_found: number; cohort_target: number }>(
+      `/api/beta/releases/${releaseId}/invite`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cohort_size: cohortSize }) },
+    ),
+  betaCohort: (releaseId: number, signal?: AbortSignal) =>
+    request<{ release_id: number; version: string; members: Array<{ device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null }> }>(
+      `/api/beta/releases/${releaseId}/cohort`, { signal },
+    ),
+}
+
+export interface BetaReleaseSummary {
+  id: number
+  version: string
+  title: string | null
+  notes: string | null
+  addresses_issues: string[]
+  status: string
+  beta_cohort_target_size: number
+  clickup_task_id: string | null
+  git_commit_sha: string | null
+  beta_iot_job_id: string | null
+  gamma_plan: Record<string, unknown>
+  beta_report: Record<string, unknown>
+  created_by: string | null
+  approved_by: string | null
+  approved_at: string | null
+  released_at: string | null
+  created_at: string | null
+  cohort_counts: Record<string, number>
 }

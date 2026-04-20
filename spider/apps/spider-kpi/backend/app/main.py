@@ -13,6 +13,7 @@ from app.api.routes.ai_assistant import router as ai_router
 from app.api.routes.app_side import router as app_side_router
 from app.api.deps import require_auth
 from app.api.routes.auth import router as auth_router
+from app.api.routes.beta_program import router as beta_router, public_router as beta_public_router
 from app.api.routes.clickup import router as clickup_router, webhook_router as clickup_webhook_router
 from app.api.routes.executive import router as executive_router
 from app.api.routes.deci import router as deci_router
@@ -99,6 +100,8 @@ app.include_router(marketing_router)
 app.include_router(slack_router)
 app.include_router(slack_webhook_router)
 app.include_router(shopify_webhook_router)
+app.include_router(beta_router)
+app.include_router(beta_public_router)
 
 if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
