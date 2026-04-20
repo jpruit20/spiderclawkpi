@@ -116,8 +116,11 @@ export function FirmwareCohortPanel({ minSessions = 20 }: { minSessions?: number
         <span className="venom-panel-hint">{resp.total_sessions.toLocaleString()} total sessions</span>
       </div>
 
-      <div className="chart-wrap">
-        <ResponsiveContainer width="100%" height={Math.max(240, cohorts.length * 28 + 60)}>
+      {/* Inline height so the wrap matches the ResponsiveContainer — the
+          shared .chart-wrap class locks at 320px, which clipped rows
+          onto the table below when the fleet had many firmware versions. */}
+      <div style={{ height: Math.max(240, cohorts.length * 28 + 60) }}>
+        <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
             <CartesianGrid stroke="rgba(255,255,255,0.06)" />
             <XAxis type="number" domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} stroke="#9fb0d4" tick={{ fontSize: 11 }} />

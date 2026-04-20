@@ -16,6 +16,7 @@ from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.triplewhale import sync_triplewhale
 from app.models import SourceSyncRun, TelemetryHistoryDaily, TelemetrySession, TelemetryStreamEvent
 from app.schemas.overview import TelemetryHistoryIngestIn, TelemetryStreamIngestIn
+from app.services.cook_rederivation import run_cook_rederivation
 from app.services.seed import seed_from_prototype_files
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
 from app.services.telemetry_history import upsert_telemetry_history_monthly
@@ -138,6 +139,16 @@ def backfill_source(
         recompute_daily_kpis(db)
         recompute_diagnostics(db)
     return result
+
+
+@router.post("/rederive/cook-quality")
+def rederive_cook_quality(
+    max_rows: int | None = None,
+    db: Session = Depends(db_session),
+):
+    """Backfill intent/outcome/PID-quality columns on telemetry_sessions
+    and rebuild daily aggregates. Idempotent — safe to re-run."""
+    return run_cook_rederivation(db, max_rows=max_rows)
 
 
 @router.post("/seed")

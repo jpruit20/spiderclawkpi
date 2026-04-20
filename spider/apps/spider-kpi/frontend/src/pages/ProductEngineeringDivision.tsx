@@ -81,6 +81,16 @@ const COOK_STYLE_LABELS: Record<string, string> = {
   medium_heat: 'Medium Heat (275-400F)',
   unclassified: 'Unclassified',
 }
+// Short labels used inside the pie itself — the full descriptive
+// labels with temperature ranges blow past the chart edge on the
+// left/right sides and truncate "Hot" and clip "Medium Heat" %.
+const COOK_STYLE_SHORT: Record<string, string> = {
+  startup_only: 'Startup',
+  hot_and_fast: 'Hot & Fast',
+  low_and_slow: 'Low & Slow',
+  medium_heat: 'Medium',
+  unclassified: 'Other',
+}
 const COOK_STYLE_COLORS: Record<string, string> = {
   startup_only: '#9b7bff',
   hot_and_fast: '#ef4444',
@@ -651,7 +661,7 @@ export function ProductEngineeringDivision() {
     if (!cookAnalysis?.cook_styles) return []
     return Object.entries(cookAnalysis.cook_styles)
       .filter(([, v]) => v > 0)
-      .map(([key, value]) => ({ name: COOK_STYLE_LABELS[key] || key, value, key }))
+      .map(([key, value]) => ({ name: COOK_STYLE_LABELS[key] || key, shortName: COOK_STYLE_SHORT[key] || key, value, key }))
   }, [cookAnalysis])
 
   /* ------------------------------------------------------------------
@@ -1173,13 +1183,26 @@ export function ProductEngineeringDivision() {
                 {cookStylePie.length > 0 ? (
                   <div className="two-col two-col-equal">
                     <div>
-                      <div className="chart-wrap-short">
-                        <ResponsiveContainer width="100%" height={240}>
-                          <PieChart>
-                            <Pie data={cookStylePie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      {/* Height + outerRadius tightened so outside labels
+                          ("Hot & Fast 42%") don't collide with the chart
+                          edges — the previous setup clipped "Hot" on the
+                          left and hid the % on "Medium Heat" on the right. */}
+                      <div style={{ height: 260 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart margin={{ top: 8, right: 64, bottom: 8, left: 64 }}>
+                            <Pie
+                              data={cookStylePie}
+                              dataKey="value"
+                              nameKey="shortName"
+                              cx="50%"
+                              cy="50%"
+                              outerRadius={70}
+                              labelLine={true}
+                              label={({ shortName, percent }) => `${shortName} ${(percent * 100).toFixed(0)}%`}
+                            >
                               {cookStylePie.map((entry) => <Cell key={entry.key} fill={COOK_STYLE_COLORS[entry.key] || '#555'} />)}
                             </Pie>
-                            <Tooltip />
+                            <Tooltip formatter={(v: number, _n, p) => [`${v} sessions`, p?.payload?.name]} />
                           </PieChart>
                         </ResponsiveContainer>
                       </div>

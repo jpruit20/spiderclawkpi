@@ -8,6 +8,7 @@ from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
+from app.services.cook_rederivation import run_cook_rederivation
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.clickup import sync_clickup
 from app.ingestion.connectors.freshdesk import sync_freshdesk
@@ -95,8 +96,20 @@ def run_syncs() -> None:
                 db.rollback()
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
+        aws_success = False
         if not _already_running(db, "aws_telemetry"):
-            any_success = _successful_result(sync_aws_telemetry(db)) or any_success
+            aws_success = _successful_result(sync_aws_telemetry(db))
+            any_success = aws_success or any_success
+        # After AWS/S3 telemetry lands, re-score any newly inserted
+        # telemetry_sessions rows so the PID-quality / intent / outcome
+        # model stays live. Idempotent: only touches cook_intent IS NULL.
+        if aws_success:
+            try:
+                run_cook_rederivation(db)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("cook_rederivation after aws sync failed")
+                db.rollback()
         latest_clarity_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "clarity")
