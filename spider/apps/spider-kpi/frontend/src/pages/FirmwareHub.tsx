@@ -21,10 +21,11 @@ import {
 } from 'recharts'
 import {
   api,
-  type FirmwareOverview,
+  type FirmwareOverviewMetrics,
   type FirmwareDeviceSummary,
   type FirmwareDeviceShadow,
   type FirmwareDeviceActiveCook,
+  type FirmwareDeviceRecent,
   type FirmwareSession,
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
@@ -117,41 +118,177 @@ function PlaceholderTab({ title, copy }: { title: string; copy: string }) {
 // Overview
 // ---------------------------------------------------------------------------
 
+type RangePreset = '24h' | '7d' | '30d' | '90d'
+
+const PRESETS: Array<{ key: RangePreset; label: string; days: number }> = [
+  { key: '24h', label: 'Last 24 h', days: 1 },
+  { key: '7d', label: 'Last 7 d', days: 7 },
+  { key: '30d', label: 'Last 30 d', days: 30 },
+  { key: '90d', label: 'Last 90 d', days: 90 },
+]
+
+function toDateInputValue(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function rangeForPreset(preset: RangePreset): { start: string; end: string } {
+  const end = new Date()
+  const start = new Date()
+  const p = PRESETS.find(x => x.key === preset)!
+  start.setDate(end.getDate() - p.days)
+  return { start: toDateInputValue(start), end: toDateInputValue(end) }
+}
+
+function fmtPct(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  return `${(v * 100).toFixed(1)}%`
+}
+
+function fmtPctRaw(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  // in_control_pct is 0..1 in the session table.
+  const pct = v <= 1 ? v * 100 : v
+  return `${pct.toFixed(1)}%`
+}
+
 function OverviewTab() {
-  const [data, setData] = useState<FirmwareOverview | null>(null)
+  const [preset, setPreset] = useState<RangePreset>('7d')
+  const initial = rangeForPreset('7d')
+  const [start, setStart] = useState(initial.start)
+  const [end, setEnd] = useState(initial.end)
+  const [firmwareFilter, setFirmwareFilter] = useState<string>('')
+  const [metrics, setMetrics] = useState<FirmwareOverviewMetrics | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const ctl = new AbortController()
     setLoading(true)
-    api.firmwareOverview(ctl.signal)
-      .then(d => { setData(d); setError(null) })
+    api.firmwareOverviewMetrics(
+      { start, end, firmware_version: firmwareFilter || undefined },
+      ctl.signal,
+    )
+      .then(d => { setMetrics(d); setError(null) })
       .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
       .finally(() => setLoading(false))
     return () => ctl.abort()
-  }, [])
+  }, [start, end, firmwareFilter])
 
-  if (loading) return <section className="card"><div className="state-message">Loading overview…</div></section>
-  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
-  if (!data) return null
+  const applyPreset = (p: RangePreset) => {
+    setPreset(p)
+    const r = rangeForPreset(p)
+    setStart(r.start)
+    setEnd(r.end)
+  }
 
   return (
-    <section className="card">
-      <div className="card-title">Fleet firmware — last 24 h</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-        {data.active_devices} devices reporting. Devices that haven't reported in the last 24 h aren't included.
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
-        {data.firmware_distribution.slice(0, 24).map(d => (
-          <div key={d.firmware_version} style={{ padding: 10, background: 'var(--panel-2)', borderRadius: 8 }}>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{d.firmware_version}</div>
-            <div style={{ fontSize: 20, fontWeight: 600 }}>{d.devices}</div>
-            <div style={{ fontSize: 11, color: 'var(--muted)' }}>{d.pct}% of active</div>
+    <>
+      <section className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div className="card-title">Firmware metrics</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Cook success, PID quality, and disconnect rate across the window.
+            </div>
           </div>
-        ))}
-      </div>
-    </section>
+          <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
+            {PRESETS.map(p => (
+              <button
+                key={p.key}
+                className={`range-button${preset === p.key ? ' active' : ''}`}
+                onClick={() => applyPreset(p.key)}
+              >{p.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}>Start</span>
+            <input
+              type="date"
+              className="deci-input"
+              value={start}
+              onChange={e => { setStart(e.target.value); setPreset('7d'); }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}>End</span>
+            <input
+              type="date"
+              className="deci-input"
+              value={end}
+              onChange={e => { setEnd(e.target.value); setPreset('7d'); }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 200px', minWidth: 180 }}>
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}>Firmware (optional)</span>
+            <input
+              className="deci-input"
+              value={firmwareFilter}
+              onChange={e => setFirmwareFilter(e.target.value)}
+              placeholder="e.g. 1.4.12"
+            />
+          </label>
+        </div>
+      </section>
+
+      {loading ? <section className="card"><div className="state-message">Loading metrics…</div></section> : null}
+      {error ? <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section> : null}
+
+      {metrics && !loading && !error ? (
+        <>
+          <section className="card">
+            <div className="card-title">Window stats</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
+              <Stat label="Sessions" value={metrics.sessions.toLocaleString()} />
+              <Stat label="Devices with cooks" value={metrics.devices.toLocaleString()} />
+              <Stat label="Cook success rate" value={fmtPct(metrics.cook_success_rate)} />
+              <Stat label="Avg in-control %" value={fmtPctRaw(metrics.avg_in_control_pct)} />
+              <Stat label="Disconnect events" value={metrics.disconnect_events.toLocaleString()} />
+              <Stat
+                label="Disconnects / session"
+                value={metrics.disconnect_rate_per_session != null ? metrics.disconnect_rate_per_session.toFixed(2) : '—'}
+              />
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-title">Firmware distribution — active in window</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+              {metrics.active_devices_window.toLocaleString()} devices reported at least once in this window.
+            </div>
+            {metrics.firmware_distribution.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>No stream events in this window.</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+                {metrics.firmware_distribution.slice(0, 24).map(d => (
+                  <button
+                    key={d.firmware_version}
+                    className="range-button"
+                    style={{
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      padding: 10,
+                      background: firmwareFilter === d.firmware_version ? 'var(--panel-2)' : 'transparent',
+                      height: 'auto',
+                    }}
+                    onClick={() => setFirmwareFilter(firmwareFilter === d.firmware_version ? '' : d.firmware_version)}
+                    title={firmwareFilter === d.firmware_version ? 'Clear firmware filter' : 'Filter metrics to this firmware'}
+                  >
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{d.firmware_version}</div>
+                    <div style={{ fontSize: 20, fontWeight: 600 }}>{d.devices}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{d.pct}% of active</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
+    </>
   )
 }
 
@@ -165,6 +302,30 @@ function DeviceDrillDown() {
   const [lookupError, setLookupError] = useState<string | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [lookupCandidates, setLookupCandidates] = useState<string[]>([])
+  const [recents, setRecents] = useState<FirmwareDeviceRecent[]>([])
+  const [recentsError, setRecentsError] = useState<string | null>(null)
+
+  const reloadRecents = useCallback(async () => {
+    try {
+      const res = await api.firmwareDeviceRecents()
+      setRecents(res.recents)
+      setRecentsError(null)
+    } catch (e: unknown) {
+      setRecentsError(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
+
+  useEffect(() => { reloadRecents() }, [reloadRecents])
+
+  // Upsert whenever activeMac becomes set.
+  useEffect(() => {
+    if (!activeMac) return
+    let alive = true
+    api.firmwareDeviceRecentUpsert(activeMac)
+      .then(() => { if (alive) reloadRecents() })
+      .catch(() => { /* non-fatal — recents is a convenience strip */ })
+    return () => { alive = false }
+  }, [activeMac, reloadRecents])
 
   const onLookup = useCallback(async (raw: string) => {
     const q = raw.trim()
@@ -190,6 +351,24 @@ function DeviceDrillDown() {
       setLookupLoading(false)
     }
   }, [])
+
+  const onSetNickname = useCallback(async (mac: string, nickname: string | null) => {
+    try {
+      await api.firmwareDeviceRecentNickname(mac, nickname)
+      reloadRecents()
+    } catch (e: unknown) {
+      setRecentsError(e instanceof Error ? e.message : String(e))
+    }
+  }, [reloadRecents])
+
+  const onDeleteRecent = useCallback(async (mac: string) => {
+    try {
+      await api.firmwareDeviceRecentDelete(mac)
+      reloadRecents()
+    } catch (e: unknown) {
+      setRecentsError(e instanceof Error ? e.message : String(e))
+    }
+  }, [reloadRecents])
 
   return (
     <>
@@ -230,6 +409,15 @@ function DeviceDrillDown() {
         ) : null}
       </section>
 
+      <RecentsPanel
+        recents={recents}
+        activeMac={activeMac}
+        error={recentsError}
+        onSelect={mac => setActiveMac(mac)}
+        onRename={onSetNickname}
+        onRemove={onDeleteRecent}
+      />
+
       {activeMac ? <DevicePanel mac={activeMac} /> : (
         <section className="card">
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>
@@ -238,6 +426,106 @@ function DeviceDrillDown() {
         </section>
       )}
     </>
+  )
+}
+
+function RecentsPanel({ recents, activeMac, error, onSelect, onRename, onRemove }: {
+  recents: FirmwareDeviceRecent[]
+  activeMac: string | null
+  error: string | null
+  onSelect: (mac: string) => void
+  onRename: (mac: string, nickname: string | null) => void
+  onRemove: (mac: string) => void
+}) {
+  const [editing, setEditing] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+
+  if (!recents.length && !error) {
+    return (
+      <section className="card">
+        <div className="card-title">Recent devices</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+          Devices you look up here will show up as recents with nickname tags.
+        </div>
+      </section>
+    )
+  }
+
+  const startEdit = (r: FirmwareDeviceRecent) => {
+    setEditing(r.mac)
+    setDraft(r.nickname ?? '')
+  }
+  const commitEdit = (mac: string) => {
+    onRename(mac, draft.trim() || null)
+    setEditing(null)
+    setDraft('')
+  }
+
+  return (
+    <section className="card">
+      <div className="card-title">Recent devices</div>
+      {error ? <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {recents.map(r => {
+          const isActive = activeMac === r.mac
+          const isEditing = editing === r.mac
+          return (
+            <div
+              key={r.mac}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 8px',
+                background: isActive ? 'var(--panel-2)' : 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                className="range-button"
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', flex: '0 0 auto' }}
+                onClick={() => onSelect(r.mac)}
+              >{r.mac}</button>
+              {isEditing ? (
+                <>
+                  <input
+                    className="deci-input"
+                    value={draft}
+                    autoFocus
+                    placeholder="nickname (e.g. office grill)"
+                    onChange={e => setDraft(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { e.preventDefault(); commitEdit(r.mac) }
+                      if (e.key === 'Escape') { setEditing(null); setDraft('') }
+                    }}
+                    style={{ flex: '1 1 220px', minWidth: 160 }}
+                  />
+                  <button className="range-button active" type="button" onClick={() => commitEdit(r.mac)}>Save</button>
+                  <button className="range-button" type="button" onClick={() => { setEditing(null); setDraft('') }}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: '1 1 auto', fontSize: 13, color: r.nickname ? 'var(--fg)' : 'var(--muted)' }}>
+                    {r.nickname ?? 'no nickname'}
+                  </span>
+                  <button className="range-button" type="button" onClick={() => startEdit(r)}>
+                    {r.nickname ? 'Rename' : 'Tag'}
+                  </button>
+                  <button
+                    className="range-button"
+                    type="button"
+                    onClick={() => onRemove(r.mac)}
+                    title="Remove from recents"
+                  >✕</button>
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

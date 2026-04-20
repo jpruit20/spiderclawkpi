@@ -28,16 +28,19 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select, text
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import Integer, case, desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
+from app.api.routes.auth import get_user_from_request
 from app.models import (
     AppSideDeviceObservation,
     BetaCohortMember,
+    FirmwareDeviceRecent,
     FirmwareRelease,
     TelemetrySession,
     TelemetryStreamEvent,
@@ -419,3 +422,225 @@ def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
         "active_devices": total,
         "firmware_distribution": distribution,
     }
+
+
+# ---------------------------------------------------------------------------
+# Overview metrics (cook success, in-control, disconnects, firmware split)
+# ---------------------------------------------------------------------------
+
+
+def _parse_date(raw: str | None, fallback: datetime) -> datetime:
+    if not raw:
+        return fallback
+    try:
+        # Accept "YYYY-MM-DD" or full ISO.
+        if len(raw) == 10:
+            return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {raw!r}")
+
+
+@router.get("/overview/metrics")
+def overview_metrics(
+    start: str | None = Query(default=None, description="ISO date or datetime (UTC). Default: end - 7d."),
+    end: str | None = Query(default=None, description="ISO date or datetime (UTC). Default: now."),
+    firmware_version: str | None = Query(default=None),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    end_dt = _parse_date(end, now)
+    start_dt = _parse_date(start, end_dt - timedelta(days=7))
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="start must be before end")
+
+    session_filters = [
+        TelemetrySession.session_start >= start_dt,
+        TelemetrySession.session_start < end_dt,
+    ]
+    if firmware_version:
+        session_filters.append(TelemetrySession.firmware_version == firmware_version)
+
+    # Session-level aggregates
+    agg_row = db.execute(
+        select(
+            func.count(TelemetrySession.id).label("sessions"),
+            func.sum(case((TelemetrySession.cook_success.is_(True), 1), else_=0)).label("successes"),
+            func.avg(TelemetrySession.in_control_pct).label("avg_in_control"),
+            func.sum(TelemetrySession.disconnect_events).label("disconnect_events"),
+            func.count(func.distinct(TelemetrySession.device_id)).label("devices"),
+        ).where(*session_filters)
+    ).one()
+
+    sessions = int(agg_row.sessions or 0)
+    successes = int(agg_row.successes or 0)
+    avg_in_control = float(agg_row.avg_in_control) if agg_row.avg_in_control is not None else None
+    disconnect_events = int(agg_row.disconnect_events or 0)
+    devices = int(agg_row.devices or 0)
+
+    success_rate = (successes / sessions) if sessions else None
+    disconnect_rate_per_session = (disconnect_events / sessions) if sessions else None
+
+    # Firmware distribution over the window (based on stream events — same
+    # shape as /overview, but windowed to the selected range).
+    dist_rows = db.execute(
+        select(
+            TelemetryStreamEvent.firmware_version,
+            func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
+        )
+        .where(
+            TelemetryStreamEvent.sample_timestamp >= start_dt,
+            TelemetryStreamEvent.sample_timestamp < end_dt,
+        )
+        .group_by(TelemetryStreamEvent.firmware_version)
+        .order_by(desc("devices"))
+    ).all()
+    dist_total = sum(int(n or 0) for (_, n) in dist_rows)
+    firmware_distribution = [
+        {
+            "firmware_version": v or "unknown",
+            "devices": int(n),
+            "pct": round((int(n) / dist_total) * 100, 1) if dist_total else 0.0,
+        }
+        for (v, n) in dist_rows
+    ]
+
+    return {
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
+        "firmware_version": firmware_version,
+        "sessions": sessions,
+        "devices": devices,
+        "cook_success_rate": success_rate,
+        "avg_in_control_pct": avg_in_control,
+        "disconnect_events": disconnect_events,
+        "disconnect_rate_per_session": disconnect_rate_per_session,
+        "firmware_distribution": firmware_distribution,
+        "active_devices_window": dist_total,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-user device recents + nicknames
+# ---------------------------------------------------------------------------
+
+RECENTS_LIMIT = 30
+
+
+def _require_session_user(request: Request, db: Session):
+    user = get_user_from_request(request, db)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Dashboard session required")
+    return user
+
+
+def _serialize_recent(row: FirmwareDeviceRecent) -> dict[str, Any]:
+    return {
+        "mac": row.mac,
+        "nickname": row.nickname,
+        "last_viewed_at": row.last_viewed_at.isoformat() if row.last_viewed_at else None,
+    }
+
+
+class RecentUpsertBody(BaseModel):
+    mac: str = Field(..., min_length=1, max_length=64)
+
+
+class RecentNicknameBody(BaseModel):
+    nickname: Optional[str] = Field(default=None, max_length=128)
+
+
+@router.get("/device/recents")
+def list_recents(request: Request, db: Session = Depends(db_session)) -> dict[str, Any]:
+    user = _require_session_user(request, db)
+    rows = db.execute(
+        select(FirmwareDeviceRecent)
+        .where(FirmwareDeviceRecent.user_id == user.id)
+        .order_by(desc(FirmwareDeviceRecent.last_viewed_at))
+        .limit(RECENTS_LIMIT)
+    ).scalars().all()
+    return {"recents": [_serialize_recent(r) for r in rows]}
+
+
+@router.post("/device/recents/upsert")
+def upsert_recent(
+    body: RecentUpsertBody,
+    request: Request,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    user = _require_session_user(request, db)
+    mac = normalize_mac(body.mac)
+    if mac is None:
+        raise HTTPException(status_code=400, detail="Invalid MAC address")
+
+    row = db.execute(
+        select(FirmwareDeviceRecent).where(
+            FirmwareDeviceRecent.user_id == user.id,
+            FirmwareDeviceRecent.mac == mac,
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = FirmwareDeviceRecent(user_id=user.id, mac=mac, last_viewed_at=now)
+        db.add(row)
+    else:
+        row.last_viewed_at = now
+    db.commit()
+    db.refresh(row)
+    return _serialize_recent(row)
+
+
+@router.patch("/device/recents/{mac}")
+def set_recent_nickname(
+    mac: str,
+    body: RecentNicknameBody,
+    request: Request,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    user = _require_session_user(request, db)
+    m = normalize_mac(mac)
+    if m is None:
+        raise HTTPException(status_code=400, detail="Invalid MAC address")
+
+    row = db.execute(
+        select(FirmwareDeviceRecent).where(
+            FirmwareDeviceRecent.user_id == user.id,
+            FirmwareDeviceRecent.mac == m,
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        # Auto-create so the user can tag a device without viewing it first.
+        row = FirmwareDeviceRecent(user_id=user.id, mac=m)
+        db.add(row)
+
+    nickname = (body.nickname or "").strip() or None
+    row.nickname = nickname
+    db.commit()
+    db.refresh(row)
+    return _serialize_recent(row)
+
+
+@router.delete("/device/recents/{mac}")
+def delete_recent(
+    mac: str,
+    request: Request,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    user = _require_session_user(request, db)
+    m = normalize_mac(mac)
+    if m is None:
+        raise HTTPException(status_code=400, detail="Invalid MAC address")
+
+    row = db.execute(
+        select(FirmwareDeviceRecent).where(
+            FirmwareDeviceRecent.user_id == user.id,
+            FirmwareDeviceRecent.mac == m,
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return {"ok": True, "mac": m}

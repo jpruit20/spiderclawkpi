@@ -719,6 +719,20 @@ export const api = {
     ),
   firmwareOverview: (signal?: AbortSignal) =>
     request<FirmwareOverview>('/api/firmware/overview', { signal }),
+  firmwareOverviewMetrics: (
+    params: { start?: string; end?: string; firmware_version?: string },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (params.start) q.set('start', params.start)
+    if (params.end) q.set('end', params.end)
+    if (params.firmware_version) q.set('firmware_version', params.firmware_version)
+    const qs = q.toString()
+    return request<FirmwareOverviewMetrics>(
+      `/api/firmware/overview/metrics${qs ? `?${qs}` : ''}`,
+      { signal },
+    )
+  },
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>
@@ -731,6 +745,24 @@ export const api = {
     request<{ mac: string; count: number; sessions: FirmwareSession[] }>(
       `/api/firmware/device/${encodeURIComponent(mac)}/sessions?limit=${limit}`, { signal },
     ),
+  firmwareDeviceRecents: (signal?: AbortSignal) =>
+    request<{ recents: FirmwareDeviceRecent[] }>('/api/firmware/device/recents', { signal }),
+  firmwareDeviceRecentUpsert: (mac: string) =>
+    request<FirmwareDeviceRecent>('/api/firmware/device/recents/upsert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac }),
+    }),
+  firmwareDeviceRecentNickname: (mac: string, nickname: string | null) =>
+    request<FirmwareDeviceRecent>(`/api/firmware/device/recents/${encodeURIComponent(mac)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname }),
+    }),
+  firmwareDeviceRecentDelete: (mac: string) =>
+    request<{ ok: boolean; mac: string }>(`/api/firmware/device/recents/${encodeURIComponent(mac)}`, {
+      method: 'DELETE',
+    }),
   firmwareDeployPreview: (body: FirmwareDeployPreviewBody) =>
     request<FirmwareDeployPreviewResponse>('/api/firmware/deploy/preview', {
       method: 'POST',
@@ -871,6 +903,26 @@ export interface FirmwareLookupResult {
   query: string
   resolved_as: 'mac' | 'user_key'
   devices: FirmwareLookupDevice[]
+}
+
+export interface FirmwareOverviewMetrics {
+  start: string
+  end: string
+  firmware_version: string | null
+  sessions: number
+  devices: number
+  cook_success_rate: number | null
+  avg_in_control_pct: number | null
+  disconnect_events: number
+  disconnect_rate_per_session: number | null
+  firmware_distribution: Array<{ firmware_version: string; devices: number; pct: number }>
+  active_devices_window: number
+}
+
+export interface FirmwareDeviceRecent {
+  mac: string
+  nickname: string | null
+  last_viewed_at: string | null
 }
 
 export interface FirmwareOverview {

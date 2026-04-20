@@ -1392,6 +1392,24 @@ class FirmwareDeployPreviewToken(TimestampMixin, Base):
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class FirmwareDeviceRecent(TimestampMixin, Base):
+    """Per-user device drill-down history + nickname tag.
+
+    One row per (user, mac). Upserted every time a user opens a device
+    in the Firmware Hub. The ``nickname`` is the user-assigned fast-lookup
+    label (e.g. "office grill", "Matías test unit"). ``last_viewed_at``
+    drives the recents ordering.
+    """
+    __tablename__ = "firmware_device_recents"
+    __table_args__ = (UniqueConstraint("user_id", "mac", name="uq_firmware_device_recents_user_mac"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    mac: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    nickname: Mapped[Optional[str]] = mapped_column(String(128))
+    last_viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
 class BetaCohortMember(TimestampMixin, Base):
     __tablename__ = "beta_cohort_members"
     __table_args__ = (UniqueConstraint("release_id", "device_id", name="uq_beta_cohort_release_device"),)
