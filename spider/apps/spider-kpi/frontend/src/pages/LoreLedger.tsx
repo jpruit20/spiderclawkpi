@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api, ApiError } from '../lib/api'
-import type { LoreEvent, LoreEventStats, LoreConfidence } from '../lib/types'
+import type { LoreEvent, LoreEventStats, LoreConfidence, LoreEventCreate } from '../lib/types'
 
 /**
  * Lore Ledger — the review/curation surface for the company-lore corpus.
@@ -54,6 +54,15 @@ const CONFIDENCE_COLOR: Record<LoreConfidence, string> = {
   rumored:   '#9ca3af',
 }
 
+const DIVISION_COLOR: Record<string, string> = {
+  commercial:         '#6ea8ff',
+  support:            '#f59e0b',
+  marketing:          '#ff6d7a',
+  product_engineering:'#a78bfa',
+  executive:          '#fbbf24',
+  deci:               '#34d399',
+}
+
 function yearRange(): string[] {
   const y = new Date().getFullYear()
   const out: string[] = []
@@ -81,6 +90,7 @@ export function LoreLedger() {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [showAdd, setShowAdd] = useState(false)
 
   // Debounce text search so each keystroke doesn't re-query.
   useEffect(() => {
@@ -225,6 +235,38 @@ export function LoreLedger() {
 
       {/* Stats strip */}
       {stats && <StatsStrip stats={stats} />}
+
+      {/* Division quick-filter pills */}
+      <section className="card" style={{ padding: '8px 12px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)', marginRight: 4 }}>Quick division:</span>
+          <DivisionPill label="all" active={division === 'all'} onClick={() => setDivision('all')} color="#9fb0d4" />
+          <DivisionPill label="company-wide" active={division === 'company'} onClick={() => setDivision('company')} color="#94a3b8" />
+          {DIVISIONS.map((d) => (
+            <DivisionPill
+              key={d}
+              label={d}
+              active={division === d}
+              onClick={() => setDivision(d)}
+              color={DIVISION_COLOR[d] || '#a78bfa'}
+              count={stats?.by_division?.[d]}
+            />
+          ))}
+          <span style={{ marginLeft: 'auto' }}>
+            <button type="button" onClick={() => setShowAdd((v) => !v)} style={btnStyle('#22c55e')}>
+              {showAdd ? '× Cancel' : '+ Add event'}
+            </button>
+          </span>
+        </div>
+      </section>
+
+      {/* Add event form */}
+      {showAdd && (
+        <AddEventForm
+          onCancel={() => setShowAdd(false)}
+          onCreated={() => { setShowAdd(false); showToast('Event created'); load() }}
+        />
+      )}
 
       {/* Filter bar */}
       <section className="card">
@@ -599,4 +641,121 @@ const btnStyleSmall = (color: string): React.CSSProperties => ({
 const typePillStyle: React.CSSProperties = {
   padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 600,
   whiteSpace: 'nowrap', display: 'inline-block',
+}
+
+/* ─── Division pill ───────────────────────────────────────────────────── */
+
+function DivisionPill({
+  label, active, onClick, color, count,
+}: { label: string; active: boolean; onClick: () => void; color: string; count?: number }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        background: active ? `${color}33` : 'transparent',
+        color: active ? color : 'var(--muted)',
+        border: `1px solid ${active ? color : 'rgba(255,255,255,0.1)'}`,
+        borderRadius: 12,
+        padding: '3px 10px',
+        fontSize: 11,
+        fontWeight: active ? 600 : 400,
+        cursor: 'pointer',
+      }}
+    >
+      {label}{count != null ? ` · ${count}` : ''}
+    </button>
+  )
+}
+
+/* ─── Add event form ──────────────────────────────────────────────────── */
+
+function AddEventForm({ onCancel, onCreated }: { onCancel: () => void; onCreated: () => void }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [form, setForm] = useState<LoreEventCreate>({
+    event_type: 'launch',
+    title: '',
+    description: '',
+    start_date: today,
+    end_date: '',
+    division: '',
+    confidence: 'confirmed',
+    source_type: 'manual',
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const submit = async () => {
+    if (!form.title.trim()) { setErr('Title is required'); return }
+    setSaving(true); setErr(null)
+    try {
+      await api.loreEventCreate({
+        event_type: form.event_type,
+        title: form.title.trim(),
+        description: (form.description || '').trim() || null,
+        start_date: form.start_date,
+        end_date: form.end_date || null,
+        division: form.division || null,
+        confidence: form.confidence || 'confirmed',
+        source_type: form.source_type || 'manual',
+      })
+      onCreated()
+    } catch (e: any) {
+      setErr(e?.message || 'Create failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="card" style={{ borderLeft: '3px solid #22c55e' }}>
+      <div className="card-title" style={{ marginBottom: 8 }}>New event</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: 12 }}>
+        <label style={lblStyle}>Type
+          <select value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value })} style={selStyle}>
+            {EVENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </label>
+        <label style={lblStyle}>Start date
+          <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} style={dateInputStyle} />
+        </label>
+        <label style={lblStyle}>End date (optional)
+          <input type="date" value={form.end_date || ''} onChange={(e) => setForm({ ...form, end_date: e.target.value })} style={dateInputStyle} />
+        </label>
+        <label style={lblStyle}>Division
+          <select value={form.division || ''} onChange={(e) => setForm({ ...form, division: e.target.value })} style={selStyle}>
+            <option value="">(company-wide)</option>
+            {DIVISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </label>
+        <label style={lblStyle}>Confidence
+          <select value={form.confidence} onChange={(e) => setForm({ ...form, confidence: e.target.value as LoreConfidence })} style={selStyle}>
+            {CONFIDENCES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+      </div>
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <input
+          placeholder="Title"
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })}
+          style={{ ...txtStyle, fontSize: 13 }}
+          autoFocus
+        />
+        <textarea
+          placeholder="Description (optional)"
+          value={form.description || ''}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          style={{ ...txtStyle, minHeight: 60, resize: 'vertical', fontFamily: 'inherit' }}
+        />
+      </div>
+      {err && <div style={{ color: '#ef4444', fontSize: 11, marginTop: 6 }}>{err}</div>}
+      <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+        <button type="button" onClick={submit} disabled={saving} style={btnStyle('#22c55e')}>
+          {saving ? 'Saving…' : 'Create event'}
+        </button>
+        <button type="button" onClick={onCancel} disabled={saving} style={btnStyle('#9fb0d4')}>Cancel</button>
+      </div>
+    </section>
+  )
 }
