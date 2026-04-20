@@ -225,9 +225,9 @@ export const api = {
     if (start) params.set('start', start)
     if (end) params.set('end', end)
     const qs = params.toString()
-    return request<TelemetrySummary>(`/api/telemetry/summary${qs ? `?${qs}` : ''}`, { signal })
+    return request<TelemetrySummary>(`/api/telemetry/summary${qs ? `?${qs}` : ''}`, { signal, timeoutMs: 45000 })
   },
-  cookAnalysis: (start: string, end: string, signal?: AbortSignal) => request<Record<string, any>>(`/api/telemetry/cook-analysis?start=${start}&end=${end}`, { signal }),
+  cookAnalysis: (start: string, end: string, signal?: AbortSignal) => request<Record<string, any>>(`/api/telemetry/cook-analysis?start=${start}&end=${end}`, { signal, timeoutMs: 30000 }),
   supportOverview: (signal?: AbortSignal) => request<SupportOverviewResponse>('/api/support/overview', { signal }),
   supportAgents: (signal?: AbortSignal) => request<FreshdeskAgentDailyItem[]>('/api/support/agents', { signal }),
   supportTickets: (signal?: AbortSignal) => request<FreshdeskTicketItem[]>('/api/support/tickets', { signal }),
@@ -523,7 +523,7 @@ export const api = {
     if (start) params.set('start', start)
     if (end) params.set('end', end)
     const qs = params.toString()
-    return request<AppSideFleetResponse>(`/api/telemetry/app-side${qs ? `?${qs}` : ''}`, { signal })
+    return request<AppSideFleetResponse>(`/api/telemetry/app-side${qs ? `?${qs}` : ''}`, { signal, timeoutMs: 30000 })
   },
 
   // Company Lore: seasonality ------------------------------------------

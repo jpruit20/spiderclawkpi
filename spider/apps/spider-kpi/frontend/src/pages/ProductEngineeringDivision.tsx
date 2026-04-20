@@ -336,33 +336,47 @@ export function ProductEngineeringDivision() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Date range — defaults to last 30 days
+  // Date range — defaults to last 30 days. The inputs update `dateStart` /
+  // `dateEnd` immediately for responsive UI, but we fan out requests from
+  // the debounced values below so that rapid typing through a date field
+  // doesn't flood the backend with 5+ parallel requests per keystroke (the
+  // cause of the date-range timeout errors we were seeing on this page).
   const [dateStart, setDateStart] = useState(() => {
     return addDays(todayET(), -30)
   })
   const [dateEnd, setDateEnd] = useState(() => todayET())
+  const [debouncedStart, setDebouncedStart] = useState(dateStart)
+  const [debouncedEnd, setDebouncedEnd] = useState(dateEnd)
   const [showDatePicker, setShowDatePicker] = useState(false)
+
+  useEffect(() => {
+    const h = setTimeout(() => {
+      setDebouncedStart(dateStart)
+      setDebouncedEnd(dateEnd)
+    }, 350)
+    return () => clearTimeout(h)
+  }, [dateStart, dateEnd])
 
   // Cluster drill-down state
   const [clusterDetail, setClusterDetail] = useState<ClusterTicketDetail | null>(null)
   const [clusterDetailLoading, setClusterDetailLoading] = useState(false)
 
   const daysDiff = useMemo(() => {
-    const start = new Date(dateStart).getTime()
-    const end = new Date(dateEnd).getTime()
+    const start = new Date(debouncedStart).getTime()
+    const end = new Date(debouncedEnd).getTime()
     return Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)))
-  }, [dateStart, dateEnd])
+  }, [debouncedStart, debouncedEnd])
 
   // Pre-materialized cook analysis (separate fetch — instant from daily table)
   const [cookData, setCookData] = useState<Record<string, any> | null>(null)
 
   useEffect(() => {
-    let cancelled = false
-    api.cookAnalysis(dateStart, dateEnd)
-      .then(data => { if (!cancelled) setCookData(data) })
-      .catch(() => { if (!cancelled) setCookData(null) })
-    return () => { cancelled = true }
-  }, [dateStart, dateEnd])
+    const ctrl = new AbortController()
+    api.cookAnalysis(debouncedStart, debouncedEnd, ctrl.signal)
+      .then(data => { if (!ctrl.signal.aborted) setCookData(data) })
+      .catch(() => { if (!ctrl.signal.aborted) setCookData(null) })
+    return () => ctrl.abort()
+  }, [debouncedStart, debouncedEnd])
 
   // Cook outcomes summary (the 2026-04-18 intent/outcome/PID-quality
   // model). Held-target rate + in-control % drive the new hero gauges.
@@ -370,11 +384,11 @@ export function ProductEngineeringDivision() {
   // yet (totals.held_target_rate === null).
   const [cookOutcomes, setCookOutcomes] = useState<Record<string, any> | null>(null)
   useEffect(() => {
-    let cancelled = false
-    api.cookOutcomesSummary(daysDiff)
-      .then(data => { if (!cancelled) setCookOutcomes(data) })
-      .catch(() => { if (!cancelled) setCookOutcomes(null) })
-    return () => { cancelled = true }
+    const ctrl = new AbortController()
+    api.cookOutcomesSummary(daysDiff, ctrl.signal)
+      .then(data => { if (!ctrl.signal.aborted) setCookOutcomes(data) })
+      .catch(() => { if (!ctrl.signal.aborted) setCookOutcomes(null) })
+    return () => ctrl.abort()
   }, [daysDiff])
 
   // Cook duration + unique-device cohort stats. Drives:
@@ -384,11 +398,11 @@ export function ProductEngineeringDivision() {
   //     broad cohort?' question)
   const [cookDuration, setCookDuration] = useState<Record<string, any> | null>(null)
   useEffect(() => {
-    let cancelled = false
-    api.cookDurationStats(daysDiff)
-      .then(data => { if (!cancelled) setCookDuration(data) })
-      .catch(() => { if (!cancelled) setCookDuration(null) })
-    return () => { cancelled = true }
+    const ctrl = new AbortController()
+    api.cookDurationStats(daysDiff, ctrl.signal)
+      .then(data => { if (!ctrl.signal.aborted) setCookDuration(data) })
+      .catch(() => { if (!ctrl.signal.aborted) setCookDuration(null) })
+    return () => ctrl.abort()
   }, [daysDiff])
 
   // CX-derived probe-failure rate. Replaces the misleading
@@ -399,28 +413,28 @@ export function ProductEngineeringDivision() {
   // need a replacement").
   const [probeFailure, setProbeFailure] = useState<Record<string, any> | null>(null)
   useEffect(() => {
-    let cancelled = false
-    api.probeFailureRate(Math.max(daysDiff, 30))
-      .then(data => { if (!cancelled) setProbeFailure(data) })
-      .catch(() => { if (!cancelled) setProbeFailure(null) })
-    return () => { cancelled = true }
+    const ctrl = new AbortController()
+    api.probeFailureRate(Math.max(daysDiff, 30), ctrl.signal)
+      .then(data => { if (!ctrl.signal.aborted) setProbeFailure(data) })
+      .catch(() => { if (!ctrl.signal.aborted) setProbeFailure(null) })
+    return () => ctrl.abort()
   }, [daysDiff])
 
   useEffect(() => {
-    let cancelled = false
+    const ctrl = new AbortController()
     async function load() {
       setLoading(true)
       setError(null)
       try {
         const [telData, issuesData, radarData, miData, cxData, appSideData] = await Promise.all([
-          api.telemetrySummary(daysDiff, undefined, dateStart, dateEnd),
-          api.engineeringIssues().catch(() => null),
-          api.issues().catch(() => null),
-          api.marketIntelligence(30).catch(() => null),
-          api.cxSnapshot().catch(() => null),
-          api.appSideFleet(daysDiff, undefined, dateStart, dateEnd).catch(() => null),
+          api.telemetrySummary(daysDiff, ctrl.signal, debouncedStart, debouncedEnd),
+          api.engineeringIssues(ctrl.signal).catch(() => null),
+          api.issues(ctrl.signal).catch(() => null),
+          api.marketIntelligence(30, ctrl.signal).catch(() => null),
+          api.cxSnapshot(ctrl.signal).catch(() => null),
+          api.appSideFleet(daysDiff, ctrl.signal, debouncedStart, debouncedEnd).catch(() => null),
         ])
-        if (!cancelled) {
+        if (!ctrl.signal.aborted) {
           setTelemetry(telData)
           setGithubIssues(issuesData)
           setIssueRadar(radarData)
@@ -429,14 +443,14 @@ export function ProductEngineeringDivision() {
           setAppSide(appSideData)
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load product data')
+        if (!ctrl.signal.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load product data')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!ctrl.signal.aborted) setLoading(false)
       }
     }
     void load()
-    return () => { cancelled = true }
-  }, [daysDiff, dateStart, dateEnd])
+    return () => ctrl.abort()
+  }, [daysDiff, debouncedStart, debouncedEnd])
 
   const loadClusterDetail = useCallback(async (theme: string) => {
     setClusterDetailLoading(true)
