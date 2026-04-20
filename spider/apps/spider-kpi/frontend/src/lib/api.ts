@@ -541,7 +541,11 @@ export const api = {
 
   // Company Lore: event timeline --------------------------------------
   loreEvents: (
-    opts: { start?: string; end?: string; division?: string; event_type?: string; confidence?: string; limit?: number } = {},
+    opts: {
+      start?: string; end?: string; division?: string;
+      event_type?: string; confidence?: string;
+      q?: string; limit?: number;
+    } = {},
     signal?: AbortSignal,
   ) => {
     const p = new URLSearchParams()
@@ -550,6 +554,7 @@ export const api = {
     if (opts.division) p.set('division', opts.division)
     if (opts.event_type) p.set('event_type', opts.event_type)
     if (opts.confidence) p.set('confidence', opts.confidence)
+    if (opts.q) p.set('q', opts.q)
     if (opts.limit != null) p.set('limit', String(opts.limit))
     const qs = p.toString()
     return request<LoreEventsResponse>(`/api/lore/events${qs ? `?${qs}` : ''}`, { signal })
@@ -579,4 +584,21 @@ export const api = {
     const qs = p.toString()
     return request<LoreEventStats>(`/api/lore/events/stats/summary${qs ? `?${qs}` : ''}`, { signal })
   },
+  loreEventBulkUpdate: (
+    body: { ids: number[]; confidence?: string; event_type?: string; division?: string | null },
+    signal?: AbortSignal,
+  ) =>
+    request<{ updated: number; ids: number[] }>('/api/lore/events/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  loreEventBulkDelete: (ids: number[], signal?: AbortSignal) =>
+    request<{ deleted: number }>('/api/lore/events/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+      signal,
+    }),
 }

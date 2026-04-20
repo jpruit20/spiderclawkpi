@@ -19,6 +19,7 @@ const SystemHealthPage = lazy(() => import('./pages/SystemHealth').then((m) => (
 const SocialIntelligence = lazy(() => import('./pages/SocialIntelligence').then((m) => ({ default: m.SocialIntelligence })))
 const Deci = lazy(() => import('./pages/Deci').then((m) => ({ default: m.Deci })))
 const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage').then((m) => ({ default: m.TelemetryAnalysisPage })))
+const LoreLedger = lazy(() => import('./pages/LoreLedger').then((m) => ({ default: m.LoreLedger })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -48,6 +49,7 @@ export function App() {
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />
         <Route path="/social" element={withBoundary('Social Intelligence', <SocialIntelligence />)} />
         <Route path="/deci" element={withBoundary('DECI', <Deci />)} />
+        <Route path="/lore" element={withBoundary('Lore Ledger', <LoreLedger />)} />
         <Route path="/root-cause" element={withBoundary('Root Cause', <RootCause />)} />
         <Route path="/system-health" element={withBoundary('System Health', <SystemHealthPage />)} />
         <Route path="/commercial" element={withBoundary('Revenue Engine', <RevenueEngine />)} />

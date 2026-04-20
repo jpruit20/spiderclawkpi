@@ -196,6 +196,7 @@ def list_events(
     division: Optional[str] = Query(None, description="filter by division (or 'company' for division IS NULL)"),
     event_type: Optional[str] = Query(None, description="filter by event_type"),
     confidence: Optional[str] = Query(None, description="filter by confidence"),
+    q_text: Optional[str] = Query(None, alias="q", description="case-insensitive search over title + description"),
     limit: int = Query(500, ge=1, le=5000),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
@@ -230,6 +231,14 @@ def list_events(
         q = q.where(LoreEvent.event_type == event_type)
     if confidence:
         q = q.where(LoreEvent.confidence == confidence)
+    if q_text:
+        pattern = f"%{q_text.strip()}%"
+        q = q.where(
+            or_(
+                LoreEvent.title.ilike(pattern),
+                LoreEvent.description.ilike(pattern),
+            )
+        )
 
     q = q.order_by(LoreEvent.start_date.asc()).limit(limit)
     rows = db.execute(q).scalars().all()
@@ -319,6 +328,52 @@ def delete_event(event_id: int, db: Session = Depends(db_session)) -> None:
     db.delete(ev)
     db.commit()
     return None
+
+
+class BulkUpdate(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+    confidence: Optional[str] = None
+    event_type: Optional[str] = None
+    division: Optional[str] = None
+
+
+@router.post("/events/bulk-update")
+def bulk_update_events(body: BulkUpdate, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Apply the same field update to many events at once. Used by the
+    Lore Ledger review flow — e.g. promote 10 Opus-inferred events to
+    'confirmed' in a single click."""
+    _validate_event_fields(body.event_type, body.confidence)
+    updates: dict[str, Any] = {}
+    if body.confidence is not None:
+        updates["confidence"] = body.confidence
+    if body.event_type is not None:
+        updates["event_type"] = body.event_type
+    if body.division is not None:
+        updates["division"] = body.division if body.division else None
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields to update")
+
+    rows = db.execute(select(LoreEvent).where(LoreEvent.id.in_(body.ids))).scalars().all()
+    for ev in rows:
+        for k, v in updates.items():
+            setattr(ev, k, v)
+    db.commit()
+    return {"updated": len(rows), "ids": [ev.id for ev in rows]}
+
+
+class BulkDelete(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/events/bulk-delete")
+def bulk_delete_events(body: BulkDelete, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Delete many events at once. Used by the Lore Ledger review flow
+    to sweep obvious noise from an Opus-seeded batch."""
+    rows = db.execute(select(LoreEvent).where(LoreEvent.id.in_(body.ids))).scalars().all()
+    for ev in rows:
+        db.delete(ev)
+    db.commit()
+    return {"deleted": len(rows)}
 
 
 @router.get("/events/stats/summary")

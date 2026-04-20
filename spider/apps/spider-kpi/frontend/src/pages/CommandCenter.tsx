@@ -5,6 +5,7 @@ import { currency, fmtInt, fmtPct, formatDateTimeET, formatFreshness } from '../
 import {
   AnomalyBar, DivisionTile, MetricTile, SparklineHero, StatusLight, TileGrid,
 } from '../components/tiles'
+import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -318,16 +319,20 @@ export function CommandCenter() {
             </div>
             <div style={{ display: 'grid', gap: 6 }}>
               {top.map(({ a, tier }) => (
-                <AnomalyBar
-                  key={a.id}
-                  metric={a.metric}
-                  direction={a.direction}
-                  severity={tier}
-                  zScore={a.modified_z_score}
-                  businessDate={a.business_date}
-                  summary={a.summary || (tier === 'info' ? 'non-impact metric — informational only' : undefined)}
-                  href="/division/product-engineering"
-                />
+                <div key={a.id} style={{ display: 'grid', gap: 2 }}>
+                  <AnomalyBar
+                    metric={a.metric}
+                    direction={a.direction}
+                    severity={tier}
+                    zScore={a.modified_z_score}
+                    businessDate={a.business_date}
+                    summary={a.summary || (tier === 'info' ? 'non-impact metric — informational only' : undefined)}
+                    href="/division/product-engineering"
+                  />
+                  <div style={{ paddingLeft: 18 }}>
+                    <NearbyEventsBadge businessDate={a.business_date} division="product-engineering" />
+                  </div>
+                </div>
               ))}
             </div>
             {sorted.length > 4 && (
