@@ -62,6 +62,9 @@ def run_sync(source: str, db: Session = Depends(db_session)):
     elif source == "youtube":
         from app.ingestion.connectors.youtube import sync_youtube
         result = sync_youtube(db)
+    elif source == "youtube_lore":
+        from app.ingestion.connectors.youtube_lore import sync_youtube_lore
+        result = sync_youtube_lore(db)
     elif source == "google_reviews":
         from app.ingestion.connectors.google_reviews import sync_google_reviews
         result = sync_google_reviews(db)

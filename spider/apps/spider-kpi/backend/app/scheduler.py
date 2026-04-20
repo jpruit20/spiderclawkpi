@@ -178,6 +178,23 @@ def run_syncs() -> None:
         if youtube_due and not _already_running(db, "youtube"):
             from app.ingestion.connectors.youtube import sync_youtube
             any_success = _successful_result(sync_youtube(db)) or any_success
+        # YouTube -> Lore runs once a day (quota-heavy: walks full
+        # uploads playlist). Piggybacks on the same 6h gate as the
+        # social-mention sync but checks its own SourceSyncRun row.
+        latest_youtube_lore_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "youtube_lore")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        youtube_lore_due = (
+            latest_youtube_lore_run is None
+            or latest_youtube_lore_run.started_at is None
+            or latest_youtube_lore_run.started_at <= datetime.now(timezone.utc) - timedelta(hours=24)
+        )
+        if youtube_lore_due and not _already_running(db, "youtube_lore"):
+            from app.ingestion.connectors.youtube_lore import sync_youtube_lore
+            any_success = _successful_result(sync_youtube_lore(db)) or any_success
         if any_success and not _already_running(db, "decision-engine"):
             recompute_daily_kpis(db)
             recompute_diagnostics(db)
