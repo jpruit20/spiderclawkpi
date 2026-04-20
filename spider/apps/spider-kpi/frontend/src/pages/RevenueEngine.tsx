@@ -10,6 +10,7 @@ import { CompareToolbar } from '../components/CompareToolbar'
 import { BaselineBand } from '../components/BaselineBand'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
+import { ChannelMixCard } from '../components/ChannelMixCard'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
@@ -262,17 +263,10 @@ export function RevenueEngine() {
             </div>
           </section>
 
-          {/* Channel Revenue — blocked */}
-          <section className="card">
-            <div className="venom-panel-head"><strong>Channel Revenue Breakdown</strong><TruthBadge state="unavailable" /></div>
-            <div className="stack-list compact">
-              <div className="list-item status-bad">
-                <div className="item-head"><strong>Blocked</strong><span className="badge badge-bad">missing source</span></div>
-                <p>Channel-level revenue feed is not yet connected. This requires backend integration to split revenue by acquisition channel.</p>
-                <small>Owner: Joseph · Still trustworthy: total revenue, orders, sessions, conversion rate</small>
-              </div>
-            </div>
-          </section>
+          {/* Channel spend mix — Triple Whale */}
+          {range.startDate && range.endDate ? (
+            <ChannelMixCard range={{ startDate: range.startDate, endDate: range.endDate }} />
+          ) : null}
 
           {/* Navigation */}
           <section className="card">
