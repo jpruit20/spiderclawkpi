@@ -713,6 +713,10 @@ export const api = {
     request<{ ok: boolean; releases_evaluated: number }>('/api/beta/evaluate-all', { method: 'POST' }),
   betaSummary: (signal?: AbortSignal) =>
     request<BetaProgramSummary>('/api/beta/summary', { signal }),
+  betaAlphaCohort: (signal?: AbortSignal) =>
+    request<AlphaCohortResponse>('/api/beta/alpha-cohort', { signal }),
+  betaGammaStatus: (signal?: AbortSignal) =>
+    request<GammaStatusResponse>('/api/beta/gamma-status', { signal }),
   ecrs: (includeClosed = false, signal?: AbortSignal) =>
     request<{ ecrs: EcrItem[]; count: number; fields_expected: string[] }>(
       `/api/ecrs?include_closed=${includeClosed}`, { signal },
@@ -733,6 +737,12 @@ export const api = {
       { signal },
     )
   },
+  firmwareFleetControlHealth: (signal?: AbortSignal) =>
+    request<FirmwareFleetControlHealth>('/api/firmware/fleet/control-health', { signal }),
+  firmwareDeviceControlSignals: (mac: string, signal?: AbortSignal) =>
+    request<FirmwareDeviceControlSignals>(
+      `/api/firmware/device/${encodeURIComponent(mac)}/control-signals`, { signal },
+    ),
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>
@@ -903,6 +913,110 @@ export interface FirmwareLookupResult {
   query: string
   resolved_as: 'mac' | 'user_key'
   devices: FirmwareLookupDevice[]
+}
+
+export interface AlphaCohortMember {
+  device_id: string
+  user_id: string | null
+  state: string
+  candidate_score: number | null
+  invited_at: string | null
+  opted_in_at: string | null
+  ota_pushed_at: string | null
+  evaluated_at: string | null
+  release_id: number
+  release_version: string
+  release_title: string | null
+  release_status: string | null
+}
+
+export interface AlphaCohortResponse {
+  members: AlphaCohortMember[]
+  count: number
+  state_distribution: Record<string, number>
+}
+
+export interface GammaWave {
+  wave_index: number
+  target_pct: number | null
+  target_devices: number | null
+  scheduled_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  aws_job_id: string | null
+  status: string
+}
+
+export interface GammaReleaseStatus {
+  release_id: number
+  version: string
+  title: string | null
+  status: string | null
+  approved_for_gamma: boolean
+  approved_at: string | null
+  released_at: string | null
+  target_controller_model: string | null
+  waves: GammaWave[]
+  total_planned: number
+  aws_job_id_count: number
+}
+
+export interface GammaStatusResponse {
+  releases: GammaReleaseStatus[]
+  count: number
+}
+
+export interface FirmwareControlProbe {
+  probe: string
+  current_temp: number | null
+  target_temp: number | null
+}
+
+export interface FirmwareControlSignals {
+  target_temp: number | null
+  current_temp: number | null
+  gap_f: number | null
+  intensity: number | null
+  heating: boolean | null
+  engaged: boolean | null
+  paused: boolean | null
+  door_open: boolean | null
+  power_on: boolean | null
+  fahrenheit: boolean | null
+  rssi: number | null
+  firmware_version: string | null
+  model: string | null
+  errors: number[]
+  probes: FirmwareControlProbe[]
+}
+
+export interface FirmwareDeviceControlSignals {
+  mac: string
+  event_at: string | null
+  firmware_version?: string | null
+  signals: FirmwareControlSignals | null
+}
+
+export interface FirmwareFleetControlDevice {
+  mac: string | null
+  device_id: string
+  target_temp: number | null
+  current_temp: number | null
+  gap_f: number | null
+  intensity: number | null
+  firmware_version: string | null
+  sample_timestamp: string | null
+}
+
+export interface FirmwareFleetControlHealth {
+  window_seconds: number
+  in_control_gap_f: number
+  total_reporting_devices: number
+  active_cooks: number
+  in_control: number
+  out_of_control_count: number
+  out_of_control_devices: FirmwareFleetControlDevice[]
+  fetched_at: string
 }
 
 export interface FirmwareOverviewMetrics {

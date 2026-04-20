@@ -15,7 +15,7 @@ import { api, type BetaReleaseSummary, type BetaVerdictEvidence } from '../lib/a
  * truth for release profiles.
  */
 
-type Tag = { id: number; slug: string; label: string; description: string | null; archived: boolean }
+type Tag = { id: number; slug: string; label: string; description: string | null; archived: boolean; release_count?: number; latest_release_version?: string | null }
 type Candidate = { device_id: string; user_id: string | null; score: number; sessions_30d: number; tenure_days: number; matched_tags: string[] }
 type CohortMember = { device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null; ota_pushed_at: string | null; evaluated_at: string | null; verdict: BetaVerdictEvidence }
 
@@ -504,13 +504,15 @@ export function BetaProgramPanel() {
             <button className="btn-primary" onClick={handleAddTag} disabled={!newTagSlug.trim() || !newTagLabel.trim()}>Add tag</button>
           </div>
           <table className="data-table">
-            <thead><tr><th>Slug</th><th>Label</th><th>Description</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Slug</th><th>Label</th><th>Description</th><th>Releases</th><th>Latest</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {tags.map(t => (
                 <tr key={t.id} style={{ opacity: t.archived ? 0.5 : 1 }}>
                   <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{t.slug}</td>
                   <td>{t.label}</td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{t.description ?? '—'}</td>
+                  <td style={{ fontSize: 12 }}>{t.release_count ?? 0}</td>
+                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{t.latest_release_version ?? '—'}</td>
                   <td>{t.archived ? 'archived' : 'active'}</td>
                   <td><button className="btn-secondary" onClick={() => handleArchiveTag(t)}>{t.archived ? 'Restore' : 'Archive'}</button></td>
                 </tr>

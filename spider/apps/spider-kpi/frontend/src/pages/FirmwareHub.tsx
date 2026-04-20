@@ -21,12 +21,16 @@ import {
 } from 'recharts'
 import {
   api,
+  type AlphaCohortResponse,
   type FirmwareOverviewMetrics,
   type FirmwareDeviceSummary,
   type FirmwareDeviceShadow,
   type FirmwareDeviceActiveCook,
+  type FirmwareDeviceControlSignals,
   type FirmwareDeviceRecent,
+  type FirmwareFleetControlHealth,
   type FirmwareSession,
+  type GammaStatusResponse,
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
@@ -95,9 +99,9 @@ export function FirmwareHub() {
       </section>
 
       {tab === 'overview' ? <OverviewTab /> : null}
-      {tab === 'alpha' ? <PlaceholderTab title="Alpha (R&D) cohort" copy="Spider Grills-internal grills only (< 10 devices). Shares the BetaCohortMember schema — separation coming in Phase 2 when the stage enum is wired in. For now, add devices to a beta release and treat employees as the alpha cohort." /> : null}
+      {tab === 'alpha' ? <AlphaCohortPanel /> : null}
       {tab === 'beta' ? <BetaProgramPanel /> : null}
-      {tab === 'gamma' ? <PlaceholderTab title="Gamma rollout" copy="Production-wide 10%/day progression once a beta clears its verdict. Surfaces the IoT job IDs + per-wave device counts in Phase 2." /> : null}
+      {tab === 'gamma' ? <GammaWavesPanel /> : null}
       {tab === 'device' ? <DeviceDrillDown /> : null}
       {tab === 'deploy' ? <FirmwareDeployPanel /> : null}
       {tab === 'log' ? <FirmwareDeployLogView /> : null}
@@ -105,11 +109,279 @@ export function FirmwareHub() {
   )
 }
 
-function PlaceholderTab({ title, copy }: { title: string; copy: string }) {
+// ---------------------------------------------------------------------------
+// Alpha cohort panel (R&D grills, opt_in_source='alpha')
+// ---------------------------------------------------------------------------
+
+function AlphaCohortPanel() {
+  const [data, setData] = useState<AlphaCohortResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    setLoading(true)
+    api.betaAlphaCohort(ctl.signal)
+      .then(d => { setData(d); setError(null) })
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+      .finally(() => setLoading(false))
+    return () => ctl.abort()
+  }, [])
+
+  if (loading) return <section className="card"><div className="state-message">Loading alpha cohort…</div></section>
+  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
+  if (!data) return null
+
+  return (
+    <>
+      <section className="card">
+        <div className="card-title">Alpha (R&D) cohort</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
+          Spider Grills-internal grills — cohort members with <code>opt_in_source = 'alpha'</code>.
+          Shares the BetaCohortMember schema with beta but is kept separate here so customer devices
+          don't show up in the R&D view.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
+          <Stat label="Alpha members" value={data.count.toLocaleString()} />
+          {Object.entries(data.state_distribution).map(([state, n]) => (
+            <Stat key={state} label={state} value={String(n)} />
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-title">Members ({data.count})</div>
+        {data.members.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+            No alpha members yet. Add one by inviting an internal device to a release and recording
+            the opt-in with <code>source=alpha</code>.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                  <th style={{ padding: '6px 8px' }}>Release</th>
+                  <th>Device</th>
+                  <th>User</th>
+                  <th>State</th>
+                  <th>Score</th>
+                  <th>Invited</th>
+                  <th>Opted in</th>
+                  <th>OTA pushed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.members.map(m => (
+                  <tr key={`${m.release_id}:${m.device_id}`} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px' }}>{m.release_version}{m.release_title ? ` · ${m.release_title}` : ''}</td>
+                    <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{m.device_id.slice(0, 10)}…</td>
+                    <td>{m.user_id ?? '—'}</td>
+                    <td>{m.state}</td>
+                    <td>{m.candidate_score != null ? m.candidate_score.toFixed(2) : '—'}</td>
+                    <td>{fmtDateTime(m.invited_at)}</td>
+                    <td>{fmtDateTime(m.opted_in_at)}</td>
+                    <td>{fmtDateTime(m.ota_pushed_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Gamma waves panel (production rollout)
+// ---------------------------------------------------------------------------
+
+function GammaWavesPanel() {
+  const [data, setData] = useState<GammaStatusResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    setLoading(true)
+    api.betaGammaStatus(ctl.signal)
+      .then(d => { setData(d); setError(null) })
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+      .finally(() => setLoading(false))
+    return () => ctl.abort()
+  }, [])
+
+  if (loading) return <section className="card"><div className="state-message">Loading gamma status…</div></section>
+  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
+  if (!data) return null
+
+  if (data.releases.length === 0) {
+    return (
+      <section className="card">
+        <div className="card-title">Gamma rollout</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5, maxWidth: 720 }}>
+          No releases currently approved for gamma. Gamma waves progress a release across
+          production at ~10%/day once its beta verdict clears. Flip <code>approved_for_gamma</code> on
+          a release to start staging waves here.
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <>
+      {data.releases.map(r => (
+        <section key={r.release_id} className="card">
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div className="card-title" style={{ marginBottom: 2 }}>{r.version}{r.title ? ` · ${r.title}` : ''}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {r.target_controller_model ?? 'any controller'} · approved {fmtDateTime(r.approved_at)}
+                {r.released_at ? ` · released ${fmtDateTime(r.released_at)}` : ''}
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {r.waves.length} wave{r.waves.length === 1 ? '' : 's'} planned · {r.total_planned.toLocaleString()} devices total
+            </div>
+          </div>
+          {r.waves.length === 0 ? (
+            <div style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)' }}>
+              Approved for gamma but no wave plan set yet. Populate <code>gamma_plan_json</code> on
+              the release to stage waves.
+            </div>
+          ) : (
+            <div style={{ marginTop: 12, overflowX: 'auto' }}>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 680 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                    <th style={{ padding: '6px 8px' }}>Wave</th>
+                    <th>Target %</th>
+                    <th>Devices</th>
+                    <th>Scheduled</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                    <th>IoT job</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.waves.map(w => (
+                    <tr key={w.wave_index} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px' }}>Wave {w.wave_index}</td>
+                      <td>{w.target_pct != null ? `${w.target_pct}%` : '—'}</td>
+                      <td>{w.target_devices?.toLocaleString() ?? '—'}</td>
+                      <td>{fmtDateTime(w.scheduled_at)}</td>
+                      <td>{fmtDateTime(w.started_at)}</td>
+                      <td>{fmtDateTime(w.completed_at)}</td>
+                      <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                        {w.aws_job_id ? w.aws_job_id.slice(0, 16) + '…' : '—'}
+                      </td>
+                      <td>{w.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ))}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Fleet control health (Agustin app-control review)
+// ---------------------------------------------------------------------------
+
+function FleetControlHealthCard() {
+  const [data, setData] = useState<FirmwareFleetControlHealth | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    const pull = async () => {
+      try {
+        const d = await api.firmwareFleetControlHealth()
+        if (!alive) return
+        setData(d)
+        setError(null)
+      } catch (e: unknown) {
+        if (alive) setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+    pull()
+    const t = window.setInterval(pull, 30_000)
+    return () => { alive = false; window.clearInterval(t) }
+  }, [])
+
+  if (loading && !data) return <section className="card"><div className="state-message">Loading fleet control health…</div></section>
+  if (error && !data) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
+  if (!data) return null
+
+  const controlPct = data.active_cooks > 0
+    ? `${Math.round((data.in_control / data.active_cooks) * 100)}%`
+    : '—'
+
   return (
     <section className="card">
-      <div className="card-title">{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5, maxWidth: 720 }}>{copy}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div className="card-title" style={{ marginBottom: 2 }}>Fleet control health — live</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Last {Math.round(data.window_seconds / 60)} min · in-control = |target − current| ≤ {data.in_control_gap_f}°F · refreshes every 30 s
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+          fetched {new Date(data.fetched_at).toLocaleTimeString()}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
+        <Stat label="Reporting (10 min)" value={data.total_reporting_devices.toLocaleString()} />
+        <Stat label="Active cooks" value={data.active_cooks.toLocaleString()} />
+        <Stat label="In control" value={`${data.in_control} / ${data.active_cooks} (${controlPct})`} />
+        <Stat label="Out of control" value={data.out_of_control_count.toLocaleString()} />
+      </div>
+      {data.out_of_control_devices.length > 0 ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
+            Currently out of control (largest gap first):
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 640 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                  <th style={{ padding: '6px 8px' }}>MAC</th>
+                  <th>Target</th>
+                  <th>Current</th>
+                  <th>Gap</th>
+                  <th>Intensity</th>
+                  <th>Firmware</th>
+                  <th>Last sample</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.out_of_control_devices.map(d => (
+                  <tr key={d.device_id} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{d.mac ?? '—'}</td>
+                    <td>{fmtTemp(d.target_temp)}</td>
+                    <td>{fmtTemp(d.current_temp)}</td>
+                    <td style={{ color: d.gap_f != null && d.gap_f < 0 ? 'var(--red)' : '#f59e0b' }}>
+                      {d.gap_f != null ? `${d.gap_f > 0 ? '+' : ''}${Math.round(d.gap_f)}°F` : '—'}
+                    </td>
+                    <td>{d.intensity != null ? `${Math.round(d.intensity)}%` : '—'}</td>
+                    <td>{d.firmware_version ?? '—'}</td>
+                    <td>{fmtDateTime(d.sample_timestamp)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -186,6 +458,7 @@ function OverviewTab() {
 
   return (
     <>
+      <FleetControlHealthCard />
       <section className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
@@ -534,6 +807,7 @@ function DevicePanel({ mac }: { mac: string }) {
   const [shadow, setShadow] = useState<FirmwareDeviceShadow | null>(null)
   const [cook, setCook] = useState<FirmwareDeviceActiveCook | null>(null)
   const [sessions, setSessions] = useState<FirmwareSession[]>([])
+  const [control, setControl] = useState<FirmwareDeviceControlSignals | null>(null)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
@@ -555,18 +829,20 @@ function DevicePanel({ mac }: { mac: string }) {
     return () => { mountedRef.current = false; ctl.abort() }
   }, [mac])
 
-  // Poll shadow + active cook every 15s.
+  // Poll shadow + active cook + control signals every 15s.
   useEffect(() => {
     let alive = true
     const pull = async () => {
       try {
-        const [sh, ck] = await Promise.all([
+        const [sh, ck, cs] = await Promise.all([
           api.firmwareDeviceShadow(mac),
           api.firmwareDeviceActiveCook(mac),
+          api.firmwareDeviceControlSignals(mac),
         ])
         if (!alive) return
         setShadow(sh)
         setCook(ck)
+        setControl(cs)
       } catch {
         // swallow transient poll errors
       }
@@ -630,6 +906,71 @@ function DevicePanel({ mac }: { mac: string }) {
           </div>
         ) : null}
       </section>
+
+      {/* Commanded vs reported — app-control review */}
+      {control?.signals ? (
+        <section className="card">
+          <div className="card-title">Commanded vs reported</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+            What the grill is honoring (target) vs. what it's doing now (actual). Gap is what the
+            PID loop is chasing.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
+            <Stat label="Commanded target" value={fmtTemp(control.signals.target_temp)} />
+            <Stat label="Reported current" value={fmtTemp(control.signals.current_temp)} />
+            <Stat
+              label="Gap"
+              value={
+                control.signals.gap_f != null
+                  ? `${control.signals.gap_f > 0 ? '+' : ''}${Math.round(control.signals.gap_f)}°F`
+                  : '—'
+              }
+            />
+            <Stat label="Intensity" value={control.signals.intensity != null ? `${Math.round(control.signals.intensity)}%` : '—'} />
+            <Stat label="Heating" value={control.signals.heating == null ? '—' : control.signals.heating ? 'Yes' : 'No'} />
+            <Stat label="Engaged" value={control.signals.engaged == null ? '—' : control.signals.engaged ? 'Yes' : 'No'} />
+            <Stat label="Paused" value={control.signals.paused == null ? '—' : control.signals.paused ? 'Yes' : 'No'} />
+            <Stat label="Door open" value={control.signals.door_open == null ? '—' : control.signals.door_open ? 'Yes' : 'No'} />
+            <Stat label="Power on" value={control.signals.power_on == null ? '—' : control.signals.power_on ? 'Yes' : 'No'} />
+          </div>
+          {control.signals.probes.length > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>Probes</div>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                    <th style={{ padding: '4px 8px' }}>Probe</th>
+                    <th>Target</th>
+                    <th>Current</th>
+                    <th>Gap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {control.signals.probes.map(p => {
+                    const gap = (p.current_temp != null && p.target_temp != null)
+                      ? p.current_temp - p.target_temp : null
+                    return (
+                      <tr key={p.probe} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '4px 8px' }}>{p.probe}</td>
+                        <td>{fmtTemp(p.target_temp)}</td>
+                        <td>{fmtTemp(p.current_temp)}</td>
+                        <td style={{ color: gap != null && Math.abs(gap) > 15 ? '#f59e0b' : 'inherit' }}>
+                          {gap != null ? `${gap > 0 ? '+' : ''}${Math.round(gap)}°F` : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {control.event_at ? (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted)' }}>
+              Sample at {fmtDateTime(control.event_at)}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* Active cook chart */}
       {cook?.active && trailData.length > 1 ? (

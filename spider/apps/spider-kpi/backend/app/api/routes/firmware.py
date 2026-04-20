@@ -524,6 +524,161 @@ def overview_metrics(
 
 
 # ---------------------------------------------------------------------------
+# App control review (commanded vs reported)
+#
+# We don't have a separate "app sent this command" stream — the app
+# writes the desired state via AWS IoT shadow, the grill accepts it and
+# echoes it back in its ``reported`` block. So "commanded" here means
+# the target the grill is honoring (``heat.t2.trgt``, ``probes.p2.trgt``)
+# and "actual" means what it's reporting (``mainTemp``, probe temps).
+# The gap is what the PID loop is working against.
+# ---------------------------------------------------------------------------
+
+
+_CONTROL_WINDOW_SECONDS = 600  # 10 min
+_IN_CONTROL_GAP_F = 15.0  # ± °F counts as "in control"
+
+
+def _extract_control_signals(raw_payload: dict | None) -> dict[str, Any]:
+    """Pull commanded + reported fields out of a stream-event payload.
+
+    Handles missing/partial payloads gracefully — every caller must
+    expect ``None`` for any individual field.
+    """
+    if not isinstance(raw_payload, dict):
+        return {}
+    reported = ((raw_payload.get("device_data") or {}).get("reported")) or {}
+    heat = (reported.get("heat") or {}).get("t2") or {}
+    probes = reported.get("probes") or {}
+
+    main_temp = reported.get("mainTemp")
+    target = heat.get("trgt")
+    gap = None
+    if isinstance(main_temp, (int, float)) and isinstance(target, (int, float)):
+        gap = float(main_temp) - float(target)
+
+    probe_signals = []
+    for key, p in probes.items():
+        if not isinstance(p, dict):
+            continue
+        probe_signals.append({
+            "probe": key,
+            "current_temp": p.get("temp"),
+            "target_temp": p.get("trgt"),
+        })
+
+    return {
+        "target_temp": target,
+        "current_temp": main_temp,
+        "gap_f": gap,
+        "intensity": heat.get("intensity"),
+        "heating": heat.get("heating"),
+        "engaged": reported.get("engaged"),
+        "paused": reported.get("paused"),
+        "door_open": reported.get("doorOpn"),
+        "power_on": reported.get("pwrOn"),
+        "fahrenheit": reported.get("fah"),
+        "rssi": reported.get("RSSI"),
+        "firmware_version": reported.get("vers"),
+        "model": reported.get("model"),
+        "errors": reported.get("errors") or [],
+        "probes": probe_signals,
+    }
+
+
+@router.get("/device/{mac}/control-signals")
+def device_control_signals(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]:
+    m = _require_mac(mac)
+    event = _latest_stream_event_for_mac(db, m)
+    if event is None:
+        return {"mac": m, "event_at": None, "signals": None}
+    signals = _extract_control_signals(event.raw_payload)
+    return {
+        "mac": m,
+        "event_at": event.sample_timestamp.isoformat() if event.sample_timestamp else None,
+        "firmware_version": event.firmware_version,
+        "signals": signals,
+    }
+
+
+@router.get("/fleet/control-health")
+def fleet_control_health(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Fleet-wide snapshot of who's currently cooking, who's in-control,
+    and who's running hot or cold.
+
+    Looks at each device's latest stream event in the last 10 minutes.
+    "Engaged" = reported.engaged=true. "In-control" = |main - target| ≤
+    ``_IN_CONTROL_GAP_F``. Returns both the tallies and the list of
+    out-of-control devices for Agustin to drill into.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=_CONTROL_WINDOW_SECONDS)
+
+    # Latest event per device_id in window.
+    subq = (
+        select(
+            TelemetryStreamEvent.device_id,
+            func.max(TelemetryStreamEvent.sample_timestamp).label("max_ts"),
+        )
+        .where(TelemetryStreamEvent.sample_timestamp >= cutoff)
+        .group_by(TelemetryStreamEvent.device_id)
+        .subquery()
+    )
+    latest_events = db.execute(
+        select(TelemetryStreamEvent)
+        .join(
+            subq,
+            (TelemetryStreamEvent.device_id == subq.c.device_id)
+            & (TelemetryStreamEvent.sample_timestamp == subq.c.max_ts),
+        )
+    ).scalars().all()
+
+    active_cooks = 0
+    in_control = 0
+    out_of_control: list[dict[str, Any]] = []
+    total_reporting = len(latest_events)
+
+    for ev in latest_events:
+        signals = _extract_control_signals(ev.raw_payload)
+        engaged = bool(signals.get("engaged"))
+        if not engaged:
+            continue
+        active_cooks += 1
+        gap = signals.get("gap_f")
+        if isinstance(gap, (int, float)):
+            if abs(gap) <= _IN_CONTROL_GAP_F:
+                in_control += 1
+            else:
+                # Use reported MAC (not device_id) for the UI — MAC is the
+                # user-visible id.
+                reported = ((ev.raw_payload or {}).get("device_data") or {}).get("reported") or {}
+                mac = (reported.get("mac") or "").lower() or None
+                out_of_control.append({
+                    "mac": mac,
+                    "device_id": ev.device_id,
+                    "target_temp": signals.get("target_temp"),
+                    "current_temp": signals.get("current_temp"),
+                    "gap_f": gap,
+                    "intensity": signals.get("intensity"),
+                    "firmware_version": signals.get("firmware_version"),
+                    "sample_timestamp": ev.sample_timestamp.isoformat() if ev.sample_timestamp else None,
+                })
+
+    out_of_control.sort(key=lambda d: abs(d["gap_f"]) if d["gap_f"] is not None else 0, reverse=True)
+
+    return {
+        "window_seconds": _CONTROL_WINDOW_SECONDS,
+        "in_control_gap_f": _IN_CONTROL_GAP_F,
+        "total_reporting_devices": total_reporting,
+        "active_cooks": active_cooks,
+        "in_control": in_control,
+        "out_of_control_count": len(out_of_control),
+        "out_of_control_devices": out_of_control[:50],
+        "fetched_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Per-user device recents + nicknames
 # ---------------------------------------------------------------------------
 

@@ -88,7 +88,33 @@ def list_tags(include_archived: bool = False, db: Session = Depends(db_session))
     if not include_archived:
         stmt = stmt.where(FirmwareIssueTag.archived.is_(False))
     rows = db.execute(stmt).scalars().all()
-    return {"tags": [_tag_row(t) for t in rows]}
+
+    # Usage counts — how many releases reference each tag slug, and the
+    # most recent release version that mentions it. Turns the taxonomy
+    # tab from an admin form into a "which tags are actually in use"
+    # decision panel.
+    release_rows = db.execute(
+        select(FirmwareRelease.version, FirmwareRelease.addresses_issues, FirmwareRelease.created_at)
+        .order_by(desc(FirmwareRelease.created_at))
+    ).all()
+    usage_count: dict[str, int] = {}
+    latest_by_slug: dict[str, str] = {}
+    for version, issues, _created in release_rows:
+        for slug in issues or []:
+            usage_count[slug] = usage_count.get(slug, 0) + 1
+            if slug not in latest_by_slug and version:
+                latest_by_slug[slug] = version
+
+    return {
+        "tags": [
+            {
+                **_tag_row(t),
+                "release_count": usage_count.get(t.slug, 0),
+                "latest_release_version": latest_by_slug.get(t.slug),
+            }
+            for t in rows
+        ]
+    }
 
 
 @router.post("/tags")
@@ -437,6 +463,111 @@ def mark_ota_pushed(
             m.state = "ota_pushed"
     db.commit()
     return {"ok": True, "flipped": len(members)}
+
+
+# ── Alpha cohort (employees + R&D grills) ────────────────────────────
+
+
+@router.get("/alpha-cohort")
+def list_alpha_cohort(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """All BetaCohortMembers whose opt-in came via the 'alpha' source.
+
+    Alpha and Beta share the BetaCohortMember schema for now — the
+    distinction is carried on the ``opt_in_source`` column. This endpoint
+    surfaces the alpha view so the Firmware Hub can show R&D grill
+    progress without leaking customer devices onto that tab.
+    """
+    rows = db.execute(
+        select(BetaCohortMember, FirmwareRelease)
+        .join(FirmwareRelease, FirmwareRelease.id == BetaCohortMember.release_id)
+        .where(BetaCohortMember.opt_in_source == "alpha")
+        .order_by(desc(BetaCohortMember.opted_in_at), desc(BetaCohortMember.invited_at))
+    ).all()
+
+    members = []
+    for m, r in rows:
+        members.append({
+            "device_id": m.device_id,
+            "user_id": m.user_id,
+            "state": m.state,
+            "candidate_score": m.candidate_score,
+            "invited_at": m.invited_at.isoformat() if m.invited_at else None,
+            "opted_in_at": m.opted_in_at.isoformat() if m.opted_in_at else None,
+            "ota_pushed_at": m.ota_pushed_at.isoformat() if m.ota_pushed_at else None,
+            "evaluated_at": m.evaluated_at.isoformat() if m.evaluated_at else None,
+            "release_id": r.id,
+            "release_version": r.version,
+            "release_title": r.title,
+            "release_status": r.status,
+        })
+
+    # State tally
+    by_state: dict[str, int] = {}
+    for m in members:
+        by_state[m["state"]] = by_state.get(m["state"], 0) + 1
+
+    return {
+        "members": members,
+        "count": len(members),
+        "state_distribution": by_state,
+    }
+
+
+# ── Gamma waves (production rollout) ─────────────────────────────────
+
+
+@router.get("/gamma-status")
+def gamma_status(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Releases that have kicked off (or are planning) Gamma waves.
+
+    A Gamma rollout is a sequence of AWS IoT Jobs that stage the push
+    across production at ~10%/day. We store the planned wave shape in
+    ``gamma_plan_json`` and the actual job IDs in
+    ``gamma_iot_job_ids_json``. This endpoint joins those so the UI can
+    show: planned device count per wave, wave day, IoT job status
+    (if any), and the overall release health.
+    """
+    rows = db.execute(
+        select(FirmwareRelease)
+        .where(FirmwareRelease.approved_for_gamma.is_(True))
+        .order_by(desc(FirmwareRelease.released_at), desc(FirmwareRelease.created_at))
+    ).scalars().all()
+
+    releases = []
+    for r in rows:
+        plan = r.gamma_plan_json or {}
+        job_ids = r.gamma_iot_job_ids_json or []
+        waves_raw = plan.get("waves") if isinstance(plan, dict) else None
+        waves: list[dict[str, Any]] = []
+        if isinstance(waves_raw, list):
+            for i, w in enumerate(waves_raw):
+                if not isinstance(w, dict):
+                    continue
+                waves.append({
+                    "wave_index": i + 1,
+                    "target_pct": w.get("target_pct"),
+                    "target_devices": w.get("target_devices"),
+                    "scheduled_at": w.get("scheduled_at"),
+                    "started_at": w.get("started_at"),
+                    "completed_at": w.get("completed_at"),
+                    "aws_job_id": job_ids[i] if i < len(job_ids) else None,
+                    "status": w.get("status") or ("pending" if i >= len(job_ids) else "unknown"),
+                })
+        releases.append({
+            "release_id": r.id,
+            "version": r.version,
+            "title": r.title,
+            "status": r.status,
+            "approved_for_gamma": r.approved_for_gamma,
+            "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+            "released_at": r.released_at.isoformat() if r.released_at else None,
+            "target_controller_model": r.target_controller_model,
+            "waves": waves,
+            "total_planned": sum(w.get("target_devices") or 0 for w in waves),
+            "aws_job_id_count": len(job_ids),
+        })
+
+    return {"releases": releases, "count": len(releases)}
 
 
 # ── Public opt-in (unauthed, per-device) ─────────────────────────────
