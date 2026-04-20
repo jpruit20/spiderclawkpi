@@ -3,6 +3,7 @@ import { ActionBlock } from '../components/ActionBlock'
 import { BaselineBand } from '../components/BaselineBand'
 import { Card } from '../components/Card'
 import { EmailPulseCard } from '../components/EmailPulseCard'
+import { BetaProgramSummaryCard } from '../components/BetaProgramSummaryCard'
 import { EventTimelinePanel } from '../components/EventTimelinePanel'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { KpiGrid } from '../components/KpiGrid'
@@ -476,6 +477,7 @@ export function ExecutiveOverview() {
             <Card title="Decision Event Annotations">
               <EventAnnotationList diagnostics={data?.diagnostics || []} recommendations={data?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
             </Card>
+            <BetaProgramSummaryCard />
             <Card title="Inventory / Fulfillment Risk Layer">
               {sourceHealth.some((row) => row.source === 'business_central' || row.source === 'dynamics') ? (
                 <StatePanel kind="partial" tone="warn" title="ERP risk layer not decision-grade yet" message="Inventory / fulfillment connector rows exist but this page still needs connector-backed stockout, aging, and fulfillment latency metrics before operators should trust it." />

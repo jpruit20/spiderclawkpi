@@ -696,9 +696,49 @@ export const api = {
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cohort_size: cohortSize }) },
     ),
   betaCohort: (releaseId: number, signal?: AbortSignal) =>
-    request<{ release_id: number; version: string; members: Array<{ device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null }> }>(
+    request<{ release_id: number; version: string; members: Array<{ device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null; ota_pushed_at: string | null; evaluated_at: string | null; verdict: BetaVerdictEvidence }> }>(
       `/api/beta/releases/${releaseId}/cohort`, { signal },
     ),
+  betaEvaluate: (releaseId: number, force = false) =>
+    request<{ ok: boolean; release_id?: number; version?: string; tally?: Record<string, number>; release_health?: string; judgable_devices?: number }>(
+      `/api/beta/releases/${releaseId}/evaluate?force=${force}`,
+      { method: 'POST' },
+    ),
+  betaMarkOtaPushed: (releaseId: number, body: { device_ids?: string[]; mark_all_opted_in?: boolean }) =>
+    request<{ ok: boolean; flipped: number }>(
+      `/api/beta/releases/${releaseId}/mark-ota-pushed`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    ),
+  betaEvaluateAll: () =>
+    request<{ ok: boolean; releases_evaluated: number }>('/api/beta/evaluate-all', { method: 'POST' }),
+  betaSummary: (signal?: AbortSignal) =>
+    request<BetaProgramSummary>('/api/beta/summary', { signal }),
+}
+
+export interface BetaVerdictEvidence {
+  per_tag?: Array<{ slug: string; pre: number; post: number; reduction?: number; verdict: string }>
+  pre_sessions?: number
+  post_sessions?: number
+  judgable_tag_count?: number
+  verdict?: string
+  t0?: string
+  evaluated_at?: string
+}
+
+export interface BetaProgramSummary {
+  total_releases: number
+  active_releases: number
+  cohort_states: Record<string, number>
+  recent: Array<{
+    id: number
+    version: string
+    status: string
+    addresses_issues: string[]
+    release_health: string | null
+    tally: Record<string, number>
+    judgable_devices: number
+    evaluated_at: string | null
+  }>
 }
 
 export interface BetaReleaseSummary {

@@ -34,6 +34,7 @@ from app.services.beta_cohort import (
     record_opt_in,
     score_candidates,
 )
+from app.services.beta_verdict import evaluate_release, run_beta_verdict_pass
 
 
 logger = logging.getLogger(__name__)
@@ -200,6 +201,43 @@ def list_releases(db: Session = Depends(db_session)) -> dict[str, Any]:
     return {"releases": [_release_row(r, db) for r in rows]}
 
 
+@router.get("/summary")
+def program_summary(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Compact roll-up for Executive/Overview cards. Returns counts of
+    active releases, cohort fill, and recent verdict tallies."""
+    releases = db.execute(
+        select(FirmwareRelease).order_by(desc(FirmwareRelease.created_at))
+    ).scalars().all()
+    active = [r for r in releases if r.status not in ("draft", "ga", "rolled_back")]
+    cohort_totals = dict(
+        db.execute(
+            select(BetaCohortMember.state, func.count(BetaCohortMember.id))
+            .group_by(BetaCohortMember.state)
+        ).all()
+    )
+    cohort_totals = {k: int(v) for k, v in cohort_totals.items()}
+
+    recent_releases: list[dict[str, Any]] = []
+    for r in releases[:5]:
+        report = r.beta_report_json or {}
+        recent_releases.append({
+            "id": r.id,
+            "version": r.version,
+            "status": r.status,
+            "addresses_issues": r.addresses_issues or [],
+            "release_health": report.get("release_health"),
+            "tally": report.get("tally", {}),
+            "judgable_devices": report.get("judgable_devices", 0),
+            "evaluated_at": report.get("evaluated_at"),
+        })
+    return {
+        "total_releases": len(releases),
+        "active_releases": len(active),
+        "cohort_states": cohort_totals,
+        "recent": recent_releases,
+    }
+
+
 @router.post("/releases")
 def create_release(payload: FirmwareReleaseIn, db: Session = Depends(db_session)) -> dict[str, Any]:
     _validate_addresses_issues(db, payload.addresses_issues)
@@ -318,11 +356,80 @@ def get_cohort(release_id: int, db: Session = Depends(db_session)) -> dict[str, 
                 "invited_at": m.invited_at.isoformat() if m.invited_at else None,
                 "opted_in_at": m.opted_in_at.isoformat() if m.opted_in_at else None,
                 "opt_in_source": m.opt_in_source,
+                "ota_pushed_at": m.ota_pushed_at.isoformat() if m.ota_pushed_at else None,
+                "evaluated_at": m.evaluated_at.isoformat() if m.evaluated_at else None,
                 "verdict": m.verdict_json or {},
             }
             for m in members
         ],
     }
+
+
+# ── Post-deploy verdict (the closing loop) ───────────────────────────
+
+
+@router.post("/releases/{release_id}/evaluate")
+def evaluate(release_id: int, force: bool = False, db: Session = Depends(db_session)) -> dict[str, Any]:
+    r = db.get(FirmwareRelease, release_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="release not found")
+    return evaluate_release(db, r, force=force)
+
+
+@router.get("/releases/{release_id}/verdict-summary")
+def verdict_summary(release_id: int, db: Session = Depends(db_session)) -> dict[str, Any]:
+    r = db.get(FirmwareRelease, release_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="release not found")
+    return {
+        "release_id": r.id,
+        "version": r.version,
+        "status": r.status,
+        "beta_report": r.beta_report_json or {},
+    }
+
+
+@router.post("/evaluate-all")
+def evaluate_all(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Run the verdict pass across every non-draft release. Manual
+    trigger; the scheduler also calls this daily."""
+    return run_beta_verdict_pass(db)
+
+
+# ── Manual OTA-pushed flag (proxy until AWS IoT Jobs is wired) ────────
+
+
+class OtaMarkIn(BaseModel):
+    device_ids: list[str] = Field(default_factory=list)
+    mark_all_opted_in: bool = False
+
+
+@router.post("/releases/{release_id}/mark-ota-pushed")
+def mark_ota_pushed(
+    release_id: int, payload: OtaMarkIn, db: Session = Depends(db_session)
+) -> dict[str, Any]:
+    """Proxy for OTA push until AWS IoT Jobs is wired. Flip selected
+    members (or every opted-in member) to state=ota_pushed with
+    ota_pushed_at=now. Downstream, the verdict pass uses this timestamp
+    as the anchor instead of opted_in_at."""
+    r = db.get(FirmwareRelease, release_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="release not found")
+    stmt = select(BetaCohortMember).where(BetaCohortMember.release_id == release_id)
+    if payload.mark_all_opted_in:
+        stmt = stmt.where(BetaCohortMember.state == "opted_in")
+    elif payload.device_ids:
+        stmt = stmt.where(BetaCohortMember.device_id.in_(payload.device_ids))
+    else:
+        raise HTTPException(status_code=400, detail="pass device_ids or mark_all_opted_in=true")
+    members = db.execute(stmt).scalars().all()
+    now = datetime.now(timezone.utc)
+    for m in members:
+        m.ota_pushed_at = now
+        if m.state == "opted_in":
+            m.state = "ota_pushed"
+    db.commit()
+    return {"ok": True, "flipped": len(members)}
 
 
 # ── Public opt-in (unauthed, per-device) ─────────────────────────────

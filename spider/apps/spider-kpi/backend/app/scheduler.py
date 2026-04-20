@@ -8,6 +8,7 @@ from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
+from app.services.beta_verdict import run_beta_verdict_pass
 from app.services.cook_rederivation import run_cook_rederivation
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.clickup import sync_clickup
@@ -215,8 +216,28 @@ def run_syncs() -> None:
         db.close()
 
 
+def run_beta_verdict_job() -> None:
+    """Daily post-deploy verdict sweep for every non-draft firmware
+    release. Closes the loop: did the update actually fix the issues it
+    targeted on opted-in devices?"""
+    db = SessionLocal()
+    try:
+        run_beta_verdict_pass(db)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("beta verdict pass failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_seed, "date", id="seed-on-start", max_instances=1, coalesce=True)
     scheduler.add_job(run_syncs, "interval", minutes=settings.sync_interval_minutes, id="sync-all", replace_existing=True, max_instances=1, coalesce=True)
+    # Daily post-deploy verdict sweep: compares shadow-signal firings
+    # before vs after each opted-in device's t0 across addresses_issues
+    # tags. 09:00 UTC / 05:00 ET — after the main sync cycle has had a
+    # chance to land any new telemetry overnight.
+    scheduler.add_job(run_beta_verdict_job, "cron", hour=9, minute=0, id="beta-verdict-daily", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

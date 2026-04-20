@@ -29,11 +29,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
+from sqlalchemy import text
+
 from app.core.config import get_settings
 from app.models import (
     AIInsight,
+    BetaCohortMember,
     ClickUpTask,
     ClickUpTasksDaily,
+    FirmwareIssueTag,
+    FirmwareRelease,
     FreshdeskTicket,
     FreshdeskTicketsDaily,
     IssueSignal,
@@ -46,6 +51,58 @@ from app.models import (
     TelemetryHistoryDaily,
 )
 from app.services.seasonality import metric_context
+
+
+# Shadow-signal SQL templates — parallels beta_cohort._SHADOW_DETECTORS
+# but returns a single fleet-wide session count per window. Kept inline
+# (rather than imported) so the context builder can ask "how many times
+# did this signature fire across the whole fleet?" without depending on
+# beta_cohort's per-device output shape.
+_TREND_COUNT_QUERIES: dict[str, str] = {
+    "persistent_overshoot": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND max_overshoot_f >= 25 AND cook_outcome = 'reached_not_held'
+    """,
+    "persistent_undershoot": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND max_undershoot_f >= 25
+           AND cook_outcome IN ('reached_not_held','did_not_reach')
+    """,
+    "slow_recovery": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND avg_recovery_seconds >= 300
+    """,
+    "startup_fail": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND cook_outcome = 'did_not_reach'
+           AND cook_intent IN ('short_cook','medium_cook','long_cook')
+    """,
+    "wifi_disconnect": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND cook_outcome = 'disconnect'
+    """,
+    "oscillation": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND disturbance_count >= 8
+           AND in_control_pct IS NOT NULL AND in_control_pct < 0.5
+    """,
+    "probe_dropout": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND disconnect_events > 0 AND error_count = 0
+    """,
+    "error_code_42": """
+        SELECT COUNT(*) FROM telemetry_sessions
+         WHERE session_start >= :start AND session_start < :end
+           AND error_codes_json @> '[42]'::jsonb
+    """,
+}
 
 
 logger = logging.getLogger(__name__)
@@ -459,6 +516,66 @@ def build_context(db: Session, lookback_days: int = 30) -> tuple[str, list[str]]
         lines.extend(seasonal_lines)
         lines.append("")
 
+    # --- FIRMWARE BETA PROGRAM + SHADOW-SIGNAL TRENDS --------------------
+    # Fleet-wide firing counts for each issue-tag signature, last 7d vs
+    # prior 7d. Surfaces "probe_dropout up 40% WoW" before it becomes a
+    # support-ticket spike. Plus: active beta cohort status + release
+    # verdicts so Opus can connect a regression to the release that
+    # caused it.
+    now_utc = datetime.now(timezone.utc)
+    trend_lines: list[str] = []
+    for slug, sql in _TREND_COUNT_QUERIES.items():
+        cur = db.execute(text(sql), {
+            "start": now_utc - timedelta(days=7),
+            "end": now_utc,
+        }).scalar() or 0
+        prev = db.execute(text(sql), {
+            "start": now_utc - timedelta(days=14),
+            "end": now_utc - timedelta(days=7),
+        }).scalar() or 0
+        if cur == 0 and prev == 0:
+            continue
+        delta_pct = ((cur - prev) / prev * 100.0) if prev else None
+        delta_fmt = f"{delta_pct:+.0f}%" if delta_pct is not None else "n/a"
+        trend_lines.append(f"  - {slug}: {cur} firings last 7d (prior 7d {prev}, Δ {delta_fmt})")
+    if trend_lines:
+        sources.append("beta/shadow_signals")
+        lines.append("## SHADOW-SIGNAL TRENDS (firmware issue-tag firings, fleet-wide)")
+        lines.append("  Each tag is a telemetry signature matching a specific failure mode. A large WoW jump here is an early warning that often precedes Freshdesk ticket volume.")
+        lines.extend(trend_lines)
+        lines.append("")
+
+    releases = db.execute(
+        select(FirmwareRelease).order_by(desc(FirmwareRelease.created_at)).limit(6)
+    ).scalars().all()
+    if releases:
+        cohort_counts_by_release = {
+            r.id: dict(
+                (state, int(n)) for (state, n) in db.execute(
+                    select(BetaCohortMember.state, func.count(BetaCohortMember.id))
+                    .where(BetaCohortMember.release_id == r.id)
+                    .group_by(BetaCohortMember.state)
+                ).all()
+            )
+            for r in releases
+        }
+        sources.append("beta/releases")
+        lines.append("## FIRMWARE BETA PROGRAM")
+        lines.append("  Recent firmware releases with their issue tags, cohort state, and post-deploy verdict health.")
+        for r in releases:
+            counts = cohort_counts_by_release.get(r.id, {})
+            report = r.beta_report_json or {}
+            health = report.get("release_health")
+            tally = report.get("tally") or {}
+            cohort_str = ", ".join(f"{k}={v}" for k, v in counts.items()) if counts else "no cohort"
+            tally_str = ", ".join(f"{k}={v}" for k, v in tally.items()) if tally else "no verdict yet"
+            health_str = f" · release_health={health}" if health else ""
+            addr = ",".join(r.addresses_issues or []) or "—"
+            lines.append(f"  - {r.version} ({r.status}) addresses={addr}{health_str}")
+            lines.append(f"      cohort: {cohort_str}")
+            lines.append(f"      verdict tally: {tally_str}")
+        lines.append("")
+
     lines.append("=== END CONTEXT ===")
     return "\n".join(lines), sources
 
@@ -494,6 +611,8 @@ Your job is to surface **3-5 non-obvious observations** that a human reading one
 **Lore events (company timeline):** The context now includes a LORE EVENTS section listing launches, incidents, campaigns, firmware, promotions, and personnel events within the analysis window. When a metric shifts within ±3 days of one of these events, CITE the event in your evidence and suggested_action. A revenue drop on the day a promotion ended is not a mystery — say so.
 
 **Seasonal context:** The context now includes a SEASONAL CONTEXT section showing today's value for key metrics vs the prior-year baseline (p50 / percentile rank / verdict). Use this to distinguish "unusual" from "normal for this time of year". A -10% WoW drop that still sits at p70 of seasonal is not a meaningful regression; flag it only if WoW is down AND the seasonal rank also slipped.
+
+**Shadow-signal trends + firmware beta program:** The context includes a SHADOW-SIGNAL TRENDS section — fleet-wide counts of telemetry signatures that match specific firmware failure modes (probe_dropout, persistent_overshoot, wifi_disconnect, etc.), last 7d vs prior 7d. It also includes a FIRMWARE BETA PROGRAM section with recent release profiles, cohort state, and post-deploy verdict health. These are leading indicators: a 40% jump in `probe_dropout` firings often surfaces days before the corresponding Freshdesk tickets. When a shadow signal spikes, check whether a recent firmware release (in the LORE EVENTS or FIRMWARE BETA PROGRAM sections) could be the cause. When a beta release is mid-rollout and its verdict tally leans toward `still_failing` or `regression`, flag it as high-urgency.
 
 Be direct. Be terse. Be specific with numbers and dates."""
 

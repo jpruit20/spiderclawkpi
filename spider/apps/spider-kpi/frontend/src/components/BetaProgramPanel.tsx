@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type BetaReleaseSummary } from '../lib/api'
+import { api, type BetaReleaseSummary, type BetaVerdictEvidence } from '../lib/api'
 
 /**
  * Firmware Beta + Gamma Waves program panel.
@@ -17,7 +17,7 @@ import { api, type BetaReleaseSummary } from '../lib/api'
 
 type Tag = { id: number; slug: string; label: string; description: string | null; archived: boolean }
 type Candidate = { device_id: string; user_id: string | null; score: number; sessions_30d: number; tenure_days: number; matched_tags: string[] }
-type CohortMember = { device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null }
+type CohortMember = { device_id: string; user_id: string | null; state: string; candidate_score: number | null; matched_tags: string[]; sessions_30d: number | null; tenure_days: number | null; invited_at: string | null; opted_in_at: string | null; opt_in_source: string | null; ota_pushed_at: string | null; evaluated_at: string | null; verdict: BetaVerdictEvidence }
 
 const STATE_COLORS: Record<string, string> = {
   invited: '#6b7280',
@@ -29,6 +29,21 @@ const STATE_COLORS: Record<string, string> = {
   expired: '#4b5563',
 }
 
+const VERDICT_COLORS: Record<string, string> = {
+  resolved: '#22c55e',
+  partial: '#6ea8ff',
+  still_failing: '#ef4444',
+  inconclusive: '#9ca3af',
+  no_post_data: '#4b5563',
+}
+
+const RELEASE_HEALTH_COLORS: Record<string, string> = {
+  resolved: '#22c55e',
+  mixed: '#f59e0b',
+  regression: '#ef4444',
+  insufficient_data: '#6b7280',
+}
+
 export function BetaProgramPanel() {
   const [tags, setTags] = useState<Tag[]>([])
   const [releases, setReleases] = useState<BetaReleaseSummary[]>([])
@@ -37,7 +52,7 @@ export function BetaProgramPanel() {
   const [cohort, setCohort] = useState<CohortMember[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'candidates' | 'cohort' | 'taxonomy'>('candidates')
+  const [view, setView] = useState<'candidates' | 'cohort' | 'verdict' | 'taxonomy'>('candidates')
 
   // Draft create-release form
   const [showCreate, setShowCreate] = useState(false)
@@ -150,6 +165,40 @@ export function BetaProgramPanel() {
     await refreshTags()
   }
 
+  const handleMarkOtaPushed = async () => {
+    if (selectedId == null) return
+    if (!confirm('Mark every opted-in device on this release as OTA-pushed (sets t0 = now)?')) return
+    try {
+      const r = await api.betaMarkOtaPushed(selectedId, { mark_all_opted_in: true })
+      alert(`Flipped ${r.flipped} devices to ota_pushed.`)
+      const fresh = await api.betaCohort(selectedId)
+      setCohort(fresh.members)
+    } catch (e: unknown) {
+      alert('Mark failed: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  const handleRunVerdict = async () => {
+    if (selectedId == null) return
+    try {
+      const r = await api.betaEvaluate(selectedId, true)
+      alert(
+        r.ok
+          ? `Verdict pass complete. Health: ${r.release_health}. Tally: ${JSON.stringify(r.tally)}`
+          : 'Verdict pass returned no data — release may have no addressed issues or no opted-in devices past the observation window.',
+      )
+      const [fresh, fresh2] = await Promise.all([api.betaCohort(selectedId), api.betaReleases()])
+      setCohort(fresh.members)
+      setReleases(fresh2.releases)
+    } catch (e: unknown) {
+      alert('Verdict pass failed: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  const releaseReport = (selected?.beta_report as (BetaReleaseSummary['beta_report'] & { tally?: Record<string, number>; release_health?: string; judgable_devices?: number; evaluated_at?: string; window_days?: number })) || {}
+  const releaseTally = (releaseReport.tally as Record<string, number> | undefined) ?? {}
+  const releaseHealth = (releaseReport.release_health as string | undefined) ?? null
+
   if (loading) {
     return (
       <section className="card">
@@ -240,8 +289,8 @@ export function BetaProgramPanel() {
 
       {/* Tabs */}
       {selected && (
-        <div style={{ display: 'flex', gap: 12, marginBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          {(['candidates', 'cohort', 'taxonomy'] as const).map(t => (
+        <div style={{ display: 'flex', gap: 12, marginBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.08)', alignItems: 'center', flexWrap: 'wrap' }}>
+          {(['candidates', 'cohort', 'verdict', 'taxonomy'] as const).map(t => (
             <button
               key={t}
               onClick={() => setView(t)}
@@ -252,9 +301,25 @@ export function BetaProgramPanel() {
                 borderBottom: view === t ? '2px solid #6ea8ff' : '2px solid transparent',
               }}
             >
-              {t === 'candidates' ? 'Ranked candidates' : t === 'cohort' ? `Cohort (${(selected.cohort_counts && Object.values(selected.cohort_counts).reduce((a, b) => a + b, 0)) || 0})` : 'Issue taxonomy'}
+              {t === 'candidates'
+                ? 'Ranked candidates'
+                : t === 'cohort'
+                ? `Cohort (${(selected.cohort_counts && Object.values(selected.cohort_counts).reduce((a, b) => a + b, 0)) || 0})`
+                : t === 'verdict'
+                ? `Post-deploy verdict${releaseHealth ? ` · ${releaseHealth}` : ''}`
+                : 'Issue taxonomy'}
             </button>
           ))}
+          {releaseHealth && (
+            <span style={{
+              marginLeft: 'auto', fontSize: 11, padding: '3px 8px', borderRadius: 10,
+              background: (RELEASE_HEALTH_COLORS[releaseHealth] ?? '#555') + '33',
+              color: RELEASE_HEALTH_COLORS[releaseHealth] ?? '#fff',
+              textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600,
+            }}>
+              Release health: {releaseHealth}
+            </span>
+          )}
         </div>
       )}
 
@@ -298,6 +363,11 @@ export function BetaProgramPanel() {
 
       {selected && view === 'cohort' && (
         <div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 8 }}>
+            <button className="btn-secondary" onClick={handleMarkOtaPushed} disabled={cohort.length === 0}>
+              Mark all opted-in → OTA pushed
+            </button>
+          </div>
           {cohort.length === 0 ? (
             <div className="state-message">
               Cohort is empty. Run "Invite top {selected.beta_cohort_target_size} to beta" from the Candidates tab to populate it.
@@ -340,6 +410,80 @@ export function BetaProgramPanel() {
                         <td>{m.opt_in_source ?? '—'}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {selected && view === 'verdict' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Compares how often the addressed failure modes fired on each opted-in device in the 14 days before t0 (opt-in / OTA push) vs the 14 days after.
+              {releaseReport.evaluated_at && <> · last run {new Date(releaseReport.evaluated_at).toLocaleString()}</>}
+            </div>
+            <button className="btn-primary" onClick={handleRunVerdict}>
+              Run verdict pass now
+            </button>
+          </div>
+          {Object.keys(releaseTally).length === 0 ? (
+            <div className="state-message">
+              No verdict data yet. Run the verdict pass once enough opted-in devices have spent 14+ days on the new firmware. For a release that was pushed today, check back in two weeks (or in testing, mark the cohort as OTA-pushed with a backdated t0).
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginBottom: 12 }}>
+                {(['resolved', 'partial', 'still_failing', 'inconclusive', 'no_post_data', 'pending'] as const).map(k => {
+                  const n = releaseTally[k] ?? 0
+                  const color = VERDICT_COLORS[k] ?? '#6b7280'
+                  return (
+                    <div key={k} style={{ padding: 10, borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: `1px solid ${color}44` }}>
+                      <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{k.replace(/_/g, ' ')}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color }}>{n}</div>
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead><tr>
+                    <th>Device</th><th>Verdict</th><th>Pre sess</th><th>Post sess</th><th>Per-tag</th><th>Evaluated</th>
+                  </tr></thead>
+                  <tbody>
+                    {cohort.filter(m => m.verdict && m.verdict.verdict).slice(0, 200).map(m => {
+                      const v = m.verdict?.verdict as string | undefined
+                      const perTag = m.verdict?.per_tag ?? []
+                      const color = VERDICT_COLORS[v ?? ''] ?? '#6b7280'
+                      return (
+                        <tr key={m.device_id}>
+                          <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.device_id}</td>
+                          <td>
+                            <span style={{ padding: '2px 6px', borderRadius: 8, background: color + '33', color, fontSize: 10, textTransform: 'uppercase', fontWeight: 600, letterSpacing: 0.5 }}>
+                              {v}
+                            </span>
+                          </td>
+                          <td>{m.verdict?.pre_sessions ?? '—'}</td>
+                          <td>{m.verdict?.post_sessions ?? '—'}</td>
+                          <td style={{ fontSize: 11 }}>
+                            {perTag.map(pt => (
+                              <span key={pt.slug} style={{
+                                display: 'inline-block', marginRight: 6,
+                                color: VERDICT_COLORS[pt.verdict] ?? '#9ca3af',
+                              }}>
+                                {pt.slug}: {pt.pre}→{pt.post}
+                                {pt.reduction !== undefined && ` (${Math.round(pt.reduction * 100)}%)`}
+                              </span>
+                            ))}
+                          </td>
+                          <td style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            {m.evaluated_at ? new Date(m.evaluated_at).toLocaleDateString() : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
