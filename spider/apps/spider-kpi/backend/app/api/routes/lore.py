@@ -13,11 +13,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
-from app.models import LoreEvent
+from app.models import FreshdeskTicketsDaily, KPIDaily, LoreEvent
 from app.services.seasonality import (
     METRICS,
     baselines_for_range,
@@ -374,6 +374,102 @@ def bulk_delete_events(body: BulkDelete, db: Session = Depends(db_session)) -> d
         db.delete(ev)
     db.commit()
     return {"deleted": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Event-impact correlation — did a lore event move the needle on key metrics?
+# ---------------------------------------------------------------------------
+
+# (table, column, label, direction) — direction=-1 means "lower is better"
+# so we can color deltas correctly without a separate lookup client-side.
+_IMPACT_METRICS: list[tuple[str, str, str, int]] = [
+    ("kpi_daily", "revenue", "Revenue", 1),
+    ("kpi_daily", "orders", "Orders", 1),
+    ("kpi_daily", "sessions", "Sessions", 1),
+    ("kpi_daily", "conversion_rate", "Conversion", 1),
+    ("kpi_daily", "ad_spend", "Ad spend", 1),
+    ("kpi_daily", "tickets_created", "Tickets created", -1),
+    ("freshdesk_tickets_daily", "tickets_created", "Freshdesk created", -1),
+    ("freshdesk_tickets_daily", "csat", "CSAT", 1),
+]
+
+_TABLE_MODEL = {
+    "kpi_daily": KPIDaily,
+    "freshdesk_tickets_daily": FreshdeskTicketsDaily,
+}
+
+
+def _avg_window(
+    db: Session, table: str, column: str, start_d: date, end_d: date
+) -> Optional[float]:
+    model = _TABLE_MODEL[table]
+    col = getattr(model, column)
+    row = db.execute(
+        select(func.avg(col))
+        .where(model.business_date >= start_d, model.business_date <= end_d)
+    ).first()
+    if row is None or row[0] is None:
+        return None
+    return float(row[0])
+
+
+@router.get("/events/{event_id}/impact")
+def event_impact(
+    event_id: int,
+    before_days: int = Query(14, ge=1, le=90),
+    after_days: int = Query(14, ge=1, le=90),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Per-metric before/after averages for a single lore event. Returns
+    ``metrics: [{name, label, direction, before_avg, after_avg,
+    delta_pct, is_improvement}]`` so the UI can show which metrics
+    actually moved when this event landed.
+
+    Windowing: `[start_date - before_days, start_date - 1]` vs
+    `[start_date, start_date + after_days - 1]`. If the event has an
+    explicit end_date later than start_date + after_days - 1, the "after"
+    window extends to end_date (so a campaign's post-window covers the
+    campaign duration).
+    """
+    ev = db.get(LoreEvent, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    before_start = ev.start_date - timedelta(days=before_days)
+    before_end = ev.start_date - timedelta(days=1)
+    after_start = ev.start_date
+    default_after_end = ev.start_date + timedelta(days=after_days - 1)
+    after_end = max(default_after_end, ev.end_date) if ev.end_date else default_after_end
+
+    metrics_out: list[dict[str, Any]] = []
+    for table, column, label, direction in _IMPACT_METRICS:
+        before = _avg_window(db, table, column, before_start, before_end)
+        after = _avg_window(db, table, column, after_start, after_end)
+        delta_pct: Optional[float] = None
+        if before not in (None, 0) and after is not None:
+            delta_pct = (after - before) / before * 100.0
+        is_improvement: Optional[bool] = None
+        if delta_pct is not None:
+            is_improvement = (delta_pct * direction) > 0
+        metrics_out.append({
+            "table": table,
+            "column": column,
+            "label": label,
+            "direction": direction,
+            "before_avg": round(before, 3) if before is not None else None,
+            "after_avg": round(after, 3) if after is not None else None,
+            "delta_pct": round(delta_pct, 1) if delta_pct is not None else None,
+            "is_improvement": is_improvement,
+        })
+
+    return {
+        "event": _serialize_event(ev),
+        "windows": {
+            "before": {"start": before_start.isoformat(), "end": before_end.isoformat(), "days": before_days},
+            "after": {"start": after_start.isoformat(), "end": after_end.isoformat(), "days": (after_end - after_start).days + 1},
+        },
+        "metrics": metrics_out,
+    }
 
 
 @router.get("/events/stats/summary")

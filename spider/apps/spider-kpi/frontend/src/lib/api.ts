@@ -61,6 +61,7 @@ import type {
   SourceHealthItem,
   SupportOverviewResponse,
   LoreEvent,
+  LoreEventImpactResponse,
   LoreEventsResponse,
   LoreEventCreate,
   LoreEventUpdate,
@@ -597,6 +598,17 @@ export const api = {
     if (opts.end) p.set('end', opts.end)
     const qs = p.toString()
     return request<LoreEventStats>(`/api/lore/events/stats/summary${qs ? `?${qs}` : ''}`, { signal })
+  },
+  loreEventImpact: (
+    id: number,
+    opts: { before_days?: number; after_days?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams()
+    if (opts.before_days != null) p.set('before_days', String(opts.before_days))
+    if (opts.after_days != null) p.set('after_days', String(opts.after_days))
+    const qs = p.toString()
+    return request<LoreEventImpactResponse>(`/api/lore/events/${id}/impact${qs ? `?${qs}` : ''}`, { signal })
   },
   loreEventBulkUpdate: (
     body: { ids: number[]; confidence?: string; event_type?: string; division?: string | null },

@@ -1840,3 +1840,23 @@ export interface LoreEventStats {
   by_confidence: Record<string, number>
   by_division: Record<string, number>
 }
+
+export interface LoreEventImpactMetric {
+  table: string
+  column: string
+  label: string
+  direction: 1 | -1
+  before_avg: number | null
+  after_avg: number | null
+  delta_pct: number | null
+  is_improvement: boolean | null
+}
+
+export interface LoreEventImpactResponse {
+  event: LoreEvent
+  windows: {
+    before: { start: string; end: string; days: number }
+    after: { start: string; end: string; days: number }
+  }
+  metrics: LoreEventImpactMetric[]
+}

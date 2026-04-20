@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api, ApiError } from '../lib/api'
 import type { LoreEvent, LoreEventStats, LoreConfidence, LoreEventCreate } from '../lib/types'
+import { EventImpactStrip } from '../components/EventImpactStrip'
 
 /**
  * Lore Ledger — the narrative company-history surface.
@@ -583,6 +584,7 @@ function FeaturedEventCard({ event }: { event: LoreEvent }) {
           {event.division}
         </div>
       )}
+      <EventImpactStrip eventId={event.id} />
     </div>
   )
 }
