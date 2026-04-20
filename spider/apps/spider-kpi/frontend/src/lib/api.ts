@@ -717,6 +717,127 @@ export const api = {
     request<{ ecrs: EcrItem[]; count: number; fields_expected: string[] }>(
       `/api/ecrs?include_closed=${includeClosed}`, { signal },
     ),
+  firmwareOverview: (signal?: AbortSignal) =>
+    request<FirmwareOverview>('/api/firmware/overview', { signal }),
+  firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
+    request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
+  firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>
+    request<FirmwareDeviceSummary>(`/api/firmware/device/${encodeURIComponent(mac)}/summary`, { signal }),
+  firmwareDeviceShadow: (mac: string, signal?: AbortSignal) =>
+    request<FirmwareDeviceShadow>(`/api/firmware/device/${encodeURIComponent(mac)}/shadow`, { signal }),
+  firmwareDeviceActiveCook: (mac: string, signal?: AbortSignal) =>
+    request<FirmwareDeviceActiveCook>(`/api/firmware/device/${encodeURIComponent(mac)}/active-cook`, { signal }),
+  firmwareDeviceSessions: (mac: string, limit = 20, signal?: AbortSignal) =>
+    request<{ mac: string; count: number; sessions: FirmwareSession[] }>(
+      `/api/firmware/device/${encodeURIComponent(mac)}/sessions?limit=${limit}`, { signal },
+    ),
+}
+
+export interface FirmwareStreamEvent {
+  sample_timestamp: string | null
+  stream_event_name: string | null
+  engaged: boolean
+  firmware_version: string | null
+  grill_type: string | null
+  target_temp: number | null
+  current_temp: number | null
+  heating: boolean | null
+  intensity: number | null
+  rssi: number | null
+  error_codes: (string | number)[]
+}
+
+export interface FirmwareAppSideSummary {
+  count: number
+  latest_observed_at?: string | null
+  self_reported_firmware_version?: string | null
+  controller_model?: string | null
+  app_version?: string | null
+  phone_os?: string | null
+  phone_os_version?: string | null
+  phone_brand?: string | null
+  phone_model?: string | null
+  user_keys?: string[]
+  sources?: string[]
+}
+
+export interface FirmwareCohortRef {
+  release_id: number
+  release_version: string
+  release_title: string | null
+  state: string
+  invited_at: string | null
+  opted_in_at: string | null
+  ota_pushed_at: string | null
+  verdict: string | null
+}
+
+export interface FirmwareSession {
+  source_event_id: string
+  session_id: string | null
+  grill_type: string | null
+  firmware_version: string | null
+  target_temp: number | null
+  session_start: string | null
+  session_end: string | null
+  session_duration_seconds: number | null
+  disconnect_events: number
+  manual_overrides: number
+  error_count: number
+  error_codes: unknown
+  temp_stability_score: number
+  time_to_stabilization_seconds: number | null
+  firmware_health_score: number
+  session_reliability_score: number
+  cook_success: boolean
+  cook_intent: string | null
+  cook_outcome: string | null
+  held_target: boolean | null
+  in_control_pct: number | null
+  max_overshoot_f: number | null
+  max_undershoot_f: number | null
+}
+
+export interface FirmwareDeviceSummary {
+  mac: string
+  latest_stream_event: FirmwareStreamEvent | null
+  session_count: number
+  app_side: FirmwareAppSideSummary
+  cohorts: FirmwareCohortRef[]
+}
+
+export interface FirmwareDeviceShadow {
+  mac: string
+  event: FirmwareStreamEvent | null
+  age_seconds: number | null
+  fetched_at: string
+}
+
+export interface FirmwareDeviceActiveCook {
+  mac: string
+  active: boolean
+  trail: FirmwareStreamEvent[]
+  latest_event: FirmwareStreamEvent | null
+  last_completed_session: FirmwareSession | null
+}
+
+export interface FirmwareLookupDevice {
+  mac: string
+  latest_stream_event: FirmwareStreamEvent | null
+  session_count: number
+  app_side: FirmwareAppSideSummary
+}
+
+export interface FirmwareLookupResult {
+  query: string
+  resolved_as: 'mac' | 'user_key'
+  devices: FirmwareLookupDevice[]
+}
+
+export interface FirmwareOverview {
+  window_hours: number
+  active_devices: number
+  firmware_distribution: Array<{ firmware_version: string; devices: number; pct: number }>
 }
 
 export interface EcrItem {

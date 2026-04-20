@@ -31,6 +31,7 @@ const Deci = lazy(() => import('./pages/Deci').then((m) => ({ default: m.Deci })
 const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage').then((m) => ({ default: m.TelemetryAnalysisPage })))
 const LoreLedger = lazy(() => import('./pages/LoreLedger').then((m) => ({ default: m.LoreLedger })))
 const EcrTracker = lazy(() => import('./pages/EcrTracker').then((m) => ({ default: m.EcrTracker })))
+const FirmwareHub = lazy(() => import('./pages/FirmwareHub').then((m) => ({ default: m.FirmwareHub })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -51,6 +52,7 @@ export function App() {
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
         <Route path="/division/product-engineering" element={withBoundary('Product / Engineering Division', <ProductEngineeringDivision />)} />
+        <Route path="/division/product-engineering/firmware" element={withBoundary('Firmware Hub', <FirmwareHub />)} />
         <Route path="/division/operations" element={withBoundary('Operations Division', <OperationsDivision />)} />
         <Route path="/division/production-manufacturing" element={withBoundary('Production / Manufacturing Division', <ProductionManufacturingDivision />)} />
         <Route path="/division/product-enginering" element={<Navigate to="/division/product-engineering" replace />} />

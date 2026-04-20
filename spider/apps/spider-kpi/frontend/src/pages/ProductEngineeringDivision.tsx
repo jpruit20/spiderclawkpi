@@ -12,7 +12,6 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
-import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
@@ -730,6 +729,7 @@ export function ProductEngineeringDivision() {
             ]).map(tab => (
               <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
             ))}
+            <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
           </div>
           {/* Date Range Picker */}
           <div style={{ position: 'relative' }}>
@@ -1158,10 +1158,22 @@ export function ProductEngineeringDivision() {
                   firmware-release markers overlaid. */}
               <FirmwareImpactTimeline weeks={26} />
 
-              {/* Firmware Beta + Gamma Waves program — Phase 1 taxonomy,
-                  candidate scoring, cohort management. OTA push + Gamma
-                  scheduler land post-Agustin review 2026-04-21. */}
-              <BetaProgramPanel />
+              {/* Firmware — own page now. Beta program, alpha (R&D),
+                  gamma waves, and per-device drill-down all live in
+                  /division/product-engineering/firmware. Summary link
+                  card sits in the slot between Fleet Health and
+                  Innovation Radar. */}
+              <section className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div className="card-title">Firmware Hub</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 640 }}>
+                    Alpha (internal R&D), Beta (external opt-in), Gamma (production waves), plus per-device drill-down with live 15 s shadow polling — moved to its own page so the feedback loop stays tight.
+                  </div>
+                </div>
+                <Link to="/division/product-engineering/firmware" className="range-button active" style={{ textDecoration: 'none' }}>
+                  Open Firmware Hub →
+                </Link>
+              </section>
 
               {/* ========================================================= */}
               {/* BELOW-THE-FOLD DETAIL — progressive disclosure.           */}
