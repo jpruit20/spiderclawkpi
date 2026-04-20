@@ -2,7 +2,17 @@ import { Suspense, lazy } from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { AuthGate } from './components/AuthGate'
+import { AuthGate, useAuth } from './components/AuthGate'
+
+const LORE_LEDGER_OWNER_EMAIL = 'joseph@spidergrills.com'
+
+function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  if ((user?.email ?? '').toLowerCase() !== LORE_LEDGER_OWNER_EMAIL) {
+    return <Navigate to="/" replace />
+  }
+  return <>{children}</>
+}
 
 const CommandCenter = lazy(() => import('./pages/CommandCenter').then((m) => ({ default: m.CommandCenter })))
 const CustomerExperienceDivision = lazy(() => import('./pages/CustomerExperienceDivision').then((m) => ({ default: m.CustomerExperienceDivision })))
@@ -49,7 +59,7 @@ export function App() {
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />
         <Route path="/social" element={withBoundary('Social Intelligence', <SocialIntelligence />)} />
         <Route path="/deci" element={withBoundary('DECI', <Deci />)} />
-        <Route path="/lore" element={withBoundary('Lore Ledger', <LoreLedger />)} />
+        <Route path="/lore" element={<OwnerOnlyRoute>{withBoundary('Lore Ledger', <LoreLedger />)}</OwnerOnlyRoute>} />
         <Route path="/root-cause" element={withBoundary('Root Cause', <RootCause />)} />
         <Route path="/system-health" element={withBoundary('System Health', <SystemHealthPage />)} />
         <Route path="/commercial" element={withBoundary('Revenue Engine', <RevenueEngine />)} />

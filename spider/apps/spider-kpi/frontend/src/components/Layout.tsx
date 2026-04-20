@@ -4,8 +4,13 @@ import spiderGrillsLogo from '../../spider_grills_black_nocircle.avif'
 import { useAuth } from './AuthGate'
 import { ChatPanel } from './ChatPanel'
 
+// Lore Ledger is still being shaped — keep it on Joseph's dashboard only
+// until it's ready for the wider team. Gate matches App.tsx route guard.
+const LORE_LEDGER_OWNER_EMAIL = 'joseph@spidergrills.com'
+
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth()
+  const canSeeLoreLedger = (user?.email ?? '').toLowerCase() === LORE_LEDGER_OWNER_EMAIL
 
   return (
     <div className="layout">
@@ -25,7 +30,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <small className="nav-group-label">Company</small>
           <NavLink to="/">Command Center</NavLink>
           <NavLink to="/deci">DECI</NavLink>
-          <NavLink to="/lore">Lore Ledger</NavLink>
+          {canSeeLoreLedger ? <NavLink to="/lore">Lore Ledger</NavLink> : null}
           <NavLink to="/revenue">Financial / Revenue</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
           <NavLink to="/social">Social Intelligence</NavLink>
