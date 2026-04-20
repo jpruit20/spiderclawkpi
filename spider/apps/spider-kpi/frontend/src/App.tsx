@@ -63,6 +63,7 @@ export function App() {
         <Route path="/analysis/rssi-impact" element={withBoundary('RSSI Impact Analysis', <TelemetryAnalysisPage />)} />
         <Route path="/analysis/probe-health" element={withBoundary('Probe Health Analysis', <TelemetryAnalysisPage />)} />
         <Route path="/analysis/firmware-model" element={withBoundary('Firmware Model Analysis', <TelemetryAnalysisPage />)} />
+        <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
     </AuthGate>

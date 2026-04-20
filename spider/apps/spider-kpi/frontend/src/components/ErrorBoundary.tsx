@@ -31,6 +31,22 @@ export class ErrorBoundary extends React.Component<
             {this.props.label || 'This section'} failed to render cleanly.
             {this.state.message ? ` ${this.state.message}` : ''}
           </div>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              className="range-button active"
+              onClick={() => this.setState({ hasError: false, message: undefined })}
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              className="range-button"
+              onClick={() => window.location.reload()}
+            >
+              Reload page
+            </button>
+          </div>
         </div>
       )
     }
