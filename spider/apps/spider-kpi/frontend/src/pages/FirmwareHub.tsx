@@ -28,8 +28,12 @@ import {
   type FirmwareSession,
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
+import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
+import { useAuth } from '../components/AuthGate'
 
-type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma'
+type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
+
+const OWNER_EMAIL = 'joseph@spidergrills.com'
 
 const SHADOW_POLL_MS = 15_000
 
@@ -56,6 +60,19 @@ function fmtDateTime(iso: string | null | undefined): string {
 
 export function FirmwareHub() {
   const [tab, setTab] = useState<TabKey>('overview')
+  const { user } = useAuth()
+  const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
+  const tabs: Array<{ key: TabKey; label: string }> = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'alpha', label: 'Alpha (R&D)' },
+    { key: 'beta', label: 'Beta' },
+    { key: 'gamma', label: 'Gamma' },
+    { key: 'device', label: 'Device Drill-down' },
+  ]
+  if (isOwner) {
+    tabs.push({ key: 'deploy', label: 'Deploy' })
+    tabs.push({ key: 'log', label: 'Deploy Log' })
+  }
   return (
     <div className="page-grid">
       <section className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
@@ -65,14 +82,8 @@ export function FirmwareHub() {
             Program health, cohort status, and per-device drill-down. Live shadow polls every 15 s.
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2 }}>
-          {([
-            { key: 'overview', label: 'Overview' },
-            { key: 'alpha', label: 'Alpha (R&D)' },
-            { key: 'beta', label: 'Beta' },
-            { key: 'gamma', label: 'Gamma' },
-            { key: 'device', label: 'Device Drill-down' },
-          ] as Array<{ key: TabKey; label: string }>).map(t => (
+        <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
+          {tabs.map(t => (
             <button
               key={t.key}
               className={`range-button${tab === t.key ? ' active' : ''}`}
@@ -87,6 +98,8 @@ export function FirmwareHub() {
       {tab === 'beta' ? <BetaProgramPanel /> : null}
       {tab === 'gamma' ? <PlaceholderTab title="Gamma rollout" copy="Production-wide 10%/day progression once a beta clears its verdict. Surfaces the IoT job IDs + per-wave device counts in Phase 2." /> : null}
       {tab === 'device' ? <DeviceDrillDown /> : null}
+      {tab === 'deploy' ? <FirmwareDeployPanel /> : null}
+      {tab === 'log' ? <FirmwareDeployLogView /> : null}
     </div>
   )
 }

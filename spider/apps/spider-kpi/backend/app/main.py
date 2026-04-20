@@ -18,6 +18,7 @@ from app.api.routes.clickup import router as clickup_router, webhook_router as c
 from app.api.routes.ecrs import router as ecrs_router
 from app.api.routes.executive import router as executive_router
 from app.api.routes.firmware import router as firmware_router
+from app.api.routes.firmware_deploy import router as firmware_deploy_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.email import router as email_router
 from app.api.routes.health import router as health_router
@@ -99,6 +100,7 @@ app.include_router(clickup_webhook_router)
 app.include_router(ecrs_router)
 app.include_router(executive_router)
 app.include_router(firmware_router)
+app.include_router(firmware_deploy_router)
 app.include_router(lore_router)
 app.include_router(marketing_router)
 app.include_router(slack_router)

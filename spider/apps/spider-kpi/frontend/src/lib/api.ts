@@ -731,6 +731,45 @@ export const api = {
     request<{ mac: string; count: number; sessions: FirmwareSession[] }>(
       `/api/firmware/device/${encodeURIComponent(mac)}/sessions?limit=${limit}`, { signal },
     ),
+  firmwareDeployPreview: (body: FirmwareDeployPreviewBody) =>
+    request<FirmwareDeployPreviewResponse>('/api/firmware/deploy/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  firmwareDeployExecute: (body: FirmwareDeployExecuteBody) =>
+    request<FirmwareDeployExecuteResponse>('/api/firmware/deploy/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  firmwareDeployAbort: (aws_job_id: string, reason: string) =>
+    request<{ ok: boolean; aws: Record<string, unknown> }>('/api/firmware/deploy/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aws_job_id, reason }),
+    }),
+  firmwareDeployStatus: (aws_job_id: string, signal?: AbortSignal) =>
+    request<FirmwareDeployStatusResponse>(
+      `/api/firmware/deploy/status/${encodeURIComponent(aws_job_id)}`, { signal },
+    ),
+  firmwareDeployLog: (params: { release_id?: number; aws_job_id?: string; cohort?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) => {
+    const qs = new URLSearchParams()
+    if (params.release_id != null) qs.set('release_id', String(params.release_id))
+    if (params.aws_job_id) qs.set('aws_job_id', params.aws_job_id)
+    if (params.cohort) qs.set('cohort', params.cohort)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    if (params.offset != null) qs.set('offset', String(params.offset))
+    const q = qs.toString()
+    return request<FirmwareDeployLogResponse>(
+      `/api/firmware/deploy/log${q ? `?${q}` : ''}`, { signal },
+    )
+  },
+  firmwareReleaseApprove: (release_id: number, body: { cohort: 'alpha' | 'beta' | 'gamma'; approve: boolean; notes?: string }) =>
+    request<FirmwareReleaseApprovalResponse>(
+      `/api/firmware/deploy/releases/${release_id}/approve`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    ),
 }
 
 export interface FirmwareStreamEvent {
@@ -889,6 +928,104 @@ export interface BetaProgramSummary {
   }>
 }
 
+export interface FirmwareDeployPreviewBody {
+  release_id: number
+  cohort: 'alpha' | 'beta' | 'gamma'
+  device_ids?: string[]
+  macs?: string[]
+}
+
+export interface FirmwareDeviceCheck {
+  device_id: string
+  mac: string | null
+  current_version: string | null
+  controller_model: string | null
+  active_cook: boolean
+  last_sample_age_seconds: number | null
+  in_cohort: boolean
+  version_is_newer: boolean | null
+  model_matches: boolean | null
+  hard_block_reasons: string[]
+  soft_block_reasons: string[]
+}
+
+export interface FirmwarePreflight {
+  release_id: number
+  cohort: 'alpha' | 'beta' | 'gamma'
+  release_ok: boolean
+  release_reasons: string[]
+  devices: FirmwareDeviceCheck[]
+}
+
+export interface FirmwareDeployPreviewResponse {
+  token: string
+  expires_at: string
+  confirmation_required_text: string
+  preflight: FirmwarePreflight
+  kill_switch_enabled: boolean
+}
+
+export interface FirmwareDeployExecuteBody {
+  preview_token: string
+  confirm_version_typed: string
+  override_device_ids?: string[]
+  override_reason?: string
+}
+
+export interface FirmwareDeployExecuteResponse {
+  ok: boolean
+  aws_job_id: string
+  deployed_device_ids: string[]
+  skipped_device_count: number
+  preflight: FirmwarePreflight
+}
+
+export interface FirmwareDeployStatusResponse {
+  aws_job_id: string
+  devices: Array<{
+    device_id: string
+    mac: string | null
+    dashboard_status: string
+    aws: Record<string, unknown>
+    target_version: string | null
+    prior_version: string | null
+  }>
+}
+
+export interface FirmwareDeployLogRow {
+  id: number
+  release_id: number
+  device_id: string
+  mac: string | null
+  cohort: string
+  initiated_by: string
+  aws_job_id: string | null
+  status: string
+  target_version: string | null
+  prior_version: string | null
+  created_at: string | null
+  queued_at: string | null
+  confirmed_at: string | null
+  finished_at: string | null
+  error_message: string | null
+}
+
+export interface FirmwareDeployLogResponse {
+  total: number
+  limit: number
+  offset: number
+  rows: FirmwareDeployLogRow[]
+}
+
+export interface FirmwareReleaseApprovalResponse {
+  ok: boolean
+  release_id: number
+  approved_for_alpha: boolean
+  approved_for_beta: boolean
+  approved_for_gamma: boolean
+  approval_audit_json: Array<{ at: string; by: string; cohort: string; approve: boolean; notes: string }>
+}
+
 export interface BetaReleaseSummary {
   id: number
   version: string
@@ -908,4 +1045,11 @@ export interface BetaReleaseSummary {
   released_at: string | null
   created_at: string | null
   cohort_counts: Record<string, number>
+  binary_url?: string | null
+  binary_sha256?: string | null
+  binary_size_bytes?: number | null
+  target_controller_model?: string | null
+  approved_for_alpha?: boolean
+  approved_for_beta?: boolean
+  approved_for_gamma?: boolean
 }

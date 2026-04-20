@@ -1323,10 +1323,73 @@ class FirmwareRelease(TimestampMixin, Base):
     gamma_plan_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     beta_report_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     beta_cohort_target_size: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    binary_url: Mapped[Optional[str]] = mapped_column(String(1024))
+    binary_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    binary_size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    target_controller_model: Mapped[Optional[str]] = mapped_column(String(32))
+    approved_for_alpha: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approved_for_beta: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approved_for_gamma: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approval_audit_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(128))
     approved_by: Mapped[Optional[str]] = mapped_column(String(128))
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     released_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class FirmwareDeployLog(TimestampMixin, Base):
+    """Audit trail for every firmware OTA attempt.
+
+    One row per device per deploy attempt. Captures preflight results,
+    override reasons (if user bypassed a soft check), the AWS IoT job
+    id we created, and terminal status.
+    """
+    __tablename__ = "firmware_deploy_log"
+    __table_args__ = (
+        Index("ix_firmware_deploy_log_release", "release_id"),
+        Index("ix_firmware_deploy_log_device", "device_id"),
+        Index("ix_firmware_deploy_log_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey("firmware_releases.id", ondelete="RESTRICT"), nullable=False)
+    device_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    mac: Mapped[Optional[str]] = mapped_column(String(12))
+    cohort: Mapped[str] = mapped_column(String(16), nullable=False)  # alpha | beta | gamma
+    initiated_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    aws_job_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="pending",
+        nullable=False,
+    )  # preflight_failed | pending | in_flight | succeeded | failed | rolled_back | aborted | kill_switch_tripped
+    target_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prior_version: Mapped[Optional[str]] = mapped_column(String(64))
+    preflight_results_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    override_reasons_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    aws_response_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    queued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class FirmwareDeployPreviewToken(TimestampMixin, Base):
+    """Short-lived token issued by /preview and consumed by /execute.
+
+    Enforces two-phase confirmation: caller must have seen the preflight
+    results before executing. Token is single-use and expires in 10 minutes.
+    """
+    __tablename__ = "firmware_deploy_preview_tokens"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey("firmware_releases.id", ondelete="CASCADE"), nullable=False)
+    cohort: Mapped[str] = mapped_column(String(16), nullable=False)
+    device_ids_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    preflight_results_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class BetaCohortMember(TimestampMixin, Base):

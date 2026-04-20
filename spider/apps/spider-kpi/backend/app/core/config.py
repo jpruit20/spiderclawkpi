@@ -215,6 +215,35 @@ class Settings(BaseSettings):
     amazon_sp_region: str = "us-east-1"
     amazon_sync_interval_minutes: int = 360  # every 6 hours
 
+    # Firmware OTA — AWS IoT Jobs.
+    # Kill switch defaults to OFF. Every deploy endpoint refuses work unless
+    # FIRMWARE_OTA_ENABLED=true. Credentials reuse aws_access_key_id /
+    # aws_secret_access_key; the IoT data endpoint and region default to
+    # Spider Grills' IoT account.
+    firmware_ota_enabled: bool = Field(default=False, validation_alias=AliasChoices('FIRMWARE_OTA_ENABLED'))
+    firmware_ota_aws_region: str = Field(default="us-east-2", validation_alias=AliasChoices('FIRMWARE_OTA_AWS_REGION'))
+    firmware_ota_iot_endpoint: str = Field(
+        default="a1gzggdqzynf8-ats.iot.us-east-2.amazonaws.com",
+        validation_alias=AliasChoices('FIRMWARE_OTA_IOT_ENDPOINT'),
+    )
+    firmware_ota_circuit_breaker_threshold_pct: float = 10.0
+    firmware_ota_circuit_breaker_window: int = 10
+    firmware_ota_batch_cap: int = 50
+    firmware_ota_single_rate_per_min: int = 5
+    firmware_ota_wave_delay_seconds: int = 60
+    firmware_ota_preview_token_ttl_minutes: int = 10
+    firmware_ota_active_cook_window_seconds: int = 120
+
+    @field_validator("firmware_ota_enabled", mode="before")
+    @classmethod
+    def parse_firmware_ota_enabled(cls, value: Any):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            cleaned = value.strip().strip('"').strip("'").lower()
+            return cleaned in ('true', '1', 'yes', 'on', 'enabled')
+        return bool(value)
+
     github_token: Optional[str] = Field(default=None, validation_alias=AliasChoices('GITHUB_TOKEN', 'GH_TOKEN'))
     github_owner: str = Field(default='spider-grills', validation_alias=AliasChoices('GITHUB_OWNER', 'GH_OWNER'))
     github_repo: str = Field(default='venom-firmware', validation_alias=AliasChoices('GITHUB_REPO', 'GH_REPO'))

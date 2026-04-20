@@ -179,6 +179,13 @@ def _release_row(r: FirmwareRelease, db: Session | None = None) -> dict[str, Any
         "released_at": r.released_at.isoformat() if r.released_at else None,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "cohort_counts": cohort_counts,
+        "binary_url": getattr(r, "binary_url", None),
+        "binary_sha256": getattr(r, "binary_sha256", None),
+        "binary_size_bytes": getattr(r, "binary_size_bytes", None),
+        "target_controller_model": getattr(r, "target_controller_model", None),
+        "approved_for_alpha": bool(getattr(r, "approved_for_alpha", False)),
+        "approved_for_beta": bool(getattr(r, "approved_for_beta", False)),
+        "approved_for_gamma": bool(getattr(r, "approved_for_gamma", False)),
     }
 
 
