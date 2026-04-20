@@ -713,6 +713,33 @@ export const api = {
     request<{ ok: boolean; releases_evaluated: number }>('/api/beta/evaluate-all', { method: 'POST' }),
   betaSummary: (signal?: AbortSignal) =>
     request<BetaProgramSummary>('/api/beta/summary', { signal }),
+  ecrs: (includeClosed = false, signal?: AbortSignal) =>
+    request<{ ecrs: EcrItem[]; count: number; fields_expected: string[] }>(
+      `/api/ecrs?include_closed=${includeClosed}`, { signal },
+    ),
+}
+
+export interface EcrItem {
+  task_id: string
+  custom_id: string | null
+  name: string | null
+  description: string | null
+  status: string | null
+  status_type: string | null
+  priority: string | null
+  space_name: string | null
+  list_name: string | null
+  folder_name: string | null
+  creator_username: string | null
+  assignees: string[]
+  url: string | null
+  impact_areas: string[]
+  dev_complete: string | null
+  production_ready: string | null
+  field_deploy: string | null
+  cx_talking_points: string | null
+  updated_at: string | null
+  pipeline_stage: string
 }
 
 export interface BetaVerdictEvidence {

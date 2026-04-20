@@ -33,6 +33,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {canSeeLoreLedger ? <NavLink to="/lore">Lore Ledger</NavLink> : null}
           <NavLink to="/revenue">Financial / Revenue</NavLink>
           <NavLink to="/issues">Issue Radar</NavLink>
+          {canSeeLoreLedger ? <NavLink to="/issues/ecrs">ECR Tracker</NavLink> : null}
           <NavLink to="/social">Social Intelligence</NavLink>
           <NavLink to="/system-health">System Health</NavLink>
           <small className="nav-group-label">Divisions</small>

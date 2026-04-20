@@ -30,6 +30,7 @@ const SocialIntelligence = lazy(() => import('./pages/SocialIntelligence').then(
 const Deci = lazy(() => import('./pages/Deci').then((m) => ({ default: m.Deci })))
 const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage').then((m) => ({ default: m.TelemetryAnalysisPage })))
 const LoreLedger = lazy(() => import('./pages/LoreLedger').then((m) => ({ default: m.LoreLedger })))
+const EcrTracker = lazy(() => import('./pages/EcrTracker').then((m) => ({ default: m.EcrTracker })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -57,6 +58,7 @@ export function App() {
         <Route path="/revenue" element={withBoundary('Revenue Engine', <RevenueEngine />)} />
         <Route path="/friction" element={withBoundary('Friction Map', <FrictionMap />)} />
         <Route path="/issues" element={withBoundary('Issue Radar', <IssueRadar />)} />
+        <Route path="/issues/ecrs" element={<OwnerOnlyRoute>{withBoundary('ECR Tracker', <EcrTracker />)}</OwnerOnlyRoute>} />
         <Route path="/social" element={withBoundary('Social Intelligence', <SocialIntelligence />)} />
         <Route path="/deci" element={withBoundary('DECI', <Deci />)} />
         <Route path="/lore" element={<OwnerOnlyRoute>{withBoundary('Lore Ledger', <LoreLedger />)}</OwnerOnlyRoute>} />
