@@ -192,6 +192,35 @@ def _send_slack(slack_text: str, subject_id: str) -> bool:
         return False
 
 
+DEPLOY_LEDGER = Path("/var/log/spider-kpi-deploys.jsonl")
+
+
+def _append_ledger(args: argparse.Namespace, commit_subject: str) -> None:
+    """Append this deploy to a rolling JSONL ledger.
+
+    Success outcomes skip email/Slack but still land here so the daily
+    summary (scripts/daily_deploy_summary.py) can roll them up into one
+    email per day instead of one email per deploy.
+    """
+    import json
+    try:
+        DEPLOY_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.now(BUSINESS_TZ).isoformat(),
+            "outcome": args.outcome,
+            "source": args.source,
+            "old_sha": args.old_sha[:12],
+            "new_sha": args.new_sha[:12],
+            "subject": commit_subject,
+            "run_url": args.run_url or None,
+            "error": args.error or None,
+        }
+        with DEPLOY_LEDGER.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        print(f"notify: ledger write failed: {exc}", file=sys.stderr)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--outcome", required=True, choices=["success", "rolled_back", "failure"])
@@ -204,6 +233,17 @@ def main() -> int:
 
     subject, body_text, slack_text = _build_bodies(args)
     subject_id = f"deploy:{args.source}:{args.new_sha[:12]}:{args.outcome}"
+
+    # Every outcome — including success — lands in the ledger so the
+    # daily summary can roll them up.
+    _append_ledger(args, _git_subject(args.new_sha))
+
+    # Successful deploys are quiet: no email, no Slack. They show up in
+    # the daily deploy-summary email instead. Rolled-back / failure
+    # outcomes still page immediately because they're actionable.
+    if args.outcome == "success":
+        print("notify: success ledgered (daily summary), no email/slack")
+        return 0
 
     email_ok = _send_email(subject, body_text)
     slack_ok = _send_slack(slack_text, subject_id)
