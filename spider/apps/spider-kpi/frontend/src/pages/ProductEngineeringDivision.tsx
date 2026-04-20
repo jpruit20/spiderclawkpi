@@ -13,6 +13,7 @@ import { CollapsibleSection } from '../components/CollapsibleSection'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
@@ -1650,6 +1651,17 @@ export function ProductEngineeringDivision() {
                 title="Slack pulse — Product / Engineering"
                 subtitle="Engineering conversation in #product-dev. Issue-shaped messages auto-surface on Issue Radar."
                 defaultChannelName="product-dev"
+              />
+
+              {/* Email archive pulse — highlight warranty/product escalations.
+                  Fixed 14d window; the CX division also shows the same card
+                  but with a different highlight, so PE gets the product lens. */}
+              <EmailPulseCard
+                range={{
+                  startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+                  endDate: new Date().toISOString().slice(0, 10),
+                }}
+                highlightArchetype="warranty_issue"
               />
 
               </CollapsibleSection>

@@ -3,6 +3,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
+import { EmailPulseCard } from '../components/EmailPulseCard'
 
 export function OperationsDivision() {
   return (
@@ -57,6 +58,15 @@ export function OperationsDivision() {
           title="Slack pulse — Inventory / Wholesale"
           subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
           defaultChannelName="inventory-updates"
+        />
+        {/* Email archive pulse — leads with shipment/logistics escalations.
+            Best operational signal we have until an ERP feed lands. */}
+        <EmailPulseCard
+          range={{
+            startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+            endDate: new Date().toISOString().slice(0, 10),
+          }}
+          highlightArchetype="shipment_logistics"
         />
       </div>
     </>
