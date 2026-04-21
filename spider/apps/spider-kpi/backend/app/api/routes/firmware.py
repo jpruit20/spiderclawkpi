@@ -63,6 +63,51 @@ router = APIRouter(prefix="/api/firmware", tags=["firmware"])
 
 
 # ---------------------------------------------------------------------------
+# Tiny TTL cache for the firmware /overview/metrics aggregate queries.
+# Scoped to this module; one entry per (start, end, firmware_version)
+# tuple. 90 s TTL is tight enough that the 30 s poll Command Center
+# does elsewhere still sees fresh numbers within a couple poll cycles,
+# and loose enough to absorb page-reload bursts that otherwise re-run
+# the same ~11 s aggregate.
+# ---------------------------------------------------------------------------
+
+_METRICS_CACHE_TTL_SECONDS = 90
+_metrics_cache: dict[tuple[str, str, str | None], tuple[float, list]] = {}
+
+
+def _metrics_cache_key(start_dt: datetime, end_dt: datetime, firmware_version: str | None) -> tuple[str, str, str | None]:
+    # Round to the minute so many clients in the same poll window share
+    # a cache slot rather than each computing a slightly-different slice.
+    return (
+        start_dt.replace(second=0, microsecond=0).isoformat(),
+        end_dt.replace(second=0, microsecond=0).isoformat(),
+        firmware_version,
+    )
+
+
+def _metrics_cache_get(start_dt: datetime, end_dt: datetime, firmware_version: str | None) -> list | None:
+    import time as _time
+    key = _metrics_cache_key(start_dt, end_dt, firmware_version)
+    hit = _metrics_cache.get(key)
+    if hit is None:
+        return None
+    cached_at, rows = hit
+    if _time.time() - cached_at > _METRICS_CACHE_TTL_SECONDS:
+        _metrics_cache.pop(key, None)
+        return None
+    return rows
+
+
+def _metrics_cache_put(start_dt: datetime, end_dt: datetime, firmware_version: str | None, rows: list) -> None:
+    import time as _time
+    if len(_metrics_cache) > 64:
+        # Drop the oldest; this cache is tiny by design
+        oldest_key = min(_metrics_cache, key=lambda k: _metrics_cache[k][0])
+        _metrics_cache.pop(oldest_key, None)
+    _metrics_cache[_metrics_cache_key(start_dt, end_dt, firmware_version)] = (_time.time(), rows)
+
+
+# ---------------------------------------------------------------------------
 # Identity helpers
 # ---------------------------------------------------------------------------
 
@@ -498,48 +543,45 @@ def overview_metrics(
     if sessions == 0 and latest_session_ts is not None and latest_session_ts < start_dt:
         sessions_stale = True
 
-    # Firmware distribution over the window
-    dist_rows = db.execute(
-        select(
-            TelemetryStreamEvent.firmware_version,
-            func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
-        )
-        .where(
-            TelemetryStreamEvent.sample_timestamp >= start_dt,
-            TelemetryStreamEvent.sample_timestamp < end_dt,
-        )
-        .group_by(TelemetryStreamEvent.firmware_version)
-        .order_by(desc("devices"))
-    ).all()
-    dist_total = sum(int(n or 0) for (_, n) in dist_rows)
+    # Combined distribution query — one pass over telemetry_stream_events
+    # instead of two. Each query previously did count(distinct device_id)
+    # over ~2.7M rows per week at ~11s each (22s combined). Grouping by
+    # (grill_type, firmware_version) once and deriving both distributions
+    # in Python drops the pair to ~11s, and the module-level cache below
+    # makes every subsequent hit inside the TTL window instant.
+    combined_rows = _metrics_cache_get(start_dt, end_dt, firmware_version)
+    if combined_rows is None:
+        combined_rows = db.execute(
+            select(
+                TelemetryStreamEvent.grill_type,
+                TelemetryStreamEvent.firmware_version,
+                func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
+            )
+            .where(
+                TelemetryStreamEvent.sample_timestamp >= start_dt,
+                TelemetryStreamEvent.sample_timestamp < end_dt,
+            )
+            .group_by(TelemetryStreamEvent.grill_type, TelemetryStreamEvent.firmware_version)
+        ).all()
+        _metrics_cache_put(start_dt, end_dt, firmware_version, combined_rows)
+
+    firmware_counts: dict[str | None, int] = {}
+    product_counts: dict[str, int] = {}
+    for grill_type_val, fw_val, n in combined_rows:
+        n_int = int(n or 0)
+        firmware_counts[fw_val] = firmware_counts.get(fw_val, 0) + n_int
+        family = classify_product(grill_type_val, fw_val)
+        product_counts[family] = product_counts.get(family, 0) + n_int
+
+    dist_total = sum(firmware_counts.values())
     firmware_distribution = [
         {
             "firmware_version": v or "unknown",
             "devices": int(n),
             "pct": round((int(n) / dist_total) * 100, 1) if dist_total else 0.0,
         }
-        for (v, n) in dist_rows
+        for v, n in sorted(firmware_counts.items(), key=lambda kv: kv[1], reverse=True)
     ]
-
-    # Product-family distribution — rolls AWS grill_type + firmware
-    # version up into the three real product lines (Weber Kettle / Huntsman
-    # / Giant Huntsman). See app.services.product_taxonomy for rules.
-    pf_rows = db.execute(
-        select(
-            TelemetryStreamEvent.grill_type,
-            TelemetryStreamEvent.firmware_version,
-            func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
-        )
-        .where(
-            TelemetryStreamEvent.sample_timestamp >= start_dt,
-            TelemetryStreamEvent.sample_timestamp < end_dt,
-        )
-        .group_by(TelemetryStreamEvent.grill_type, TelemetryStreamEvent.firmware_version)
-    ).all()
-    product_counts: dict[str, int] = {}
-    for grill_type_val, fw_val, n in pf_rows:
-        family = classify_product(grill_type_val, fw_val)
-        product_counts[family] = product_counts.get(family, 0) + int(n or 0)
     pf_total = sum(product_counts.values())
     product_distribution = [
         {

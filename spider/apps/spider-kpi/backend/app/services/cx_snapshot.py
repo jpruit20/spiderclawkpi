@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models import CXAction, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, KPIDaily
 
@@ -262,7 +262,31 @@ def getCustomerExperienceMetrics(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
     rows = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
-    tickets = db.execute(select(FreshdeskTicket).order_by(desc(FreshdeskTicket.updated_at_source))).scalars().all()
+    # Defer the heavy text/JSONB columns we don't need here. Loading all
+    # 9k+ ticket rows including description_text, description_html,
+    # subject, and the full raw_payload JSONB was pulling ~40 MB into
+    # Python and taking ~15s. None of those fields are read by cx_snapshot;
+    # the only raw_payload key we need is `responder_name`, which we pull
+    # in a separate small query below keyed by ticket_id.
+    tickets = db.execute(
+        select(FreshdeskTicket)
+        .options(
+            defer(FreshdeskTicket.description_text),
+            defer(FreshdeskTicket.description_html),
+            defer(FreshdeskTicket.subject),
+            defer(FreshdeskTicket.raw_payload),
+        )
+        .order_by(desc(FreshdeskTicket.updated_at_source))
+    ).scalars().all()
+    # Responder-name lookup — one lightweight JSONB-extract query, not a
+    # per-row attribute access on the heavy raw_payload blob.
+    responder_rows = db.execute(
+        select(
+            FreshdeskTicket.ticket_id,
+            FreshdeskTicket.raw_payload['responder_name'].astext.label('responder_name'),
+        )
+    ).all()
+    responder_by_ticket: dict[str, str | None] = {r[0]: r[1] for r in responder_rows}
     agents = db.execute(select(FreshdeskAgentDaily).order_by(FreshdeskAgentDaily.business_date, FreshdeskAgentDaily.agent_name, FreshdeskAgentDaily.agent_id)).scalars().all()
     top_issue = db.execute(select(IssueCluster).order_by(desc(IssueCluster.updated_at), desc(IssueCluster.id)).limit(1)).scalar_one_or_none()
     product_linked = _issue_is_product_linked(top_issue)
@@ -307,13 +331,13 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
     assigned_map: dict[str, int] = defaultdict(int)
     reopened_map: dict[str, dict[str, int]] = defaultdict(lambda: {'total': 0, 'reopened': 0})
     for ticket in snapshot_open_tickets:
-        name = str((ticket.raw_payload or {}).get('responder_name') or ticket.agent_id or 'Unassigned')
+        name = str(responder_by_ticket.get(ticket.ticket_id) or ticket.agent_id or 'Unassigned')
         open_by_rep[name] += 1
     for ticket in tickets:
         created = _normalize_date(ticket.created_at_source)
         if not created or created < start7 or created > snapshot_date:
             continue
-        name = str((ticket.raw_payload or {}).get('responder_name') or ticket.agent_id or 'Unassigned')
+        name = str(responder_by_ticket.get(ticket.ticket_id) or ticket.agent_id or 'Unassigned')
         assigned_map[name] += 1
         reopened_map[name]['total'] += 1
         text = f"{ticket.category or ''} {' '.join(ticket.tags_json or [])}".lower()
