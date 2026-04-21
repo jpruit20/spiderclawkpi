@@ -136,23 +136,24 @@ def _build_context(db: Session) -> str:
             "id": d.id,
             "title": d.title,
             "status": d.status,
-            "domain": d.domain,
-            "deadline": d.deadline.isoformat() if d.deadline else None,
+            "department": d.department,
+            "priority": d.priority,
+            "due_date": d.due_date.isoformat() if d.due_date else None,
         }
         for d in deci_rows
     ]
 
     # Recent critical signals (last 14d)
-    signal_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    signal_cutoff = date.today() - timedelta(days=14)
     signal_rows = db.execute(
         select(IssueSignal)
-        .where(IssueSignal.detected_at >= signal_cutoff)
-        .order_by(desc(IssueSignal.detected_at))
+        .where(IssueSignal.business_date >= signal_cutoff)
+        .order_by(desc(IssueSignal.business_date))
         .limit(25)
     ).scalars().all()
     signals_compact = [
         {
-            "at": s.detected_at.isoformat() if s.detected_at else None,
+            "date": s.business_date.isoformat() if s.business_date else None,
             "source": s.source,
             "severity": s.severity,
             "title": (s.title or "")[:120],
@@ -178,13 +179,13 @@ def _build_context(db: Session) -> str:
         for i in insight_rows
     ]
 
-    # Recommendations queue (drafts)
+    # Recent recommendations (leadership-facing drafts)
     rec_rows = db.execute(
-        select(Recommendation).where(Recommendation.status == "proposed")
+        select(Recommendation)
         .order_by(desc(Recommendation.created_at)).limit(20)
     ).scalars().all()
     recs_compact = [
-        {"title": r.title, "priority": r.priority, "category": r.category}
+        {"title": r.title, "severity": r.severity, "owner": r.owner_team}
         for r in rec_rows
     ]
 

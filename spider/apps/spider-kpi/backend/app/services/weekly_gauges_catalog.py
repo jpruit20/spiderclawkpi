@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    DeciDecision,
     FirmwareDeviceRecent,
     FreshdeskTicket,
     FreshdeskTicketsDaily,
@@ -377,7 +378,7 @@ def _resolve_disconnect_rate_7d(db: Session) -> dict[str, Any]:
 
 def _resolve_drafts_awaiting(db: Session) -> dict[str, Any]:
     value = db.execute(
-        select(func.count(Recommendation.id)).where(Recommendation.status == "proposed")
+        select(func.count(DeciDecision.id)).where(DeciDecision.status == "draft")
     ).scalar() or 0
     return {
         "value": float(value),
