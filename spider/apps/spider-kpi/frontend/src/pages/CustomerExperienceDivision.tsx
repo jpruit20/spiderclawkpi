@@ -627,8 +627,14 @@ export function CustomerExperienceDivision() {
           {/* KPI Strip */}
           <VenomKpiStrip cards={kpiCards} cols={4} />
 
+          {/* Product complaint search — Conor's 2026-04-20 request.
+              Lives at the top of the CX hero because the whole point is
+              a quick lookup before drilling deeper. */}
+          <ProductComplaintsCard />
+
           {/* WISMO — target: 0. Customer follow-ups on undelivered orders.
-              Every one is a proactive-comms gap. */}
+              Compressed by default (just KPI strip); the full trend
+              chart + recent tickets list expand on click. */}
           <WismoKpiCard days={30} />
 
           {/* Performance Metrics as a visual tile grid. Each tile is a
@@ -1487,9 +1493,6 @@ export function CustomerExperienceDivision() {
               <div className="state-message">Social listening will populate after first Reddit sync</div>
             )}
           </section>
-
-          {/* Product complaint search — answers "how many people complained about X?" */}
-          <ProductComplaintsCard />
 
           {/* ClickUp tasks + team velocity for CX */}
           <ClickUpTasksCard

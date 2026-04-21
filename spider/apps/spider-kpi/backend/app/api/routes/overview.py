@@ -141,8 +141,54 @@ def get_support_agents(db: Session = Depends(db_session)):
 
 @router.get("/support/tickets")
 def get_support_tickets(db: Session = Depends(db_session)):
-    tickets = db.execute(select(FreshdeskTicket).order_by(desc(FreshdeskTicket.updated_at_source))).scalars().all()
-    return tickets
+    """Slim-row list for the CX + Support pages. Does NOT include the
+    Freshdesk archive columns (description_text, description_html,
+    raw_payload) which after the 2026-04-20 archive backfill multiplied
+    the wire payload by ~10x and pushed CX page load past 10 seconds.
+
+    The only raw_payload key the UI actually reads is ``responder_name``,
+    which we synthesize from the small FreshdeskAgentDaily id→name
+    lookup (4 distinct agents, ~instant)."""
+    from sqlalchemy.orm import defer
+    from app.models import FreshdeskAgentDaily
+    tickets = db.execute(
+        select(FreshdeskTicket)
+        .options(
+            defer(FreshdeskTicket.description_text),
+            defer(FreshdeskTicket.description_html),
+            defer(FreshdeskTicket.raw_payload),
+        )
+        .order_by(desc(FreshdeskTicket.updated_at_source))
+    ).scalars().all()
+    agents = db.execute(select(FreshdeskAgentDaily)).scalars().all()
+    name_by_agent: dict[str, str] = {}
+    for a in agents:
+        if a.agent_id and a.agent_name:
+            name_by_agent[str(a.agent_id)] = str(a.agent_name)
+    # Return plain dicts so we can inject a minimal synthesized raw_payload.
+    # FastAPI serializes these faster than ORM + doesn't trigger lazy loads.
+    return [
+        {
+            "ticket_id": t.ticket_id,
+            "subject": t.subject,
+            "status": t.status,
+            "priority": t.priority,
+            "channel": t.channel,
+            "group_name": t.group_name,
+            "requester_id": t.requester_id,
+            "agent_id": t.agent_id,
+            "created_at_source": t.created_at_source.isoformat() if t.created_at_source else None,
+            "updated_at_source": t.updated_at_source.isoformat() if t.updated_at_source else None,
+            "resolved_at_source": t.resolved_at_source.isoformat() if t.resolved_at_source else None,
+            "first_response_hours": t.first_response_hours,
+            "resolution_hours": t.resolution_hours,
+            "csat_score": t.csat_score,
+            "tags_json": t.tags_json or [],
+            "category": t.category,
+            "raw_payload": {"responder_name": name_by_agent.get(str(t.agent_id or ""), "")} if t.agent_id else {},
+        }
+        for t in tickets
+    ]
 
 
 @router.get("/source-health", response_model=list[SourceHealthOut])

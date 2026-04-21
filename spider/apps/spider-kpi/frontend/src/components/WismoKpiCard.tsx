@@ -20,6 +20,7 @@ import type { WismoKpiResponse } from '../lib/types'
 export function WismoKpiCard({ days = 30 }: { days?: number }) {
   const [data, setData] = useState<WismoKpiResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -63,15 +64,35 @@ export function WismoKpiCard({ days = 30 }: { days?: number }) {
 
   return (
     <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
-      <div className="venom-panel-head">
+      <div className="venom-panel-head" style={{ alignItems: 'center' }}>
         <div>
           <strong>WISMO follow-ups — target: 0</strong>
-          <p className="venom-chart-sub">
-            Customers reaching out asking "where is my order?" in the last {data.window_days} days.
-            Every ticket = a proactive-comms opportunity we missed.
-          </p>
+          {expanded ? (
+            <p className="venom-chart-sub">
+              Customers reaching out asking "where is my order?" in the last {data.window_days} days.
+              Every ticket = a proactive-comms opportunity we missed.
+            </p>
+          ) : null}
         </div>
-        <span className="venom-panel-hint">{data.tickets_in_window} total tickets in window</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="venom-panel-hint">{data.tickets_in_window} total tickets in window</span>
+          <button
+            type="button"
+            onClick={() => setExpanded(x => !x)}
+            style={{
+              fontSize: 11,
+              padding: '4px 10px',
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              color: 'var(--muted)',
+              cursor: 'pointer',
+            }}
+            title={expanded ? 'Collapse detail' : 'Show trend chart, daily pattern, and recent tickets'}
+          >
+            {expanded ? 'Hide detail ▲' : 'Show detail ▼'}
+          </button>
+        </div>
       </div>
 
       <div className="venom-kpi-strip" style={{ marginBottom: 12 }}>
@@ -104,7 +125,7 @@ export function WismoKpiCard({ days = 30 }: { days?: number }) {
         </div>
       </div>
 
-      {data.trend.length > 0 && (
+      {expanded && data.trend.length > 0 && (
         <div style={{ marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}>
           {/* Left: daily bar chart (quantitative trend). */}
           <div className="chart-wrap" style={{ margin: 0 }}>
@@ -144,7 +165,7 @@ export function WismoKpiCard({ days = 30 }: { days?: number }) {
         </div>
       )}
 
-      {data.recent_tickets.length > 0 && (
+      {expanded && data.recent_tickets.length > 0 && (
         <div>
           <div className="venom-breakdown-label">Recent WISMO tickets — click through to Freshdesk</div>
           <div className="stack-list compact">
@@ -179,9 +200,11 @@ export function WismoKpiCard({ days = 30 }: { days?: number }) {
         </div>
       )}
 
-      <div style={{ marginTop: 12, fontSize: 11, color: 'var(--muted)' }}>
-        <strong>Working toward zero:</strong> proactive shipping notifications (tracking updates before customers ask), ETA visibility in the app, automated comms on transit delays. Every ticket here is a chance to ship a communication earlier next time.
-      </div>
+      {expanded ? (
+        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--muted)' }}>
+          <strong>Working toward zero:</strong> proactive shipping notifications (tracking updates before customers ask), ETA visibility in the app, automated comms on transit delays. Every ticket here is a chance to ship a communication earlier next time.
+        </div>
+      ) : null}
     </section>
   )
 }
