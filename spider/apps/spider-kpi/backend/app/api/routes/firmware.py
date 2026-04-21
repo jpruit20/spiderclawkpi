@@ -370,6 +370,108 @@ def device_active_cook(mac: str, db: Session = Depends(db_session)) -> dict[str,
     }
 
 
+@router.get("/device/{mac}/cook-timeline")
+def device_cook_timeline(
+    mac: str,
+    lookback_hours: int = Query(24, ge=1, le=168),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Time-series chart payload for a device's current (or most-recent)
+    cook. Walks the stream history back from now to find the first
+    sample >= 140°F (live-fire threshold) in the current engaged window.
+    The timeline returned runs from that cook_start through now (for
+    active cooks) or through the last sample >= 140°F (for completed).
+
+    Includes current_temp, target_temp, and intensity per sample so the
+    UI can render a temp+target+fan chart and also show the moment the
+    user changed their target mid-cook (``target_set_at``).
+    """
+    m = _require_mac(mac)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    stmt = text(
+        f"""
+        SELECT sample_timestamp, current_temp, target_temp, intensity, engaged
+        FROM telemetry_stream_events
+        WHERE {_MAC_EXPR} = :mac
+          AND sample_timestamp >= :cutoff
+        ORDER BY sample_timestamp ASC
+        """
+    )
+    rows = db.execute(stmt, {"mac": m, "cutoff": cutoff}).all()
+    if not rows:
+        return {"mac": m, "cook_start_ts": None, "cook_end_ts": None, "points": [], "target_set_at": None}
+
+    LIVE_FIRE_F = 140.0
+    # Find the LAST cook window: scan forward, identify the most recent
+    # transition into fire (>=140) and the ending transition out (<140).
+    cook_start_idx: Optional[int] = None
+    cook_end_idx: Optional[int] = None
+    for i, r in enumerate(rows):
+        t = r.current_temp
+        if t is None:
+            continue
+        if t >= LIVE_FIRE_F:
+            if cook_start_idx is None:
+                cook_start_idx = i
+            cook_end_idx = i  # keep extending while temp stays ≥140
+        else:
+            if cook_start_idx is not None and cook_end_idx is not None and i > cook_end_idx:
+                # Temp dropped below 140 after a cook — check if cook ended
+                # (require 5+ consecutive sub-140 samples to consider it ended).
+                tail = rows[cook_end_idx + 1 : i + 1]
+                if len(tail) >= 5 and all((s.current_temp or 0) < LIVE_FIRE_F for s in tail):
+                    # Cook ended. If there's a later cook, the outer loop finds it.
+                    pass
+
+    if cook_start_idx is None:
+        # No cook in window — return latest samples as context
+        return {"mac": m, "cook_start_ts": None, "cook_end_ts": None, "points": [], "target_set_at": None}
+
+    # Trim to the cook window
+    cook_points = rows[cook_start_idx : cook_end_idx + 1]
+    # Find target_set_at: last timestamp where target_temp changed vs prior sample
+    target_set_at = None
+    prior_target = None
+    for r in rows:
+        if r.target_temp is None:
+            continue
+        if prior_target is None:
+            prior_target = r.target_temp
+            target_set_at = r.sample_timestamp
+            continue
+        if abs(float(r.target_temp) - float(prior_target)) > 0.5:
+            target_set_at = r.sample_timestamp
+            prior_target = r.target_temp
+
+    points = [
+        {
+            "ts": r.sample_timestamp.isoformat() if r.sample_timestamp else None,
+            "current_temp": float(r.current_temp) if r.current_temp is not None else None,
+            "target_temp": float(r.target_temp) if r.target_temp is not None else None,
+            "intensity": float(r.intensity) if r.intensity is not None else None,
+            "engaged": bool(r.engaged) if r.engaged is not None else None,
+        }
+        for r in cook_points
+    ]
+    cook_start_ts = cook_points[0].sample_timestamp if cook_points else None
+    cook_end_ts = cook_points[-1].sample_timestamp if cook_points else None
+    now = datetime.now(timezone.utc)
+    # If the last cook sample is within 10 minutes of now AND still >=140,
+    # treat the cook as active (ongoing).
+    is_active = False
+    if cook_end_ts:
+        is_active = (now - cook_end_ts).total_seconds() <= 600 and cook_points and cook_points[-1].current_temp is not None and cook_points[-1].current_temp >= LIVE_FIRE_F
+    return {
+        "mac": m,
+        "cook_start_ts": cook_start_ts.isoformat() if cook_start_ts else None,
+        "cook_end_ts": cook_end_ts.isoformat() if cook_end_ts else None,
+        "is_active": is_active,
+        "target_set_at": target_set_at.isoformat() if target_set_at else None,
+        "live_fire_threshold_f": LIVE_FIRE_F,
+        "points": points,
+    }
+
+
 @router.get("/device/{mac}/sessions")
 def device_sessions(
     mac: str,
@@ -800,11 +902,28 @@ def fleet_control_health(
         grill_type = latest.grill_type
         product_family = classify_product(grill_type, latest.firmware_version)
         product_tallies[product_family] = product_tallies.get(product_family, 0) + 1
-        devices.append(cook_state.result_to_dict(
+        # target_set_at: scan the event window backward to find the most
+        # recent target_temp change. Cheap because each device has <=30
+        # events in the 30-min window.
+        target_set_at: Optional[datetime] = None
+        prior_target = None
+        for ev in dev_events:
+            if ev.target_temp is None:
+                continue
+            if prior_target is None:
+                prior_target = ev.target_temp
+                target_set_at = ev.sample_timestamp
+                continue
+            if abs(float(ev.target_temp) - float(prior_target)) > 0.5:
+                target_set_at = ev.sample_timestamp
+                prior_target = ev.target_temp
+        device_row = cook_state.result_to_dict(
             r, mac=mac, device_id=device_id,
             firmware_version=latest.firmware_version,
             grill_type=grill_type, product=product_family,
-        ))
+        )
+        device_row["target_set_at"] = target_set_at.isoformat() if target_set_at else None
+        devices.append(device_row)
 
     if state and state in cook_state.ALL_STATES:
         devices = [d for d in devices if d["state"] == state]
