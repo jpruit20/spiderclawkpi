@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import median, pstdev
 from typing import Any, Callable, Optional
 
@@ -30,6 +30,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import CookBehaviorBaseline, TelemetrySession
+
+
+LOOKBACK_DAYS = 30      # only score the last month of cooks
+STREAM_BATCH = 200      # yield_per batch to keep memory bounded
 
 
 # ── target-temp bands ───────────────────────────────────────────────────
@@ -209,17 +213,29 @@ def rebuild_cook_behavior_baselines(
     even for firmware versions with too few samples.
     """
     now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=LOOKBACK_DAYS)
 
-    sessions = db.execute(
+    # Stream sessions to keep heap bounded — each row carries large JSON
+    # time-series blobs and loading the full table at once has OOM'd the
+    # droplet. yield_per + expunge keeps memory flat.
+    stmt = (
         select(TelemetrySession)
         .where(TelemetrySession.target_temp.is_not(None))
         .where(TelemetrySession.target_temp > 0)
-    ).scalars().all()
+        .where(TelemetrySession.session_start.is_not(None))
+        .where(TelemetrySession.session_start >= cutoff)
+        .execution_options(yield_per=STREAM_BATCH)
+    )
 
     # Bucket: (band, firmware_or_NONE) -> list[_Observation]
     by_bin: dict[tuple[str, Optional[str]], list[_Observation]] = defaultdict(list)
-    for s in sessions:
+    scanned = 0
+    for s in db.execute(stmt).scalars():
+        scanned += 1
         obs = _extract_observation(s)
+        # Eagerly evict the heavy TelemetrySession row from the session
+        # identity map — we've already distilled the observation we need.
+        db.expunge(s)
         if obs is None:
             continue
         # Always add to the "all firmware" roll-up.
@@ -265,7 +281,7 @@ def rebuild_cook_behavior_baselines(
     db.commit()
     return {
         "bins_written": written,
-        "total_sessions_scanned": len(sessions),
+        "total_sessions_scanned": scanned,
         "computed_at": now.isoformat(),
     }
 
