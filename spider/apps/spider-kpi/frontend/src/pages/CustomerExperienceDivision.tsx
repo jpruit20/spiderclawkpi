@@ -627,11 +627,6 @@ export function CustomerExperienceDivision() {
           {/* KPI Strip */}
           <VenomKpiStrip cards={kpiCards} cols={4} />
 
-          {/* Product complaint search — Conor's 2026-04-20 request.
-              Lives at the top of the CX hero because the whole point is
-              a quick lookup before drilling deeper. */}
-          <ProductComplaintsCard />
-
           {/* WISMO — target: 0. Customer follow-ups on undelivered orders.
               Compressed by default (just KPI strip); the full trend
               chart + recent tickets list expand on click. */}
@@ -741,6 +736,11 @@ export function CustomerExperienceDivision() {
               {!actions.length ? <div className="list-item status-good"><p>No actions in queue.</p></div> : null}
             </div>
           </section>
+
+          {/* Product complaint search — collapsed by default so it doesn't
+              push the operational view down. Click to expand and run the
+              lookup across Freshdesk + social + reviews + community. */}
+          <ProductComplaintsCard collapsible defaultExpanded={false} />
 
           {/* ==============================================================
               BELOW-THE-FOLD DETAIL — progressive disclosure.

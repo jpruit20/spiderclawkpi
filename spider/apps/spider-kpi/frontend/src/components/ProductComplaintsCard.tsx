@@ -9,6 +9,9 @@ type Props = {
   defaultQuery?: string
   defaultAliases?: string
   defaultDays?: number
+  /** If true, start collapsed and show an expand toggle in the header. */
+  collapsible?: boolean
+  defaultExpanded?: boolean
 }
 
 const DAY_OPTIONS: { label: string; value: number }[] = [
@@ -25,6 +28,8 @@ export function ProductComplaintsCard({
   defaultQuery = 'Kettle Cart',
   defaultAliases = 'kettle-cart, cart upgrade',
   defaultDays = 180,
+  collapsible = false,
+  defaultExpanded = true,
 }: Props) {
   const [query, setQuery] = useState(defaultQuery)
   const [aliases, setAliases] = useState(defaultAliases)
@@ -35,8 +40,16 @@ export function ProductComplaintsCard({
   const [data, setData] = useState<ProductComplaintsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(collapsible ? defaultExpanded : true)
 
   useEffect(() => {
+    if (!collapsible || expanded) return
+    // When collapsed, abort any in-flight request and don't refetch until
+    // the user expands. Keeps the card cheap when it's just a header.
+  }, [collapsible, expanded])
+
+  useEffect(() => {
+    if (collapsible && !expanded) return
     if (!submittedQuery.trim()) {
       setData(null)
       return
@@ -58,7 +71,7 @@ export function ProductComplaintsCard({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [submittedQuery, submittedAliases, submittedDays])
+  }, [submittedQuery, submittedAliases, submittedDays, collapsible, expanded])
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -105,11 +118,35 @@ export function ProductComplaintsCard({
 
   return (
     <section className="card">
-      <div className="venom-panel-head">
-        <strong>{title}</strong>
-        <span className="venom-panel-hint">{subtitle}</span>
+      <div className="venom-panel-head" style={{ alignItems: 'center' }}>
+        <div>
+          <strong>{title}</strong>
+          {(!collapsible || expanded) ? (
+            <span className="venom-panel-hint" style={{ display: 'block', marginTop: 2 }}>{subtitle}</span>
+          ) : null}
+        </div>
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setExpanded(x => !x)}
+            style={{
+              fontSize: 11,
+              padding: '4px 10px',
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              color: 'var(--muted)',
+              cursor: 'pointer',
+            }}
+            title={expanded ? 'Collapse search' : 'Expand product complaint search'}
+          >
+            {expanded ? 'Hide search ▲' : 'Open search ▼'}
+          </button>
+        ) : null}
       </div>
 
+      {collapsible && !expanded ? null : (
+      <>
       <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 4 }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 220px' }}>
           <span style={{ fontSize: 11, color: 'var(--muted)' }}>Product / keyword</span>
@@ -243,6 +280,8 @@ export function ProductComplaintsCard({
           )}
         </>
       ) : null}
+      </>
+      )}
     </section>
   )
 }
