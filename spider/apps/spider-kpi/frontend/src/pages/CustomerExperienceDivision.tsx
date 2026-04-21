@@ -8,6 +8,7 @@ import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
@@ -1474,6 +1475,9 @@ export function CustomerExperienceDivision() {
               <div className="state-message">Social listening will populate after first Reddit sync</div>
             )}
           </section>
+
+          {/* Product complaint search — answers "how many people complained about X?" */}
+          <ProductComplaintsCard />
 
           {/* ClickUp tasks + team velocity for CX */}
           <ClickUpTasksCard

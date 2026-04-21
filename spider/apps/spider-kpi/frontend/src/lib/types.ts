@@ -525,6 +525,58 @@ export interface SupportOverviewResponse {
   rows: KPIDaily[]
 }
 
+export interface ProductComplaintsTicketSample {
+  ticket_id: string
+  subject: string | null
+  status: string
+  priority: string
+  created_at: string | null
+  csat_score: number | null
+  matched_in_conversation: boolean
+}
+export interface ProductComplaintsSocialSample {
+  platform: string
+  title: string | null
+  body: string
+  sentiment: string
+  source_url: string | null
+  published_at: string | null
+}
+export interface ProductComplaintsReviewSample {
+  source: string
+  rating: number | null
+  body: string
+  sentiment: string | null
+  url: string | null
+  published_at: string | null
+}
+export interface ProductComplaintsCommunitySample {
+  source: string
+  channel: string | null
+  body: string
+  sentiment: string | null
+  published_at: string | null
+}
+export interface ProductComplaintsResponse {
+  query: string
+  aliases: string[]
+  days: number
+  counts: {
+    freshdesk_tickets: number
+    freshdesk_conversations_with_match: number
+    social_mentions: number
+    review_mentions: number
+    community_messages: number
+    total: number
+  }
+  samples: {
+    tickets: ProductComplaintsTicketSample[]
+    social: ProductComplaintsSocialSample[]
+    reviews: ProductComplaintsReviewSample[]
+    community: ProductComplaintsCommunitySample[]
+  }
+}
+
 export interface CXActionItem {
   id: string
   trigger_kpi: string

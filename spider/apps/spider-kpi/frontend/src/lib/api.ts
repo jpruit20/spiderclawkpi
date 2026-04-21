@@ -56,6 +56,7 @@ import type {
   SocialMention,
   SocialPulse,
   SocialTrendsResponse,
+  ProductComplaintsResponse,
   YouTubePerformance,
   AmazonProductHealth,
   MarketIntelligence,
@@ -239,6 +240,14 @@ export const api = {
   issues: (signal?: AbortSignal) => request<IssueRadarResponse>('/api/issues', { signal }),
   clusterDetail: (theme: string, signal?: AbortSignal) => request<ClusterTicketDetail>(`/api/issues/clusters/${encodeURIComponent(theme)}/detail`, { signal }),
   cxSnapshot: (signal?: AbortSignal) => request<CXSnapshotResponse>('/api/cx/snapshot', { signal }),
+  complaintsByProduct: (params: { q: string; aliases?: string; days?: number; sample?: number }, signal?: AbortSignal) => {
+    const qs = new URLSearchParams()
+    qs.set('q', params.q)
+    if (params.aliases) qs.set('aliases', params.aliases)
+    if (params.days != null) qs.set('days', String(params.days))
+    if (params.sample != null) qs.set('sample', String(params.sample))
+    return request<ProductComplaintsResponse>(`/api/complaints/by-product?${qs.toString()}`, { signal, timeoutMs: 30000 })
+  },
   cxActions: (status?: string, signal?: AbortSignal) => request<CXActionItem[]>(`/api/cx/actions${status ? `?status=${encodeURIComponent(status)}` : ''}`, { signal }),
   updateCxAction: (id: string, status: 'open' | 'in_progress' | 'resolved') => fetch(`${API_BASE}/api/cx/actions/${id}/update`, {
     method: 'POST',
