@@ -213,21 +213,26 @@ export function RadialGauge({
           animate={{ pathLength: position }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
         />
-        {/* Needle — pivots at (cx, cy), which is the geometric center
-            of the arc. Now that the value text has moved out of the way
-            (down into the gap area below), the pivot ball reads clearly
-            as the rotation point. */}
-        <motion.g
+        {/* Needle — must pivot at the geometric arc center (cx, cy).
+            Browsers default SVG transform-box to fill-box, which makes
+            CSS transform-origin resolve against the needle's own
+            bounding box (NOT the arc). Force transform-box: view-box
+            so `80px 80px` lands at viewBox coordinate (80, 80) = the
+            true arc center. Without this explicit setting every gauge
+            rotates around its needle bbox midpoint, which is visibly
+            off-center. Only the needle line rotates; the pivot circles
+            are drawn outside the motion group so they're not affected
+            even if the transform-box default ever regresses. */}
+        <motion.line
+          x1={cx} y1={cy} x2={cx} y2={cy - 50}
+          stroke={color} strokeWidth={2.5} strokeLinecap="round"
           initial={{ rotate: ARC_START_COMPASS }}
           animate={{ rotate: needleAngle }}
           transition={{ type: 'spring', stiffness: 110, damping: 14, mass: 0.8 }}
-          style={{ transformOrigin: `${cx}px ${cy}px` }}
-        >
-          <line x1={cx} y1={cy} x2={cx} y2={cy - 50} stroke={color} strokeWidth={2.5} strokeLinecap="round" />
-          <circle cx={cx} cy={cy} r={5} fill={color} />
-          {/* Inner hub — reinforces the pivot ball as the rotation anchor */}
-          <circle cx={cx} cy={cy} r={2} fill="rgba(255,255,255,0.75)" />
-        </motion.g>
+          style={{ transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px` }}
+        />
+        <circle cx={cx} cy={cy} r={5} fill={color} />
+        <circle cx={cx} cy={cy} r={2} fill="rgba(255,255,255,0.85)" />
         {/* Value — sits in the clear area below the arc. Explicit high-
             contrast fill (#f1f5f9 = slate-100) because var(--fg) was
             rendering dark against the dark card in the live theme. */}
