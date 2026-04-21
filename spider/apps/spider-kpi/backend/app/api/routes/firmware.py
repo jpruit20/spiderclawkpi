@@ -453,6 +453,8 @@ def overview_metrics(
     firmware_version: str | None = Query(default=None),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
+    from app.services.product_taxonomy import classify_product
+
     now = datetime.now(timezone.utc)
     end_dt = _parse_date(end, now)
     start_dt = _parse_date(start, end_dt - timedelta(days=7))
@@ -466,7 +468,6 @@ def overview_metrics(
     if firmware_version:
         session_filters.append(TelemetrySession.firmware_version == firmware_version)
 
-    # Session-level aggregates
     agg_row = db.execute(
         select(
             func.count(TelemetrySession.id).label("sessions"),
@@ -486,8 +487,25 @@ def overview_metrics(
     success_rate = (successes / sessions) if sessions else None
     disconnect_rate_per_session = (disconnect_events / sessions) if sessions else None
 
-    # Firmware distribution over the window (based on stream events — same
-    # shape as /overview, but windowed to the selected range).
+    # TelemetrySession is fed by a DynamoDB scanner that lags behind the
+    # real-time stream ingest. If it's empty/stale for this window, derive
+    # a live-stream-based view so the card still has numbers to show
+    # instead of dashes. Flag it with ``sessions_source`` so the UI can
+    # be honest about the data lineage.
+    sessions_source = "telemetry_sessions"
+    if sessions == 0:
+        sessions_source, stream_stats = _derive_session_stats_from_stream(
+            db, start_dt, end_dt, firmware_version
+        )
+        if stream_stats:
+            sessions = stream_stats["sessions"]
+            devices = stream_stats["devices"]
+            success_rate = stream_stats["cook_success_rate"]
+            avg_in_control = stream_stats["avg_in_control_pct"]
+            disconnect_events = stream_stats["disconnect_events"]
+            disconnect_rate_per_session = stream_stats["disconnect_rate_per_session"]
+
+    # Firmware distribution over the window
     dist_rows = db.execute(
         select(
             TelemetryStreamEvent.firmware_version,
@@ -510,18 +528,113 @@ def overview_metrics(
         for (v, n) in dist_rows
     ]
 
+    # Product-family distribution — rolls AWS grill_type + firmware
+    # version up into the three real product lines (Weber Kettle / Huntsman
+    # / Giant Huntsman). See app.services.product_taxonomy for rules.
+    pf_rows = db.execute(
+        select(
+            TelemetryStreamEvent.grill_type,
+            TelemetryStreamEvent.firmware_version,
+            func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
+        )
+        .where(
+            TelemetryStreamEvent.sample_timestamp >= start_dt,
+            TelemetryStreamEvent.sample_timestamp < end_dt,
+        )
+        .group_by(TelemetryStreamEvent.grill_type, TelemetryStreamEvent.firmware_version)
+    ).all()
+    product_counts: dict[str, int] = {}
+    for grill_type_val, fw_val, n in pf_rows:
+        family = classify_product(grill_type_val, fw_val)
+        product_counts[family] = product_counts.get(family, 0) + int(n or 0)
+    pf_total = sum(product_counts.values())
+    product_distribution = [
+        {
+            "product": family,
+            "devices": count,
+            "pct": round((count / pf_total) * 100, 1) if pf_total else 0.0,
+        }
+        for family, count in sorted(product_counts.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
     return {
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
         "firmware_version": firmware_version,
         "sessions": sessions,
+        "sessions_source": sessions_source,
         "devices": devices,
         "cook_success_rate": success_rate,
         "avg_in_control_pct": avg_in_control,
         "disconnect_events": disconnect_events,
         "disconnect_rate_per_session": disconnect_rate_per_session,
         "firmware_distribution": firmware_distribution,
+        "product_distribution": product_distribution,
         "active_devices_window": dist_total,
+    }
+
+
+def _derive_session_stats_from_stream(
+    db: Session,
+    start_dt: datetime,
+    end_dt: datetime,
+    firmware_version: str | None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Fallback: build coarse session stats straight from the stream table.
+
+    This runs only when telemetry_sessions is empty for the window. Uses
+    45-minute gap grouping per device (matches the stream-summary
+    definition) and a simple "reached target within tolerance" notion of
+    success. Returns a ``(source_label, stats_dict)`` pair so the UI
+    can show where the numbers came from.
+    """
+    from app.services.telemetry_stream_summary import _derive_sessions
+
+    filters = [
+        TelemetryStreamEvent.sample_timestamp >= start_dt,
+        TelemetryStreamEvent.sample_timestamp < end_dt,
+    ]
+    if firmware_version:
+        filters.append(TelemetryStreamEvent.firmware_version == firmware_version)
+
+    events = db.execute(
+        select(TelemetryStreamEvent)
+        .where(*filters)
+        .order_by(TelemetryStreamEvent.device_id, TelemetryStreamEvent.sample_timestamp)
+    ).scalars().all()
+    if not events:
+        return "telemetry_sessions", None
+
+    by_device: dict[str, list[TelemetryStreamEvent]] = {}
+    for ev in events:
+        by_device.setdefault(ev.device_id, []).append(ev)
+
+    total_sessions = 0
+    successes = 0
+    stability_sum = 0.0
+    stability_n = 0
+    disconnect_sessions = 0
+    for device_id, dev_events in by_device.items():
+        for s in _derive_sessions(device_id, dev_events):
+            total_sessions += 1
+            if s.session_success:
+                successes += 1
+            if s.stability_score is not None:
+                stability_sum += float(s.stability_score)
+                stability_n += 1
+            if s.disconnect_proxy:
+                disconnect_sessions += 1
+
+    if total_sessions == 0:
+        return "stream_fallback_empty", None
+
+    return "stream_fallback", {
+        "sessions": total_sessions,
+        "devices": len(by_device),
+        "cook_success_rate": successes / total_sessions,
+        "avg_in_control_pct": (stability_sum / stability_n) if stability_n else None,
+        "disconnect_events": disconnect_sessions,
+        "disconnect_rate_per_session": disconnect_sessions / total_sessions,
     }
 
 
@@ -605,9 +718,12 @@ def device_control_signals(mac: str, db: Session = Depends(db_session)) -> dict[
 
 @router.get("/fleet/control-health")
 def fleet_control_health(
-    sort: str = Query("gap_abs", pattern="^(gap_abs|gap|target|intensity|firmware|sample_ts|state)$"),
+    sort: str = Query("gap_abs", pattern="^(gap_abs|gap|target|intensity|firmware|sample_ts|state|cook_elapsed|product)$"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     state: Optional[str] = Query(None),
+    product: Optional[str] = Query(None, description="Filter by product family: 'Weber Kettle', 'Huntsman', 'Giant Huntsman', 'Unknown'"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
     """Fleet-wide snapshot that uses the TIME-AWARE cook state classifier
@@ -618,12 +734,18 @@ def fleet_control_health(
     ``error`` count as anomalies — ramping-up and cooling-down grills are
     doing exactly what the user asked for and no longer get flagged.
 
-    Sortable + filterable for the frontend overview table.
+    Also returns ``cook_start_ts`` (first sample where pit temp crossed
+    140°F in this engagement window) and ``cook_elapsed_seconds`` so the
+    UI can distinguish "engaged with real fire" from "engaged, no heat yet."
     """
+    from app.services.product_taxonomy import classify_product
+
     now = datetime.now(timezone.utc)
-    # Wider window than before — we need enough history to measure
-    # engagement onset for the ramp-elapsed calculation.
-    window_s = 30 * 60  # 30 min
+    # 3h window — wide enough to capture the live-fire onset of the
+    # current cook (typical cook lasts longer) while still bounding DB
+    # load. Engagement-onset measurement still only needs ~30 min; the
+    # extra window just lets us see the 140°F crossing.
+    window_s = 3 * 60 * 60
     cutoff = now - timedelta(seconds=window_s)
 
     events = db.execute(
@@ -639,26 +761,31 @@ def fleet_control_health(
     try:
         baseline_lookup = get_baseline_lookup(db)
     except Exception:
-        # Table missing (pre-migration) or other error — fall back to heuristics.
         baseline_lookup = None
 
     devices: list[dict[str, Any]] = []
     tallies: dict[str, int] = {s: 0 for s in cook_state.ALL_STATES}
+    product_tallies: dict[str, int] = {}
     for device_id, dev_events in by_device.items():
         r = cook_state.classify_from_events(dev_events, baseline_lookup=baseline_lookup, now=now)
         tallies[r.state] = tallies.get(r.state, 0) + 1
         latest = dev_events[-1]
         reported = ((latest.raw_payload or {}).get("device_data") or {}).get("reported") or {}
         mac = (reported.get("mac") or "").lower() or None
+        grill_type = latest.grill_type
+        product_family = classify_product(grill_type, latest.firmware_version)
+        product_tallies[product_family] = product_tallies.get(product_family, 0) + 1
         devices.append(cook_state.result_to_dict(
-            r, mac=mac, device_id=device_id, firmware_version=latest.firmware_version,
+            r, mac=mac, device_id=device_id,
+            firmware_version=latest.firmware_version,
+            grill_type=grill_type, product=product_family,
         ))
 
     if state and state in cook_state.ALL_STATES:
         devices = [d for d in devices if d["state"] == state]
+    if product:
+        devices = [d for d in devices if d.get("product") == product]
 
-    # Sort keys: gap_abs = |gap|; gap = signed; target = target_temp;
-    # intensity = fan %; firmware = version; sample_ts = last sample.
     def _sort_key(d: dict[str, Any]):
         if sort == "gap_abs":
             v = d.get("gap_f")
@@ -678,9 +805,20 @@ def fleet_control_health(
             return d.get("sample_timestamp") or ""
         if sort == "state":
             return d.get("state") or ""
+        if sort == "cook_elapsed":
+            v = d.get("cook_elapsed_seconds")
+            return v if isinstance(v, (int, float)) else -1
+        if sort == "product":
+            return d.get("product") or ""
         return 0
 
     devices.sort(key=_sort_key, reverse=(sort_dir == "desc"))
+
+    total = len(devices)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start_idx = (page - 1) * per_page
+    page_devices = devices[start_idx : start_idx + per_page]
 
     active = tallies.get(cook_state.STATE_IN_CONTROL, 0) + tallies.get(cook_state.STATE_OUT_OF_CONTROL, 0) + tallies.get(cook_state.STATE_RAMPING_UP, 0) + tallies.get(cook_state.STATE_MANUAL_MODE, 0)
     anomalous = tallies.get(cook_state.STATE_OUT_OF_CONTROL, 0) + tallies.get(cook_state.STATE_ERROR, 0)
@@ -690,9 +828,14 @@ def fleet_control_health(
         "total_reporting_devices": len(by_device),
         "active_cooks": active,
         "tallies": tallies,
+        "product_tallies": product_tallies,
         "anomalous_count": anomalous,
         "baseline_driven": baseline_lookup is not None,
-        "devices": devices[:200],
+        "devices": page_devices,
+        "page": page,
+        "per_page": per_page,
+        "total_filtered": total,
+        "total_pages": total_pages,
         "fetched_at": now.isoformat(),
     }
 

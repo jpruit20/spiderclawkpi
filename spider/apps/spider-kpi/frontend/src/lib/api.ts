@@ -96,6 +96,8 @@ type RequestOptions = {
   signal?: AbortSignal
   timeoutMs?: number
   retries?: number
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  body?: unknown
 }
 
 export class ApiError extends Error {
@@ -111,7 +113,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { signal, timeoutMs = 15000, retries = 1 } = options
+  const { signal, timeoutMs = 15000, retries = 1, method = 'GET', body } = options
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController()
@@ -119,10 +121,20 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const abortListener = () => controller.abort()
     signal?.addEventListener('abort', abortListener)
     const startedAt = performance.now()
-    console.info('[kpi-ui] api_request_start', { path, attempt })
+    console.info('[kpi-ui] api_request_start', { path, attempt, method })
 
     try {
-      const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal: controller.signal, credentials: 'include' })
+      const init: RequestInit = {
+        cache: 'no-store',
+        signal: controller.signal,
+        credentials: 'include',
+        method,
+      }
+      if (body !== undefined) {
+        init.headers = { 'Content-Type': 'application/json' }
+        init.body = JSON.stringify(body)
+      }
+      const response = await fetch(`${API_BASE}${path}`, init)
       if (!response.ok) {
         const detail = await response.text().catch(() => '')
         throw new ApiError(`API error ${response.status} for ${path}${detail ? `: ${detail}` : ''}`, response.status, path)
@@ -753,7 +765,7 @@ export const api = {
   firmwareCookBehaviorBacktest: (signal?: AbortSignal) =>
     request<CookBehaviorBacktestResponse>('/api/firmware/cook-behavior/backtest', { signal }),
   firmwareCookBehaviorRebuild: () =>
-    request<{ backtest: unknown; rebuild: unknown }>('/api/firmware/cook-behavior/rebuild', { method: 'POST' }),
+    request<{ backtest: unknown; rebuild: unknown }>('/api/firmware/cook-behavior/rebuild', { method: 'POST', timeoutMs: 120000, retries: 0 }),
   firmwareCookBehaviorTicket: (ticket_id: string, signal?: AbortSignal) =>
     request<CookBehaviorTicketResponse>(`/api/firmware/cook-behavior/ticket/${encodeURIComponent(ticket_id)}`, { signal }),
   firmwareFleetControlHealth: (

@@ -98,6 +98,11 @@ def heuristic_ramp_budget_seconds(target_temp: float) -> int:
 
 # ── data shapes ─────────────────────────────────────────────────────────
 
+# Live-fire threshold — temp above ambient but below any real target band,
+# i.e. a lit fire is detectable. Using 140°F (per Joseph, 2026-04-20).
+LIVE_FIRE_TEMP_F = 140.0
+
+
 @dataclass
 class CookStateResult:
     state: str
@@ -117,6 +122,11 @@ class CookStateResult:
     is_anomalous: bool                # only true for out_of_control/error states
     sample_timestamp: Optional[datetime]
     classified_at: datetime
+    # Earliest sample in the current engagement window where the pit
+    # crossed ``LIVE_FIRE_TEMP_F``. Lets the UI distinguish "ramping up with
+    # a real fire" from "engaged but no heat yet".
+    cook_start_ts: Optional[datetime] = None
+    cook_elapsed_seconds: Optional[int] = None
 
 
 def _extract(raw_payload: dict | None) -> dict[str, Any]:
@@ -160,6 +170,29 @@ def _engagement_onset(events: list[TelemetryStreamEvent]) -> Optional[datetime]:
         else:
             onset = None
     return onset
+
+
+def _live_fire_start(
+    events: list[TelemetryStreamEvent],
+    onset: Optional[datetime],
+) -> Optional[datetime]:
+    """Earliest sample at or after ``onset`` where current_temp >= 140°F.
+
+    If ``onset`` is unknown (engagement began before our window), we
+    accept the first ≥140°F sample anywhere in ``events`` — that's still
+    a meaningful lower bound for "fire lit".
+    """
+    for ev in events:
+        ts = ev.sample_timestamp
+        if ts is None:
+            continue
+        if onset is not None and ts < onset:
+            continue
+        sig = _extract(ev.raw_payload)
+        current = sig.get("current_temp")
+        if isinstance(current, (int, float)) and current >= LIVE_FIRE_TEMP_F:
+            return ts
+    return None
 
 
 def _last_engaged_timestamp(events: list[TelemetryStreamEvent]) -> Optional[datetime]:
@@ -245,6 +278,7 @@ def classify_from_events(
             (since_eng is not None and since_eng <= COOLING_ENGAGED_WINDOW_S)
             or since_eng is None and current >= 200.0
         ):
+            cs_ts = _live_fire_start(events, None)
             return CookStateResult(
                 state=STATE_COOLING_DOWN,
                 confidence=0.8,
@@ -254,6 +288,8 @@ def classify_from_events(
                 ramp_elapsed_seconds=None, ramp_budget_seconds=None,
                 expected_gap_f=None, is_anomalous=False,
                 sample_timestamp=sample_ts, classified_at=now,
+                cook_start_ts=cs_ts,
+                cook_elapsed_seconds=int((sample_ts - cs_ts).total_seconds()) if cs_ts and sample_ts else None,
             )
         # Cold + disengaged → idle
         return CookStateResult(
@@ -311,6 +347,9 @@ def classify_from_events(
     if onset and sample_ts:
         ramp_elapsed = int((sample_ts - onset).total_seconds())
 
+    cook_start_ts = _live_fire_start(events, onset)
+    cook_elapsed = int((sample_ts - cook_start_ts).total_seconds()) if cook_start_ts and sample_ts else None
+
     reached = abs(gap) <= REACH_THRESHOLD_F
     within_ramp_budget = ramp_elapsed is None or ramp_elapsed <= ramp_budget + RAMP_GRACE_SECONDS
 
@@ -330,6 +369,7 @@ def classify_from_events(
             ramp_elapsed_seconds=ramp_elapsed, ramp_budget_seconds=ramp_budget,
             expected_gap_f=None, is_anomalous=False,
             sample_timestamp=sample_ts, classified_at=now,
+            cook_start_ts=cook_start_ts, cook_elapsed_seconds=cook_elapsed,
         )
 
     # Reached (or overshot) — evaluate post-reach tolerance.
@@ -343,6 +383,7 @@ def classify_from_events(
             ramp_elapsed_seconds=ramp_elapsed, ramp_budget_seconds=ramp_budget,
             expected_gap_f=tolerance, is_anomalous=False,
             sample_timestamp=sample_ts, classified_at=now,
+            cook_start_ts=cook_start_ts, cook_elapsed_seconds=cook_elapsed,
         )
 
     # Gap exceeds tolerance AND we're past the ramp budget → real anomaly.
@@ -358,6 +399,7 @@ def classify_from_events(
         ramp_elapsed_seconds=ramp_elapsed, ramp_budget_seconds=ramp_budget,
         expected_gap_f=tolerance, is_anomalous=True,
         sample_timestamp=sample_ts, classified_at=now,
+        cook_start_ts=cook_start_ts, cook_elapsed_seconds=cook_elapsed,
     )
 
 
@@ -402,6 +444,8 @@ def result_to_dict(
     mac: Optional[str] = None,
     device_id: Optional[str] = None,
     firmware_version: Optional[str] = None,
+    grill_type: Optional[str] = None,
+    product: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "mac": mac,
@@ -423,5 +467,9 @@ def result_to_dict(
         "expected_gap_f": r.expected_gap_f,
         "is_anomalous": r.is_anomalous,
         "firmware_version": firmware_version,
+        "grill_type": grill_type,
+        "product": product,
         "sample_timestamp": r.sample_timestamp.isoformat() if r.sample_timestamp else None,
+        "cook_start_ts": r.cook_start_ts.isoformat() if r.cook_start_ts else None,
+        "cook_elapsed_seconds": r.cook_elapsed_seconds,
     }
