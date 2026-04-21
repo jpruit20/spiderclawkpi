@@ -487,23 +487,16 @@ def overview_metrics(
     success_rate = (successes / sessions) if sessions else None
     disconnect_rate_per_session = (disconnect_events / sessions) if sessions else None
 
-    # TelemetrySession is fed by a DynamoDB scanner that lags behind the
-    # real-time stream ingest. If it's empty/stale for this window, derive
-    # a live-stream-based view so the card still has numbers to show
-    # instead of dashes. Flag it with ``sessions_source`` so the UI can
-    # be honest about the data lineage.
+    # TelemetrySession is fed by a DynamoDB scanner that has been
+    # lagging behind the live stream (sessions stopped updating on
+    # 2026-04-09 even though stream ingest kept producing events).
+    # Rather than silently show zeroes, surface when it went stale
+    # and when we last saw a real session so the UI can be honest.
+    latest_session_ts = db.execute(select(func.max(TelemetrySession.session_start))).scalar()
     sessions_source = "telemetry_sessions"
-    if sessions == 0:
-        sessions_source, stream_stats = _derive_session_stats_from_stream(
-            db, start_dt, end_dt, firmware_version
-        )
-        if stream_stats:
-            sessions = stream_stats["sessions"]
-            devices = stream_stats["devices"]
-            success_rate = stream_stats["cook_success_rate"]
-            avg_in_control = stream_stats["avg_in_control_pct"]
-            disconnect_events = stream_stats["disconnect_events"]
-            disconnect_rate_per_session = stream_stats["disconnect_rate_per_session"]
+    sessions_stale = False
+    if sessions == 0 and latest_session_ts is not None and latest_session_ts < start_dt:
+        sessions_stale = True
 
     # Firmware distribution over the window
     dist_rows = db.execute(
@@ -563,6 +556,8 @@ def overview_metrics(
         "firmware_version": firmware_version,
         "sessions": sessions,
         "sessions_source": sessions_source,
+        "sessions_stale": sessions_stale,
+        "sessions_latest_ts": latest_session_ts.isoformat() if latest_session_ts else None,
         "devices": devices,
         "cook_success_rate": success_rate,
         "avg_in_control_pct": avg_in_control,
@@ -571,70 +566,6 @@ def overview_metrics(
         "firmware_distribution": firmware_distribution,
         "product_distribution": product_distribution,
         "active_devices_window": dist_total,
-    }
-
-
-def _derive_session_stats_from_stream(
-    db: Session,
-    start_dt: datetime,
-    end_dt: datetime,
-    firmware_version: str | None,
-) -> tuple[str, dict[str, Any] | None]:
-    """Fallback: build coarse session stats straight from the stream table.
-
-    This runs only when telemetry_sessions is empty for the window. Uses
-    45-minute gap grouping per device (matches the stream-summary
-    definition) and a simple "reached target within tolerance" notion of
-    success. Returns a ``(source_label, stats_dict)`` pair so the UI
-    can show where the numbers came from.
-    """
-    from app.services.telemetry_stream_summary import _derive_sessions
-
-    filters = [
-        TelemetryStreamEvent.sample_timestamp >= start_dt,
-        TelemetryStreamEvent.sample_timestamp < end_dt,
-    ]
-    if firmware_version:
-        filters.append(TelemetryStreamEvent.firmware_version == firmware_version)
-
-    events = db.execute(
-        select(TelemetryStreamEvent)
-        .where(*filters)
-        .order_by(TelemetryStreamEvent.device_id, TelemetryStreamEvent.sample_timestamp)
-    ).scalars().all()
-    if not events:
-        return "telemetry_sessions", None
-
-    by_device: dict[str, list[TelemetryStreamEvent]] = {}
-    for ev in events:
-        by_device.setdefault(ev.device_id, []).append(ev)
-
-    total_sessions = 0
-    successes = 0
-    stability_sum = 0.0
-    stability_n = 0
-    disconnect_sessions = 0
-    for device_id, dev_events in by_device.items():
-        for s in _derive_sessions(device_id, dev_events):
-            total_sessions += 1
-            if s.session_success:
-                successes += 1
-            if s.stability_score is not None:
-                stability_sum += float(s.stability_score)
-                stability_n += 1
-            if s.disconnect_proxy:
-                disconnect_sessions += 1
-
-    if total_sessions == 0:
-        return "stream_fallback_empty", None
-
-    return "stream_fallback", {
-        "sessions": total_sessions,
-        "devices": len(by_device),
-        "cook_success_rate": successes / total_sessions,
-        "avg_in_control_pct": (stability_sum / stability_n) if stability_n else None,
-        "disconnect_events": disconnect_sessions,
-        "disconnect_rate_per_session": disconnect_sessions / total_sessions,
     }
 
 
@@ -741,11 +672,14 @@ def fleet_control_health(
     from app.services.product_taxonomy import classify_product
 
     now = datetime.now(timezone.utc)
-    # 3h window — wide enough to capture the live-fire onset of the
-    # current cook (typical cook lasts longer) while still bounding DB
-    # load. Engagement-onset measurement still only needs ~30 min; the
-    # extra window just lets us see the 140°F crossing.
-    window_s = 3 * 60 * 60
+    # 30 min window — any longer risks pulling a multi-million-row
+    # stream slab into memory on the app server. The live-fire onset is
+    # still useful within this window: a cook that's been running for
+    # 4 hours will still show its >=140°F crossing somewhere in the
+    # last 30 min because it's sustained; only a freshly-lit cook with
+    # onset in the last minute won't have reached 140°F yet, which is
+    # exactly the case we WANT to show as "ramping up, no fire yet."
+    window_s = 30 * 60
     cutoff = now - timedelta(seconds=window_s)
 
     events = db.execute(
