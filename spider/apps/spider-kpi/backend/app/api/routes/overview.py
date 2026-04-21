@@ -2,12 +2,12 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
 from app.compute.kpis import get_data_quality
-from app.models import Alert, CXAction, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ShopifyAnalyticsDaily, ShopifyOrderDaily, TWSummaryDaily
+from app.models import Alert, CommunityMessage, CXAction, DriverDiagnostic, FreshdeskAgentDaily, FreshdeskTicket, FreshdeskTicketConversation, IssueCluster, IssueSignal, KPIDaily, KPIIntraday, Recommendation, ReviewMention, ShopifyAnalyticsDaily, ShopifyOrderDaily, SocialMention, TWSummaryDaily
 from app.schemas.overview import AlertOut, CXActionOut, CXActionUpdateIn, CXSnapshotOut, DataQualityOut, DiagnosticOut, KPIDailyOut, OverviewResponse, RecommendationOut, SourceHealthOut, TelemetrySummaryOut
 from app.services.cx_actions import evaluateActionClosure, evaluateCustomerExperienceActions
 from app.services.cx_snapshot import build_customer_experience_snapshot
@@ -252,3 +252,158 @@ def data_quality(db: Session = Depends(db_session)):
 def get_engineering_issues():
     from app.services.github_issues import get_p0_p1_issues
     return get_p0_p1_issues()
+
+
+def _split_terms(raw: str) -> list[str]:
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+@router.get("/complaints/by-product")
+def complaints_by_product(
+    q: str,
+    aliases: str = "",
+    days: int = 180,
+    sample: int = 8,
+    db: Session = Depends(db_session),
+):
+    """Count tickets + social posts that mention a product across the archive.
+
+    `q` is the canonical product term; `aliases` is comma-separated alt spellings.
+    Returns per-source counts with a small sample of the matching records so
+    the UI can render evidence alongside the number.
+    """
+    terms = [q.strip()] + _split_terms(aliases)
+    terms = [t for t in terms if t]
+    if not terms:
+        raise HTTPException(status_code=400, detail="q is required")
+    days = max(1, min(days, 1825))
+    sample = max(1, min(sample, 25))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    patterns = [f"%{t}%" for t in terms]
+
+    def _ilike_any(column):
+        return or_(*[column.ilike(p) for p in patterns])
+
+    subject_matches = _ilike_any(FreshdeskTicket.subject)
+    desc_text_matches = _ilike_any(FreshdeskTicket.description_text)
+    ticket_filter = or_(subject_matches, desc_text_matches)
+    ticket_q = (
+        select(FreshdeskTicket)
+        .where(FreshdeskTicket.created_at_source >= since)
+        .where(ticket_filter)
+        .order_by(desc(FreshdeskTicket.created_at_source))
+    )
+    ticket_rows = db.execute(ticket_q).scalars().all()
+
+    conv_ticket_ids_q = (
+        select(FreshdeskTicketConversation.ticket_id)
+        .where(FreshdeskTicketConversation.created_at_source >= since)
+        .where(_ilike_any(FreshdeskTicketConversation.body_text))
+        .distinct()
+    )
+    conv_ticket_ids = {row[0] for row in db.execute(conv_ticket_ids_q).all()}
+
+    ticket_ids_in_primary = {t.ticket_id for t in ticket_rows}
+    extra_ids = conv_ticket_ids - ticket_ids_in_primary
+    if extra_ids:
+        extra_rows = db.execute(
+            select(FreshdeskTicket)
+            .where(FreshdeskTicket.ticket_id.in_(extra_ids))
+            .order_by(desc(FreshdeskTicket.created_at_source))
+        ).scalars().all()
+        ticket_rows = list(ticket_rows) + list(extra_rows)
+        ticket_rows.sort(key=lambda t: t.created_at_source or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    total_tickets = len(ticket_rows)
+    ticket_sample = [
+        {
+            "ticket_id": t.ticket_id,
+            "subject": t.subject,
+            "status": t.status,
+            "priority": t.priority,
+            "created_at": t.created_at_source.isoformat() if t.created_at_source else None,
+            "csat_score": t.csat_score,
+            "matched_in_conversation": t.ticket_id in (conv_ticket_ids - ticket_ids_in_primary),
+        }
+        for t in ticket_rows[:sample]
+    ]
+
+    social_rows = db.execute(
+        select(SocialMention)
+        .where(SocialMention.published_at >= since)
+        .where(
+            or_(
+                _ilike_any(SocialMention.title),
+                _ilike_any(SocialMention.body),
+                _ilike_any(SocialMention.product_mentioned),
+            )
+        )
+        .order_by(desc(SocialMention.published_at))
+    ).scalars().all()
+    total_social = len(social_rows)
+    social_sample = [
+        {
+            "platform": s.platform,
+            "title": s.title,
+            "body": (s.body or "")[:400],
+            "sentiment": s.sentiment,
+            "source_url": s.source_url,
+            "published_at": s.published_at.isoformat() if s.published_at else None,
+        }
+        for s in social_rows[:sample]
+    ]
+
+    review_rows = db.execute(
+        select(ReviewMention)
+        .where(ReviewMention.published_at >= since)
+        .where(or_(_ilike_any(ReviewMention.body), _ilike_any(ReviewMention.product)))
+        .order_by(desc(ReviewMention.published_at))
+    ).scalars().all()
+    review_sample = [
+        {
+            "source": r.source,
+            "rating": r.rating,
+            "body": (r.body or "")[:400],
+            "sentiment": r.sentiment,
+            "url": r.url,
+            "published_at": r.published_at.isoformat() if r.published_at else None,
+        }
+        for r in review_rows[:sample]
+    ]
+
+    community_rows = db.execute(
+        select(CommunityMessage)
+        .where(CommunityMessage.published_at >= since)
+        .where(or_(_ilike_any(CommunityMessage.body), _ilike_any(CommunityMessage.product)))
+        .order_by(desc(CommunityMessage.published_at))
+    ).scalars().all()
+    community_sample = [
+        {
+            "source": c.source,
+            "channel": c.channel,
+            "body": (c.body or "")[:400],
+            "sentiment": c.sentiment,
+            "published_at": c.published_at.isoformat() if c.published_at else None,
+        }
+        for c in community_rows[:sample]
+    ]
+
+    return {
+        "query": q,
+        "aliases": terms[1:],
+        "days": days,
+        "counts": {
+            "freshdesk_tickets": total_tickets,
+            "freshdesk_conversations_with_match": len(conv_ticket_ids),
+            "social_mentions": total_social,
+            "review_mentions": len(review_rows),
+            "community_messages": len(community_rows),
+            "total": total_tickets + total_social + len(review_rows) + len(community_rows),
+        },
+        "samples": {
+            "tickets": ticket_sample,
+            "social": social_sample,
+            "reviews": review_sample,
+            "community": community_sample,
+        },
+    }
