@@ -769,13 +769,16 @@ export const api = {
   firmwareCookBehaviorTicket: (ticket_id: string, signal?: AbortSignal) =>
     request<CookBehaviorTicketResponse>(`/api/firmware/cook-behavior/ticket/${encodeURIComponent(ticket_id)}`, { signal }),
   firmwareFleetControlHealth: (
-    params?: { sort?: string; sort_dir?: 'asc' | 'desc'; state?: string },
+    params?: { sort?: string; sort_dir?: 'asc' | 'desc'; state?: string; product?: string; page?: number; per_page?: number },
     signal?: AbortSignal,
   ) => {
     const qs = new URLSearchParams()
     if (params?.sort) qs.set('sort', params.sort)
     if (params?.sort_dir) qs.set('sort_dir', params.sort_dir)
     if (params?.state) qs.set('state', params.state)
+    if (params?.product) qs.set('product', params.product)
+    if (params?.page != null) qs.set('page', String(params.page))
+    if (params?.per_page != null) qs.set('per_page', String(params.per_page))
     const s = qs.toString()
     return request<FirmwareFleetControlHealth>(
       `/api/firmware/fleet/control-health${s ? `?${s}` : ''}`,
@@ -1142,7 +1145,11 @@ export interface FirmwareFleetControlDevice {
   expected_gap_f: number | null
   is_anomalous: boolean
   firmware_version: string | null
+  grill_type: string | null
+  product: string | null
   sample_timestamp: string | null
+  cook_start_ts: string | null
+  cook_elapsed_seconds: number | null
 }
 
 export interface FirmwareFleetControlHealth {
@@ -1150,9 +1157,14 @@ export interface FirmwareFleetControlHealth {
   total_reporting_devices: number
   active_cooks: number
   tallies: Partial<Record<CookState, number>>
+  product_tallies: Record<string, number>
   anomalous_count: number
   baseline_driven: boolean
   devices: FirmwareFleetControlDevice[]
+  page: number
+  per_page: number
+  total_filtered: number
+  total_pages: number
   fetched_at: string
 }
 
@@ -1235,12 +1247,16 @@ export interface FirmwareOverviewMetrics {
   end: string
   firmware_version: string | null
   sessions: number
+  sessions_source: string
+  sessions_stale: boolean
+  sessions_latest_ts: string | null
   devices: number
   cook_success_rate: number | null
   avg_in_control_pct: number | null
   disconnect_events: number
   disconnect_rate_per_session: number | null
   firmware_distribution: Array<{ firmware_version: string; devices: number; pct: number }>
+  product_distribution: Array<{ product: string; devices: number; pct: number }>
   active_devices_window: number
 }
 

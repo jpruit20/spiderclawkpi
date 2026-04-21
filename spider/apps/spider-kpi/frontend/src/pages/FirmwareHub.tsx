@@ -308,7 +308,7 @@ const STATE_BADGE: Record<string, { bg: string; fg: string; label: string }> = {
   unknown:        { bg: '#f3f4f6', fg: '#6b7280', label: 'Unknown' },
 }
 
-type ControlSortKey = 'gap_abs' | 'gap' | 'target' | 'intensity' | 'firmware' | 'sample_ts' | 'state'
+type ControlSortKey = 'gap_abs' | 'gap' | 'target' | 'intensity' | 'firmware' | 'sample_ts' | 'state' | 'cook_elapsed' | 'product'
 
 function FleetControlHealthCard() {
   const [data, setData] = useState<FirmwareFleetControlHealth | null>(null)
@@ -317,12 +317,23 @@ function FleetControlHealthCard() {
   const [sort, setSort] = useState<ControlSortKey>('gap_abs')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [stateFilter, setStateFilter] = useState<string>('')
+  const [productFilter, setProductFilter] = useState<string>('')
+  const [page, setPage] = useState<number>(1)
+
+  // Reset to page 1 whenever filters/sort change — otherwise the user
+  // lands on page 4 of a smaller filtered list and sees "no devices."
+  useEffect(() => { setPage(1) }, [sort, sortDir, stateFilter, productFilter])
 
   useEffect(() => {
     let alive = true
     const pull = async () => {
       try {
-        const d = await api.firmwareFleetControlHealth({ sort, sort_dir: sortDir, state: stateFilter || undefined })
+        const d = await api.firmwareFleetControlHealth({
+          sort, sort_dir: sortDir,
+          state: stateFilter || undefined,
+          product: productFilter || undefined,
+          page, per_page: 25,
+        })
         if (!alive) return
         setData(d)
         setError(null)
@@ -335,7 +346,7 @@ function FleetControlHealthCard() {
     pull()
     const t = window.setInterval(pull, 30_000)
     return () => { alive = false; window.clearInterval(t) }
-  }, [sort, sortDir, stateFilter])
+  }, [sort, sortDir, stateFilter, productFilter, page])
 
   const toggleSort = (k: ControlSortKey) => {
     if (sort === k) {
@@ -400,6 +411,19 @@ function FleetControlHealthCard() {
           <option value="manual_mode">Manual mode</option>
           <option value="idle">Idle</option>
         </select>
+        <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>Product:</span>
+        <select
+          value={productFilter}
+          onChange={(e) => setProductFilter(e.target.value)}
+          style={{ fontSize: 12, padding: '3px 6px' }}
+        >
+          <option value="">All products</option>
+          {Object.entries(data.product_tallies || {})
+            .sort((a, b) => (b[1] as number) - (a[1] as number))
+            .map(([product, count]) => (
+              <option key={product} value={product}>{product} ({count})</option>
+            ))}
+        </select>
       </div>
 
       {data.devices.length > 0 ? (
@@ -409,12 +433,14 @@ function FleetControlHealthCard() {
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                   <th style={{ padding: '6px 8px' }}>MAC</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('product')}>Product{sortIndicator('product')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('state')}>State{sortIndicator('state')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('target')}>Target{sortIndicator('target')}</th>
                   <th>Current</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('gap_abs')}>Gap{sortIndicator('gap_abs')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('intensity')}>Fan{sortIndicator('intensity')}</th>
                   <th>Ramp</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('cook_elapsed')} title="Live fire detected: first sample with pit ≥140°F in this engagement">Cook (≥140°F){sortIndicator('cook_elapsed')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('firmware')}>Firmware{sortIndicator('firmware')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('sample_ts')}>Last sample{sortIndicator('sample_ts')}</th>
                 </tr>
@@ -425,6 +451,7 @@ function FleetControlHealthCard() {
                   return (
                     <tr key={d.device_id} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }} title={d.reason}>{d.mac ?? '—'}</td>
+                      <td title={d.grill_type ?? undefined}>{d.product ?? '—'}</td>
                       <td>
                         <span style={{ background: badge.bg, color: badge.fg, padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
                           {badge.label}
@@ -441,6 +468,11 @@ function FleetControlHealthCard() {
                           ? `${Math.round(d.ramp_elapsed_seconds / 60)}m / ${Math.round(d.ramp_budget_seconds / 60)}m`
                           : '—'}
                       </td>
+                      <td title={d.cook_start_ts ?? undefined}>
+                        {d.cook_elapsed_seconds != null
+                          ? `${Math.round(d.cook_elapsed_seconds / 60)}m`
+                          : (d.state === 'ramping_up' ? 'no fire yet' : '—')}
+                      </td>
                       <td>{d.firmware_version ?? '—'}</td>
                       <td>{fmtDateTime(d.sample_timestamp)}</td>
                     </tr>
@@ -449,6 +481,43 @@ function FleetControlHealthCard() {
               </tbody>
             </table>
           </div>
+
+          {data.total_pages > 1 ? (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={data.page <= 1}
+                style={{ padding: '4px 10px', opacity: data.page <= 1 ? 0.4 : 1 }}
+              >
+                ← Prev
+              </button>
+              <span style={{ color: 'var(--muted)' }}>
+                Page {data.page} of {data.total_pages} · {data.total_filtered.toLocaleString()} devices · showing {((data.page - 1) * data.per_page) + 1}–{Math.min(data.page * data.per_page, data.total_filtered)}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(data.total_pages, p + 1))}
+                disabled={data.page >= data.total_pages}
+                style={{ padding: '4px 10px', opacity: data.page >= data.total_pages ? 0.4 : 1 }}
+              >
+                Next →
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={data.total_pages}
+                value={page}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (v >= 1 && v <= data.total_pages) setPage(v)
+                }}
+                style={{ width: 60, fontSize: 12, padding: '3px 6px', marginLeft: 'auto' }}
+              />
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted)' }}>
+              {data.total_filtered.toLocaleString()} devices match filter.
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>No devices matching filter.</div>
@@ -734,6 +803,22 @@ function OverviewTab() {
 
       {metrics && !loading && !error ? (
         <>
+          {metrics.sessions_stale ? (
+            <section
+              className="card"
+              style={{ borderLeft: '4px solid var(--orange)', background: 'rgba(245,158,11,0.08)' }}
+            >
+              <div style={{ fontSize: 13 }}>
+                <strong>⚠ Session data is stale.</strong>{' '}
+                TelemetrySession last updated{' '}
+                <strong>{metrics.sessions_latest_ts ? new Date(metrics.sessions_latest_ts).toLocaleString() : 'unknown'}</strong>.
+                The raw stream pipeline is healthy ({metrics.active_devices_window.toLocaleString()} devices
+                reporting in this window) — only the DynamoDB-backed session builder is behind, so the
+                session-derived KPIs below show zero. Firmware + product distribution are fresh.
+              </div>
+            </section>
+          ) : null}
+
           <section className="card">
             <div className="card-title">Window stats</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
@@ -747,6 +832,34 @@ function OverviewTab() {
                 value={metrics.disconnect_rate_per_session != null ? metrics.disconnect_rate_per_session.toFixed(2) : '—'}
               />
             </div>
+          </section>
+
+          <section className="card">
+            <div className="card-title">Product family — active in window</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+              AWS ``grill_type`` + firmware version rolled up into the three field lines. Weber Kettle covers Kettle 22 / Kettle 26 / Webcraft (JOEHY ``W:K:22:1:V`` defaults here). Huntsman covers JOEHY on firmware 01.01.33 plus ADN V2 Huntsman builds. Giant Huntsman is reserved.
+            </div>
+            {metrics.product_distribution && metrics.product_distribution.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+                {metrics.product_distribution.map(p => (
+                  <div
+                    key={p.product}
+                    style={{
+                      padding: 10,
+                      borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'var(--panel-2)',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{p.product}</div>
+                    <div style={{ fontSize: 18, fontWeight: 600 }}>{p.devices.toLocaleString()}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{p.pct}% of fleet</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>No stream events in this window.</div>
+            )}
           </section>
 
           <section className="card">
