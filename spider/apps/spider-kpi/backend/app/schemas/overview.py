@@ -126,6 +126,7 @@ class TelemetrySummaryOut(BaseModel):
     confidence: Optional[dict[str, Any]] = None
     analytics: Optional[dict[str, Any]] = None
     history_daily: list[dict[str, Any]] = []
+    cache_info: Optional[dict[str, Any]] = None
 
 
 class TelemetryHistoryMonthlyIn(BaseModel):
@@ -257,3 +258,4 @@ class OverviewResponse(BaseModel):
     recommendations: list[RecommendationOut]
     source_health: list[SourceHealthOut]
     telemetry: Optional[TelemetrySummaryOut] = None
+    cache_info: Optional[CacheInfoOut] = None

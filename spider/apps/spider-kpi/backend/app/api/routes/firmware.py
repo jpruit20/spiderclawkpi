@@ -443,8 +443,9 @@ def device_summary(mac: str, db: Session = Depends(db_session)) -> dict[str, Any
 # Program overview (top of hub)
 # ---------------------------------------------------------------------------
 
-@router.get("/overview")
-def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
+def _build_firmware_overview_payload(db: Session) -> dict[str, Any]:
+    """Pure builder — used by both the HTTP endpoint and the Tier 2
+    cache registration in app.services.cache_builders."""
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     rows = db.execute(
         select(
@@ -455,7 +456,6 @@ def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
         .group_by(TelemetryStreamEvent.firmware_version)
         .order_by(desc("devices"))
     ).all()
-
     distribution = [
         {"firmware_version": v or "unknown", "devices": int(n)}
         for (v, n) in rows
@@ -463,12 +463,37 @@ def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
     total = sum(d["devices"] for d in distribution)
     for d in distribution:
         d["pct"] = round((d["devices"] / total) * 100, 1) if total else 0.0
-
     return {
         "window_hours": 24,
         "active_devices": total,
         "firmware_distribution": distribution,
     }
+
+
+@router.get("/overview")
+def overview(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Cache-first via Tier 2 aggregate_cache. On cold cache (fresh
+    deploy), compute synchronously + populate. Subsequent requests hit
+    the materialized row in <20 ms. The 15-min scheduler keeps it fresh."""
+    from app.services import aggregate_cache
+    import app.services.cache_builders  # noqa: F401 — registers builders
+    from app.services.cache_builders import FIRMWARE_OVERVIEW_KEY
+    entry = aggregate_cache.get(db, FIRMWARE_OVERVIEW_KEY)
+    source = "cache"
+    if entry is None:
+        entry = aggregate_cache.build_if_missing(db, FIRMWARE_OVERVIEW_KEY)
+        source = "live"
+    if entry is None:
+        return _build_firmware_overview_payload(db)
+    payload = dict(entry.payload)
+    payload["cache_info"] = {
+        "key": entry.key,
+        "computed_at": entry.computed_at.isoformat(),
+        "duration_ms": entry.duration_ms,
+        "age_seconds": entry.age_seconds(),
+        "source": source,
+    }
+    return payload
 
 
 # ---------------------------------------------------------------------------

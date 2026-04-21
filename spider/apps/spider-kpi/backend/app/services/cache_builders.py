@@ -133,11 +133,56 @@ def _build_firmware_metrics_7d(db: Session) -> dict[str, Any]:
     }
 
 
+# ── overview — Command Center's base payload ───────────────────────────
+
+OVERVIEW_KEY = "overview:base:v1"
+
+
+def _build_overview(db: Session) -> dict[str, Any]:
+    """Full /api/overview payload. Was 10.5s on the live droplet because
+    it rolls up alerts, diagnostics, recommendations, source health,
+    and a telemetry summary in a single shot."""
+    from app.services.overview import build_overview
+    return build_overview(db)
+
+
+# ── firmware_overview — Firmware Hub landing card ──────────────────────
+
+FIRMWARE_OVERVIEW_KEY = "firmware:overview:v1"
+
+
+def _build_firmware_overview(db: Session) -> dict[str, Any]:
+    """Firmware Hub's first card — active devices, firmware distribution,
+    and flagged versions. Lives next to firmware_metrics so caching them
+    together keeps the Firmware Hub page snappy."""
+    from app.api.routes.firmware import _build_firmware_overview_payload
+    return _build_firmware_overview_payload(db)
+
+
+# ── telemetry_summary_30d — Product Engineering default view ───────────
+
+TELEMETRY_SUMMARY_30D_KEY = "telemetry:summary:window:30d"
+
+
+def _build_telemetry_summary_30d(db: Session) -> dict[str, Any]:
+    """Default 30-day telemetry summary. The Product Engineering page
+    hits this on load; custom date ranges from the date picker skip the
+    cache and hit live compute."""
+    from app.services.telemetry import summarize_telemetry
+    from app.services.telemetry_history_daily import get_telemetry_history_daily
+    payload = summarize_telemetry(db, lookback_days=30)
+    payload["history_daily"] = get_telemetry_history_daily(db, limit=30)
+    return payload
+
+
 # ── Registration — called once at app startup via import ───────────────
 
 def register_all() -> None:
     aggregate_cache.register(CX_SNAPSHOT_KEY, _build_cx_snapshot, source_version="v1")
     aggregate_cache.register(FIRMWARE_METRICS_7D_KEY, _build_firmware_metrics_7d, source_version="v1")
+    aggregate_cache.register(OVERVIEW_KEY, _build_overview, source_version="v1")
+    aggregate_cache.register(FIRMWARE_OVERVIEW_KEY, _build_firmware_overview, source_version="v1")
+    aggregate_cache.register(TELEMETRY_SUMMARY_30D_KEY, _build_telemetry_summary_30d, source_version="v1")
 
 
 # Register at import so any module that imports this file wires up the

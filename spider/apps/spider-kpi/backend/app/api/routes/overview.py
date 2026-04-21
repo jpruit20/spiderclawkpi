@@ -25,7 +25,29 @@ BUSINESS_TZ = ZoneInfo("America/New_York")
 
 @router.get("/overview", response_model=OverviewResponse)
 def get_overview(db: Session = Depends(db_session)) -> OverviewResponse:
-    return OverviewResponse.model_validate(build_overview(db))
+    """Cache-first via Tier 2. This endpoint's build_overview was 10.5 s
+    on the live droplet because it rolls up alerts, diagnostics,
+    recommendations, source health, and a telemetry summary in one shot.
+    Cached payloads now serve in <20 ms."""
+    from app.services import aggregate_cache
+    import app.services.cache_builders  # noqa: F401
+    from app.services.cache_builders import OVERVIEW_KEY
+    entry = aggregate_cache.get(db, OVERVIEW_KEY)
+    source = "cache"
+    if entry is None:
+        entry = aggregate_cache.build_if_missing(db, OVERVIEW_KEY)
+        source = "live"
+    if entry is None:
+        return OverviewResponse.model_validate(build_overview(db))
+    payload = dict(entry.payload)
+    payload["cache_info"] = {
+        "key": entry.key,
+        "computed_at": entry.computed_at.isoformat(),
+        "duration_ms": entry.duration_ms,
+        "age_seconds": entry.age_seconds(),
+        "source": source,
+    }
+    return OverviewResponse.model_validate(payload)
 
 
 @router.get("/kpis/daily", response_model=list[KPIDailyOut])
@@ -135,6 +157,31 @@ def telemetry_summary(
     end: str | None = None,
     db: Session = Depends(db_session),
 ):
+    # Cache-first on the default 30-day view (Product Engineering page
+    # load hits this). Any custom start/end/days param skips the cache
+    # and goes straight to live compute so date-picker changes always
+    # reflect the real window.
+    is_default = start is None and end is None and days == 30
+    if is_default:
+        from app.services import aggregate_cache
+        import app.services.cache_builders  # noqa: F401
+        from app.services.cache_builders import TELEMETRY_SUMMARY_30D_KEY
+        entry = aggregate_cache.get(db, TELEMETRY_SUMMARY_30D_KEY)
+        source = "cache"
+        if entry is None:
+            entry = aggregate_cache.build_if_missing(db, TELEMETRY_SUMMARY_30D_KEY)
+            source = "live"
+        if entry is not None:
+            payload = dict(entry.payload)
+            payload["cache_info"] = {
+                "key": entry.key,
+                "computed_at": entry.computed_at.isoformat(),
+                "duration_ms": entry.duration_ms,
+                "age_seconds": entry.age_seconds(),
+                "source": source,
+            }
+            return payload
+
     # When start/end are given, the dashboard date picker is authoritative
     # and every block in the payload is scoped to that window. Without them
     # we fall back to the trailing `days` window (clamped to 365 to protect
