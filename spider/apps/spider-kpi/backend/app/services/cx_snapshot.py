@@ -109,7 +109,7 @@ def _metric_period_series(rows: list[KPIDaily], tickets: list[FreshdeskTicket]) 
                     aged_open_tickets.append(ticket)
             if created >= start7 and created <= current_date:
                 recent_tickets.append(ticket)
-                agent = str((ticket.raw_payload or {}).get('responder_name') or ticket.agent_id or 'Unassigned')
+                agent = str(ticket.agent_id or 'Unassigned')
                 assigned_counts[agent] = assigned_counts.get(agent, 0) + 1
                 text = f"{ticket.subject or ''} {ticket.category or ''} {' '.join(ticket.tags_json or [])}".lower()
                 if any(token in text for token in ['escalat', 'engineering', 'urgent', 'firmware']):
@@ -271,7 +271,6 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
         .options(
             defer(FreshdeskTicket.description_text),
             defer(FreshdeskTicket.description_html),
-            defer(FreshdeskTicket.subject),
             defer(FreshdeskTicket.raw_payload),
         )
         .order_by(desc(FreshdeskTicket.updated_at_source))
