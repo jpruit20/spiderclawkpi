@@ -9,6 +9,7 @@ import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 import { AISelfGradeCard } from '../components/AISelfGradeCard'
+import { WeeklyGaugeCluster } from '../components/WeeklyGaugeCluster'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -115,47 +116,6 @@ export function CommandCenter() {
   const mkt = deriveMarketingStatus(data)
   const ops = deriveOpsStatus()
 
-  // ── Severity-calibrated counts & paraphrases for the top status lights.
-  // Telemetry anomalies: only those on impact metrics count toward the
-  // "alert" number; info-tier drift (cook_temp, active_devices) still
-  // shows up in the popover but doesn't trigger red/warn color.
-  const calibratedAnomalies = (data.anomalies || []).map(a => ({
-    a, tier: calibratedAnomalySeverity(a),
-  }))
-  const alertingAnomalies = calibratedAnomalies.filter(x => x.tier === 'bad' || x.tier === 'warn')
-  const infoAnomalies     = calibratedAnomalies.filter(x => x.tier === 'info')
-  const anomaliesAlertState: TileState =
-    alertingAnomalies.some(x => x.tier === 'bad') ? 'bad'
-    : alertingAnomalies.length > 0 ? 'warn'
-    : 'info' // all remaining are info-tier drift — blue, not red
-
-  // Build the popover rows for each StatusLight.
-  const critDetails: StatusLightDetail[] = (data.critical_signals || []).slice(0, 5).map(s => ({
-    key: String(s.id),
-    title: (s.title || s.signal_type || 'critical signal').slice(0, 80),
-    meta: s.source || s.signal_type || undefined,
-  }))
-  const anomalyDetails: StatusLightDetail[] = [
-    ...alertingAnomalies,
-    ...infoAnomalies, // still show info drift in the popover, just uncolored
-  ].slice(0, 5).map(({ a, tier }) => ({
-    key: String(a.id),
-    title: `${prettyMetric(a.metric)} ${a.direction} · z=${a.modified_z_score >= 0 ? '+' : ''}${a.modified_z_score.toFixed(1)}`,
-    meta: tier === 'info' ? 'informational' : `${a.severity} · ${a.business_date}`,
-  }))
-  const wismoDetails: StatusLightDetail[] = h.wismo_last_7 > 0
-    ? [{
-        key: 'wismo-summary',
-        title: `${h.wismo_last_7} "where is my order" ticket${h.wismo_last_7 === 1 ? '' : 's'} (7d)`,
-        meta: `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d · target 0`,
-      }]
-    : []
-  const draftDetails: StatusLightDetail[] = (data.drafts || []).slice(0, 5).map(d => ({
-    key: String(d.id),
-    title: d.title.slice(0, 80),
-    meta: d.priority ? `${d.priority}${d.department ? ` · ${d.department}` : ''}` : d.department || undefined,
-  }))
-
   return (
     <div className="page-grid">
       <div className="page-head" style={{ marginBottom: 2 }}>
@@ -165,78 +125,12 @@ export function CommandCenter() {
         </p>
       </div>
 
-      {/* Company-wide event lore for the trailing 30 days — temporal anchor
-          for every metric below. Launches, incidents, promotions, firmware
-          ships all visible at a glance. */}
-      {(() => {
-        const end = data.business_date
-        const startDt = new Date(end + 'T00:00:00Z')
-        startDt.setUTCDate(startDt.getUTCDate() - 30)
-        const start = startDt.toISOString().slice(0, 10)
-        return (
-          <section className="card" style={{ padding: '10px 14px' }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
-              <span>Last 30 days · company-wide events</span>
-              <Link to="/lore" style={{ fontSize: 11, color: 'var(--muted)' }}>Full ledger →</Link>
-            </div>
-            <EventTimelineStrip start={start} end={end} showStates={false} />
-          </section>
-        )
-      })()}
-
-      {/* ── ROW 1 · WARNING LIGHTS ─────────────────────────────────────
-          4 status lights: glanceable health scan. Always visible
-          regardless of data volume. */}
-      <TileGrid cols={4}>
-        <StatusLight
-          label="Critical signals"
-          count={h.critical_signals_24h}
-          alertState="bad"
-          sublabel="last 24 hours · Issue Radar"
-          icon="🚨"
-          href="/issues"
-          details={critDetails}
-          viewAllHref="/issues"
-          viewAllLabel="Open Issue Radar"
-        />
-        <StatusLight
-          label="Telemetry anomalies"
-          count={h.anomalies_count}
-          alertState={anomaliesAlertState}
-          sublabel={
-            alertingAnomalies.length === 0
-              ? `${infoAnomalies.length} informational${infoAnomalies.length === 1 ? '' : ''} · no impact alerts`
-              : `${alertingAnomalies.length} on impact metrics`
-          }
-          icon="📉"
-          href="/division/product-engineering"
-          details={anomalyDetails}
-          viewAllHref="/division/product-engineering"
-          viewAllLabel="Open Product Engineering"
-        />
-        <StatusLight
-          label="WISMO (7d, target 0)"
-          count={h.wismo_last_7}
-          alertState={h.wismo_last_7 > 3 ? 'bad' : 'warn'}
-          sublabel={h.wismo_last_7 === 0 ? 'nobody chasing their order' : `${h.wismo_wow_delta >= 0 ? '+' : ''}${h.wismo_wow_delta} vs prior 7d`}
-          icon="📦"
-          href="/division/customer-experience"
-          details={wismoDetails}
-          viewAllHref="/division/customer-experience"
-          viewAllLabel="Open Customer Experience"
-        />
-        <StatusLight
-          label="Drafts to review"
-          count={h.drafts_awaiting_review}
-          alertState="info"
-          sublabel="DECI awaiting decision"
-          icon="📝"
-          href="/deci"
-          details={draftDetails}
-          viewAllHref="/deci"
-          viewAllLabel="Open DECI"
-        />
-      </TileGrid>
+      {/* ── TOP STRIP · WEEKLY PRIORITY GAUGES ─────────────────────────
+          8 gauges chosen by Opus 4.7 every Monday based on what
+          matters most this week (active DECI decisions, recent
+          incidents, 28-day KPI momentum). Values update live on a
+          30 s poll; click any gauge for Opus's rationale + drill. */}
+      <WeeklyGaugeCluster />
 
       {/* ── ROW 2 · BUSINESS + FLEET HEROES ────────────────────────────
           Two big visual cards that dominate the fold. Sparklines,

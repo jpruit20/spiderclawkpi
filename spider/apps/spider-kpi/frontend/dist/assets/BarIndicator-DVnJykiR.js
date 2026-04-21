@@ -1,0 +1,1 @@
+import{j as a}from"./index-Bv1dTYY7.js";function o({value:t,max:r,color:s}){const n=Math.min(100,Math.max(0,t/(r||1)*100));return a.jsx("div",{className:"venom-bar-track",children:a.jsx("div",{className:"venom-bar-fill",style:{width:`${n}%`,background:s}})})}export{o as B};

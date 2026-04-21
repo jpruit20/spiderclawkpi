@@ -57,6 +57,7 @@ import type {
   SocialPulse,
   SocialTrendsResponse,
   ProductComplaintsResponse,
+  WeeklyGaugeResponse,
   YouTubePerformance,
   AmazonProductHealth,
   MarketIntelligence,
@@ -252,6 +253,13 @@ export const api = {
   issues: (signal?: AbortSignal) => request<IssueRadarResponse>('/api/issues', { signal }),
   clusterDetail: (theme: string, signal?: AbortSignal) => request<ClusterTicketDetail>(`/api/issues/clusters/${encodeURIComponent(theme)}/detail`, { signal }),
   cxSnapshot: (signal?: AbortSignal) => request<CXSnapshotResponse>('/api/cx/snapshot', { signal }),
+  weeklyGauges: (signal?: AbortSignal) =>
+    request<WeeklyGaugeResponse>('/api/command-center/weekly-gauges', { signal }),
+  regenerateWeeklyGauges: () =>
+    request<{ ok: boolean; week_start: string; generated: number; duration_ms?: number; overall_theme?: string }>(
+      '/api/command-center/weekly-gauges/regenerate',
+      { method: 'POST', timeoutMs: 180000, retries: 0 },
+    ),
   complaintsByProduct: (params: { q: string; aliases?: string; days?: number; sample?: number }, signal?: AbortSignal) => {
     const qs = new URLSearchParams()
     qs.set('q', params.q)

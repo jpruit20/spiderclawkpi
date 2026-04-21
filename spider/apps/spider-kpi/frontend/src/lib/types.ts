@@ -525,6 +525,37 @@ export interface SupportOverviewResponse {
   rows: KPIDaily[]
 }
 
+export interface WeeklyGauge {
+  rank: number
+  metric_key: string
+  label: string
+  unit: string
+  category: string
+  direction: 'higher_better' | 'lower_better' | 'target'
+  description: string
+  drill_href: string | null
+  gauge_style: string
+  rationale: string
+  target_value: number | null
+  healthy_band_low: number | null
+  healthy_band_high: number | null
+  pinned: boolean
+  selected_by: string
+  selected_at: string | null
+  value: number | null
+  display_value: string | null
+  sparkline: number[]
+  prior_week: number | null
+  change_pct: number | null
+}
+
+export interface WeeklyGaugeResponse {
+  week_start: string
+  overall_theme: string | null
+  fell_back_to_prior_week: boolean
+  gauges: WeeklyGauge[]
+}
+
 export interface ProductComplaintsTicketSample {
   ticket_id: string
   subject: string | null
