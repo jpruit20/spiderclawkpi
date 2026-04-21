@@ -812,6 +812,30 @@ export const api = {
     request<{ releases: Array<Record<string, unknown>>; bugs: Array<Record<string, unknown>>; error?: string }>(
       '/api/firmware/release-history', { signal },
     ),
+  diagnosticsEvents: (params: { days?: number; event_type?: string; severity?: string; includeResolved?: boolean }, signal?: AbortSignal) => {
+    const qs = new URLSearchParams()
+    if (params.days != null) qs.set('days', String(params.days))
+    if (params.event_type) qs.set('event_type', params.event_type)
+    if (params.severity) qs.set('severity', params.severity)
+    if (params.includeResolved != null) qs.set('include_resolved', String(params.includeResolved))
+    return request<{
+      window_days: number; total_in_window: number; total_open: number;
+      by_type: Record<string, number>; by_severity: Record<string, number>;
+      events: Array<{
+        id: number; event_type: string; severity: string;
+        mac: string | null; device_id: string | null; user_id: string | null;
+        firmware_version: string | null; app_version: string | null; platform: string | null;
+        title: string | null; details: Record<string, unknown>;
+        created_at: string | null; resolved_at: string | null;
+        resolved_by: string | null; resolution_note: string | null;
+      }>;
+    }>(`/api/diagnostics/events?${qs.toString()}`, { signal })
+  },
+  diagnosticsResolve: (id: number, note?: string, resolvedBy?: string) =>
+    request<{ id: number; resolved_at: string; resolved_by: string | null }>(
+      `/api/diagnostics/event/${id}/resolve`,
+      { method: 'POST', body: { note, resolved_by: resolvedBy }, retries: 0 },
+    ),
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>

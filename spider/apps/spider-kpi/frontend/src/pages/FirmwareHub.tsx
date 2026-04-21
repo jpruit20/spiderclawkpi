@@ -41,6 +41,7 @@ import { useAuth } from '../components/AuthGate'
 import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 import { CookTimelineChart } from '../components/CookTimelineChart'
 import { FirmwareReleaseHistoryCard } from '../components/FirmwareReleaseHistoryCard'
+import { DiagnosticsCard } from '../components/DiagnosticsCard'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
 
@@ -809,6 +810,7 @@ function OverviewTab() {
   return (
     <>
       <FleetControlHealthCard />
+      <DiagnosticsCard />
       <CookBehaviorEncyclopediaCard />
       <FirmwareReleaseHistoryCard />
       <section className="card">

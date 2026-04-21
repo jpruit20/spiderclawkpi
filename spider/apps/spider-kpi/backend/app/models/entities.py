@@ -1668,3 +1668,38 @@ class AggregateCache(TimestampMixin, Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
     source_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
+
+
+class DiagnosticEvent(TimestampMixin, Base):
+    """App-emitted diagnostic event (WiFi failure, controller error, etc.).
+
+    Replaces the [AUTOMATED] Freshdesk ticket pattern. The Venom app
+    posts to /api/diagnostics/event whenever a background diagnostic
+    fires — those events used to become Freshdesk tickets and clutter
+    the human support queue. Now they land here and surface on the
+    Firmware Hub Diagnostics card so engineering can triage without
+    polluting CX.
+    """
+    __tablename__ = "diagnostic_event"
+    __table_args__ = (
+        Index("ix_diagnostic_event_type", "event_type"),
+        Index("ix_diagnostic_event_mac", "mac"),
+        Index("ix_diagnostic_event_created_at", "created_at"),
+        Index("ix_diagnostic_event_severity", "severity"),
+        Index("ix_diagnostic_event_resolved_at", "resolved_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="info", nullable=False)
+    mac: Mapped[Optional[str]] = mapped_column(String(12))
+    device_id: Mapped[Optional[str]] = mapped_column(String(128))
+    user_id: Mapped[Optional[str]] = mapped_column(String(128))
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64))
+    app_version: Mapped[Optional[str]] = mapped_column(String(32))
+    platform: Mapped[Optional[str]] = mapped_column(String(16))
+    title: Mapped[Optional[str]] = mapped_column(String(256))
+    details_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(128))
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text)
