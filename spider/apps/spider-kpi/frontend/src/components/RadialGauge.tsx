@@ -93,7 +93,7 @@ function normalizedPosition(
 export function RadialGauge({
   label, displayValue, value, sparkline, direction,
   target, healthyLow, healthyHigh, changePct,
-  category, rationale, unit,
+  category, rationale,
   onClick, onHover,
 }: RadialGaugeProps) {
   const band: [number | null, number | null] = [healthyLow ?? null, healthyHigh ?? null]
@@ -138,19 +138,20 @@ export function RadialGauge({
     return `M ${pA.x} ${pA.y} A ${r} ${r} 0 ${la} 1 ${pB.x} ${pB.y}`
   }, [healthyLow, healthyHigh, target, sparkline])
 
-  // Tiny sparkline path across the bottom
+  // Tiny sparkline path at the very bottom of the SVG — stays well
+  // below the pivot + value text so nothing visually overlaps.
   const sparkPath = useMemo(() => {
     if (!sparkline.length) return ''
     const min = Math.min(...sparkline)
     const max = Math.max(...sparkline)
     const range = max - min || 1
     const w = 140
-    const h = 24
+    const h = 14
     const step = w / Math.max(1, sparkline.length - 1)
     return sparkline
       .map((v, i) => {
         const x = i * step + 10
-        const y = 155 - ((v - min) / range) * h
+        const y = 174 - ((v - min) / range) * h
         return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
       })
       .join(' ')
@@ -193,7 +194,7 @@ export function RadialGauge({
         background: `linear-gradient(90deg, ${accent}, ${color})`,
       }} />
 
-      <svg viewBox="0 0 160 170" style={{ width: '100%', height: 'auto', display: 'block' }}>
+      <svg viewBox="0 0 160 190" style={{ width: '100%', height: 'auto', display: 'block' }}>
         {/* Background arc */}
         <path d={bgPath} fill="none" stroke="var(--border)" strokeWidth={8} strokeLinecap="round" opacity={0.35} />
         {/* Healthy-band highlight */}
@@ -212,7 +213,10 @@ export function RadialGauge({
           animate={{ pathLength: position }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
         />
-        {/* Needle */}
+        {/* Needle — pivots at (cx, cy), which is the geometric center
+            of the arc. Now that the value text has moved out of the way
+            (down into the gap area below), the pivot ball reads clearly
+            as the rotation point. */}
         <motion.g
           initial={{ rotate: ARC_START_COMPASS }}
           animate={{ rotate: needleAngle }}
@@ -221,13 +225,22 @@ export function RadialGauge({
         >
           <line x1={cx} y1={cy} x2={cx} y2={cy - 50} stroke={color} strokeWidth={2.5} strokeLinecap="round" />
           <circle cx={cx} cy={cy} r={5} fill={color} />
+          {/* Inner hub — reinforces the pivot ball as the rotation anchor */}
+          <circle cx={cx} cy={cy} r={2} fill="rgba(255,255,255,0.75)" />
         </motion.g>
-        {/* Center value */}
-        <text x={cx} y={cy + 2} textAnchor="middle" fontSize={18} fontWeight={600} fill="var(--fg)">
+        {/* Value — sits in the clear area below the arc. Explicit high-
+            contrast fill (#f1f5f9 = slate-100) because var(--fg) was
+            rendering dark against the dark card in the live theme. */}
+        <text
+          x={cx}
+          y={150}
+          textAnchor="middle"
+          fontSize={26}
+          fontWeight={700}
+          fill="#f1f5f9"
+          style={{ letterSpacing: '-0.02em' }}
+        >
           {displayValue}
-        </text>
-        <text x={cx} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)">
-          {unit ?? ''}
         </text>
         {/* Sparkline */}
         {sparkPath ? (
