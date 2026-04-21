@@ -1,1 +1,0 @@
-import{j as e}from"./index-Bv1dTYY7.js";const d={canonical:"badge-good",proxy:"badge-venom-proxy",estimated:"badge-warn",degraded:"badge-bad",unavailable:"badge-muted"};function o({state:a}){return e.jsx("span",{className:`badge ${d[a]}`,children:a})}export{o as T};

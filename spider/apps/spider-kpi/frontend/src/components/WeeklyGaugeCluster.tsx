@@ -4,6 +4,9 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { ApiError, api } from '../lib/api'
 import type { WeeklyGaugeResponse, WeeklyGauge } from '../lib/types'
 import { RadialGauge } from './RadialGauge'
+import { useAuth } from './AuthGate'
+
+const OWNER_EMAIL = 'joseph@spidergrills.com'
 
 /**
  * Weekly Priority Gauges — the Command Center top strip.
@@ -19,7 +22,32 @@ export function WeeklyGaugeCluster() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [focused, setFocused] = useState<WeeklyGauge | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
+  const [regenMsg, setRegenMsg] = useState<string | null>(null)
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
+
+  const handleRegenerate = async () => {
+    if (!confirm('Re-run Opus 4.7 to pick a fresh set of 8 weekly gauges? Pinned gauges are preserved.')) return
+    setRegenerating(true)
+    setRegenMsg('Opus is thinking…')
+    try {
+      const r = await api.regenerateWeeklyGauges()
+      if (r.ok) {
+        setRegenMsg(`✓ Regenerated ${r.generated} gauges in ${Math.round((r.duration_ms ?? 0) / 1000)}s. Reloading…`)
+        const fresh = await api.weeklyGauges()
+        setData(fresh)
+        setTimeout(() => setRegenMsg(null), 4000)
+      } else {
+        setRegenMsg('✗ Regenerate failed — see backend logs')
+      }
+    } catch (e) {
+      setRegenMsg(`✗ ${e instanceof ApiError ? e.message : 'Failed'}`)
+    } finally {
+      setRegenerating(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -102,6 +130,33 @@ export function WeeklyGaugeCluster() {
             </motion.div>
           ) : null}
         </div>
+        {isOwner ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {regenMsg ? (
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>{regenMsg}</span>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={regenerating}
+              style={{
+                padding: '6px 12px',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: 0.3,
+                textTransform: 'uppercase',
+                color: regenerating ? 'var(--muted)' : 'var(--fg)',
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                cursor: regenerating ? 'wait' : 'pointer',
+              }}
+              title="Owner only — re-runs Opus 4.7 to pick a fresh set of 8 gauges for this week. Pinned gauges are preserved."
+            >
+              {regenerating ? 'Regenerating…' : 'Regenerate'}
+            </button>
+          </div>
+        ) : null}
       </header>
 
       <div style={{
