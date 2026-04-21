@@ -803,6 +803,11 @@ export const api = {
       `/api/firmware/device/${encodeURIComponent(mac)}/cook-timeline?lookback_hours=${lookbackHours}`,
       { signal, timeoutMs: 30000 },
     ),
+  firmwareDeviceIdResolveMac: (deviceId: string, signal?: AbortSignal) =>
+    request<{ device_id: string; mac: string | null }>(
+      `/api/firmware/device-id/${encodeURIComponent(deviceId)}/resolve-mac`,
+      { signal },
+    ),
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>

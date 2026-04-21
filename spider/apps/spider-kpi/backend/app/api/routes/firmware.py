@@ -370,6 +370,27 @@ def device_active_cook(mac: str, db: Session = Depends(db_session)) -> dict[str,
     }
 
 
+@router.get("/device-id/{device_id}/resolve-mac")
+def device_id_to_mac(device_id: str, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Resolve a hashed device_id to its most-recently-seen MAC.
+
+    Used by Alpha/Beta cohort panels where rows carry device_id but the
+    cook-timeline endpoint keys on MAC. Returns ``mac`` (lower, 12 hex
+    chars) or null if no stream event has surfaced a MAC for this id.
+    """
+    row = db.execute(text(
+        f"""
+        SELECT {_MAC_EXPR} AS mac
+        FROM telemetry_stream_events
+        WHERE device_id = :did
+        ORDER BY sample_timestamp DESC NULLS LAST
+        LIMIT 1
+        """
+    ), {"did": device_id}).first()
+    mac = (row.mac if row else None) or None
+    return {"device_id": device_id, "mac": mac}
+
+
 @router.get("/device/{mac}/cook-timeline")
 def device_cook_timeline(
     mac: str,

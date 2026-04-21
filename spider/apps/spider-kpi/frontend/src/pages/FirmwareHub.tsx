@@ -122,6 +122,7 @@ function AlphaCohortPanel() {
   const [data, setData] = useState<AlphaCohortResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [focusedDeviceId, setFocusedDeviceId] = useState<string | null>(null)
 
   useEffect(() => {
     const ctl = new AbortController()
@@ -178,7 +179,14 @@ function AlphaCohortPanel() {
               </thead>
               <tbody>
                 {data.members.map(m => (
-                  <tr key={`${m.release_id}:${m.device_id}`} style={{ borderTop: '1px solid var(--border)' }}>
+                  <tr
+                    key={`${m.release_id}:${m.device_id}`}
+                    onClick={() => setFocusedDeviceId(m.device_id)}
+                    style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                    title="Click for cook timeline"
+                  >
                     <td style={{ padding: '6px 8px' }}>{m.release_version}{m.release_title ? ` · ${m.release_title}` : ''}</td>
                     <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{m.device_id.slice(0, 10)}…</td>
                     <td>{m.user_id ?? '—'}</td>
@@ -194,6 +202,14 @@ function AlphaCohortPanel() {
           </div>
         )}
       </section>
+      {focusedDeviceId ? (
+        <CookTimelineChart
+          deviceId={focusedDeviceId}
+          lookbackHours={24}
+          modal
+          onClose={() => setFocusedDeviceId(null)}
+        />
+      ) : null}
     </>
   )
 }

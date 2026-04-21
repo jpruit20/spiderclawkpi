@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type BetaReleaseSummary, type BetaVerdictEvidence } from '../lib/api'
 import { FeedbackPills, useMyFeedback } from './FeedbackPills'
+import { CookTimelineChart } from './CookTimelineChart'
 
 /**
  * Firmware Beta + Gamma Waves program panel.
@@ -54,6 +55,7 @@ export function BetaProgramPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'candidates' | 'cohort' | 'verdict' | 'taxonomy'>('candidates')
+  const [focusedDeviceId, setFocusedDeviceId] = useState<string | null>(null)
   const { reactions: verdictReactions, updateReaction: updateVerdictReaction } = useMyFeedback('firmware_verdict')
 
   // Draft create-release form
@@ -399,7 +401,12 @@ export function BetaProgramPanel() {
                   </tr></thead>
                   <tbody>
                     {cohort.slice(0, 200).map(m => (
-                      <tr key={m.device_id}>
+                      <tr
+                        key={m.device_id}
+                        onClick={() => setFocusedDeviceId(m.device_id)}
+                        style={{ cursor: 'pointer' }}
+                        title="Click for cook timeline"
+                      >
                         <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{m.device_id}</td>
                         <td>
                           <span style={{ padding: '2px 6px', borderRadius: 8, background: (STATE_COLORS[m.state] ?? '#555') + '33', color: STATE_COLORS[m.state] ?? '#fff', fontSize: 10 }}>
@@ -535,6 +542,14 @@ export function BetaProgramPanel() {
           </table>
         </div>
       )}
+      {focusedDeviceId ? (
+        <CookTimelineChart
+          deviceId={focusedDeviceId}
+          lookbackHours={24}
+          modal
+          onClose={() => setFocusedDeviceId(null)}
+        />
+      ) : null}
     </section>
   )
 }

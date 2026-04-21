@@ -5,7 +5,9 @@ import { api, ApiError } from '../lib/api'
 import type { CookTimelineResponse } from '../lib/types'
 
 type Props = {
-  mac: string
+  /** Pass a MAC directly, OR pass a hashed device_id and we'll resolve it. */
+  mac?: string
+  deviceId?: string
   lookbackHours?: number
   /** When true, renders as a full-screen modal with backdrop + close button. When false, renders inline. */
   modal?: boolean
@@ -32,21 +34,34 @@ function fmtDuration(startIso: string | null, endIso: string | null): string {
   return m ? `${h}h ${m}m` : `${h}h`
 }
 
-export function CookTimelineChart({ mac, lookbackHours = 24, modal = false, onClose, height = 340 }: Props) {
+export function CookTimelineChart({ mac: macProp, deviceId, lookbackHours = 24, modal = false, onClose, height = 340 }: Props) {
   const [data, setData] = useState<CookTimelineResponse | null>(null)
+  const [resolvedMac, setResolvedMac] = useState<string | null>(macProp ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // If called with deviceId instead of mac, resolve device_id → mac first.
   useEffect(() => {
+    if (macProp) { setResolvedMac(macProp); return }
+    if (!deviceId) return
+    let cancelled = false
+    api.firmwareDeviceIdResolveMac(deviceId)
+      .then(r => { if (!cancelled) setResolvedMac(r.mac) })
+      .catch(e => { if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to resolve device id') })
+    return () => { cancelled = true }
+  }, [macProp, deviceId])
+
+  useEffect(() => {
+    if (!resolvedMac) return
     let cancelled = false
     setLoading(true)
     setError(null)
-    api.firmwareDeviceCookTimeline(mac, lookbackHours)
+    api.firmwareDeviceCookTimeline(resolvedMac, lookbackHours)
       .then(r => { if (!cancelled) setData(r) })
       .catch(e => { if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load cook timeline') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [mac, lookbackHours])
+  }, [resolvedMac, lookbackHours])
 
   const chartData = (data?.points || []).map(p => ({
     ts: p.ts ? new Date(p.ts).getTime() : 0,
@@ -61,10 +76,11 @@ export function CookTimelineChart({ mac, lookbackHours = 24, modal = false, onCl
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 600 }}>
-            Cook timeline · MAC {mac}
+            Cook timeline · {resolvedMac ? `MAC ${resolvedMac}` : deviceId ? `device ${deviceId.slice(0, 10)}…` : ''}
           </div>
           <div style={{ fontSize: 13, marginTop: 4 }}>
-            {loading ? 'Loading…' : error ? <span style={{ color: 'var(--red, #ef4444)' }}>Error: {error}</span> :
+            {!resolvedMac && deviceId ? 'Resolving device…' :
+             loading ? 'Loading…' : error ? <span style={{ color: 'var(--red, #ef4444)' }}>Error: {error}</span> :
               data && data.cook_start_ts ? (
                 <span>
                   {data.is_active ? <strong style={{ color: '#10b981' }}>● Active cook</strong> : <span style={{ color: 'var(--muted)' }}>Completed</span>}
