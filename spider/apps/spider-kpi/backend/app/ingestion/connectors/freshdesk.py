@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import FreshdeskAgentDaily, FreshdeskGroupsDaily, FreshdeskTicket, FreshdeskTicketEvent, FreshdeskTicketsDaily
+from app.models import FreshdeskAgentDaily, FreshdeskGroupsDaily, FreshdeskTicket, FreshdeskTicketConversation, FreshdeskTicketEvent, FreshdeskTicketsDaily
 from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
 
 
@@ -128,6 +128,60 @@ def _request_agents(base_url: str, params: dict[str, Any], headers: dict[str, st
         params=params,
         timeout=TIMEOUT_SECONDS,
     )
+
+
+def _request_conversations(base_url: str, ticket_id: str) -> requests.Response:
+    request_url = f"{base_url}/tickets/{ticket_id}/conversations"
+    return requests.get(
+        request_url,
+        auth=_auth(),
+        headers={"Accept": "application/json"},
+        params={"per_page": 100, "page": 1},
+        timeout=TIMEOUT_SECONDS,
+    )
+
+
+def _upsert_conversations(db: Session, ticket_id: str, conversations: list[dict[str, Any]]) -> int:
+    """Insert/update conversation rows for a ticket. Returns count of new rows."""
+    new_count = 0
+    for conv in conversations or []:
+        conv_id = str(conv.get("id") or "")
+        if not conv_id:
+            continue
+        existing = db.execute(
+            select(FreshdeskTicketConversation)
+            .where(
+                FreshdeskTicketConversation.ticket_id == ticket_id,
+                FreshdeskTicketConversation.conversation_id == conv_id,
+            )
+        ).scalars().first()
+        if existing is None:
+            existing = FreshdeskTicketConversation(ticket_id=ticket_id, conversation_id=conv_id)
+            db.add(existing)
+            new_count += 1
+        created_at = None
+        if conv.get("created_at"):
+            try:
+                created_at = datetime.fromisoformat(str(conv["created_at"]).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                created_at = None
+        updated_at = None
+        if conv.get("updated_at"):
+            try:
+                updated_at = datetime.fromisoformat(str(conv["updated_at"]).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                updated_at = None
+        existing.from_email = conv.get("from_email")
+        existing.to_emails = conv.get("to_emails") or []
+        existing.incoming = bool(conv.get("incoming", False))
+        existing.private = bool(conv.get("private", False))
+        existing.source = str(conv.get("source")) if conv.get("source") is not None else None
+        existing.body_text = conv.get("body_text")
+        existing.body_html = conv.get("body")
+        existing.created_at_source = created_at
+        existing.updated_at_source = updated_at
+        existing.raw_payload = conv
+    return new_count
 
 
 def _fetch_agent_directory(base_url: str) -> dict[str, str]:
@@ -358,7 +412,7 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             "updated_since": (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "per_page": 100,
             "page": 1,
-            "include": "stats",
+            "include": "stats,description",
         }
         headers = {"Accept": "application/json"}
         all_tickets: list[dict[str, Any]] = []
@@ -435,6 +489,10 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
             record.tags_json = ticket.get("tags") or []
             record.category = (ticket.get("tags") or [None])[0]
             record.raw_payload = {**ticket, "responder_name": responder_name}
+            if "description_text" in ticket or "description" in ticket:
+                record.description_text = ticket.get("description_text")
+                record.description_html = ticket.get("description")
+                record.description_fetched_at = datetime.now(timezone.utc)
 
             existing_event = db.execute(
                 select(FreshdeskTicketEvent)
@@ -462,6 +520,26 @@ def sync_freshdesk(db: Session, days: int = 30) -> dict[str, Any]:
                 )
             else:
                 stats["duplicates_skipped"] += 1
+
+            needs_conversations = (
+                record.conversations_fetched_at is None
+                or (record.conversations_fetched_at < updated_at if record.conversations_fetched_at else True)
+            )
+            if needs_conversations:
+                try:
+                    conv_resp = _request_conversations(base_url, ticket_id)
+                    if conv_resp.ok:
+                        _upsert_conversations(db, ticket_id, conv_resp.json() or [])
+                        record.conversations_fetched_at = datetime.now(timezone.utc)
+                    elif conv_resp.status_code == 429:
+                        logger.warning("freshdesk conversations rate-limited", extra={"ticket_id": ticket_id})
+                    else:
+                        logger.warning(
+                            "freshdesk conversations fetch failed",
+                            extra={"ticket_id": ticket_id, "status": conv_resp.status_code},
+                        )
+                except Exception:
+                    logger.exception("freshdesk conversations fetch errored", extra={"ticket_id": ticket_id})
 
         if affected_dates:
             rebuild_start = min(affected_dates)

@@ -255,6 +255,34 @@ class FreshdeskTicket(TimestampMixin, Base):
     tags_json: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    description_text: Mapped[Optional[str]] = mapped_column(Text)
+    description_html: Mapped[Optional[str]] = mapped_column(Text)
+    description_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    conversations_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class FreshdeskTicketConversation(TimestampMixin, Base):
+    __tablename__ = "freshdesk_ticket_conversations"
+    __table_args__ = (
+        UniqueConstraint("ticket_id", "conversation_id", name="uq_freshdesk_conv_ticket_conv"),
+        Index("ix_freshdesk_conv_ticket", "ticket_id"),
+        Index("ix_freshdesk_conv_ticket_created", "ticket_id", "created_at_source"),
+        Index("ix_freshdesk_conv_created", "created_at_source"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_email: Mapped[Optional[str]] = mapped_column(String(320))
+    to_emails: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    incoming: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(32))
+    body_text: Mapped[Optional[str]] = mapped_column(Text)
+    body_html: Mapped[Optional[str]] = mapped_column(Text)
+    created_at_source: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    updated_at_source: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
 class FreshdeskTicketsDaily(TimestampMixin, Base):
