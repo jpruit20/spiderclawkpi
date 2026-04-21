@@ -484,6 +484,7 @@ export interface OverviewResponse {
   recommendations: RecommendationItem[]
   source_health: SourceHealthItem[]
   telemetry?: TelemetrySummary | null
+  cache_info?: CacheInfo | null
 }
 
 export type KpiDisplayRow = {
