@@ -288,6 +288,27 @@ def run_aggregate_cache_rebuild_job() -> None:
         db.close()
 
 
+def run_stream_session_builder_job() -> None:
+    """Hourly: build TelemetrySession rows from live stream events.
+
+    Replaces the dead DynamoDB scan path. Picks up from the last
+    stream-built session and walks forward, writing sessions with
+    source_event_id prefix 'stream:'. S3 backfill rows are preserved.
+    """
+    db = SessionLocal()
+    try:
+        from app.services.stream_session_builder import run_scheduler_tick
+        r = run_scheduler_tick(db)
+        import logging as _log
+        _log.getLogger(__name__).info("stream_session_builder tick: %s", r)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("stream_session_builder failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_weekly_gauge_selection_job() -> None:
     """Monday 10:00 UTC / 06:00 ET: Opus picks the 8 Command Center
     priority gauges for the coming week. Idempotent per (iso_week_start,
@@ -343,6 +364,9 @@ def build_scheduler() -> BackgroundScheduler:
     # what's actually important this week (active DECI decisions,
     # recent incidents, 28-day KPI momentum).
     scheduler.add_job(run_weekly_gauge_selection_job, "cron", day_of_week="mon", hour=10, minute=0, id="weekly-gauge-selection", replace_existing=True, max_instances=1, coalesce=True)
+    # Hourly stream-based session builder. Fills the gap left by the
+    # dead DynamoDB scan path; runs in place of the stalled connector.
+    scheduler.add_job(run_stream_session_builder_job, "interval", minutes=60, id="stream-session-builder", replace_existing=True, max_instances=1, coalesce=True)
     # Tier 2 cache: rebuild every 15 min. The first run happens
     # ~15 min after boot; endpoints fall back to synchronous
     # build_if_missing before then so the first request on a fresh
