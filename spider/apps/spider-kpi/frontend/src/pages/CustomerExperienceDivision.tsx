@@ -11,6 +11,7 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { CXCutoverBanner } from '../components/CXCutoverBanner'
+import { DivisionHero } from '../components/DivisionHero'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
@@ -578,49 +579,140 @@ export function CustomerExperienceDivision() {
 
       {!loading && !error ? (
         <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-            <ProvenanceBanner
-              compact
-              truthState="canonical"
-              lastUpdated={snapshotTimestamp !== 'n/a' ? snapshotTimestamp : undefined}
-              scope="Freshdesk + social signals · Jeremiah's team"
-              caveat={tickets.length === 0 ? 'No tickets loaded — Freshdesk may be disconnected.' : undefined}
-            />
-            {snapshot?.cache_info ? (
-              <CacheFreshnessBadge
-                info={snapshot.cache_info}
-                onRefreshed={async () => {
-                  const fresh = await api.cxSnapshot().catch(() => null)
-                  if (fresh) setSnapshot(fresh)
+          {/* ── DIVISION HERO ─────────────────────────────────────────
+              CX signature: `pulse`. A live-severity pulsing dot shows
+              triage pressure right now. Nothing else on the dashboard
+              pulses — so a regular user knows they're on the CX page
+              from the pulse alone. */}
+          {(() => {
+            const openBacklog = gridMetrics.find(m => m.key === 'open_backlog')?.current ?? 0
+            const openActions = actions.filter(a => a.status !== 'resolved').length
+            const criticalActions = actions.filter(a => a.status !== 'resolved' && a.priority === 'critical').length
+            const slaMetric = headerMetrics.find(m => m.key === 'closure_sla_pct')
+            const frtMetric = headerMetrics.find(m => m.key === 'first_response_time')
+            const reopenMetric = gridMetrics.find(m => m.key === 'reopen_rate')
+            const escalationMetric = gridMetrics.find(m => m.key === 'escalation_rate')
+            const pulseState: 'good' | 'warn' | 'bad' | 'neutral' =
+              criticalActions > 0 ? 'bad'
+              : openActions > 3 ? 'warn'
+              : openActions > 0 ? 'neutral'
+              : 'good'
+            const pulseValue = criticalActions > 0 ? String(criticalActions) : String(openActions)
+            const pulseSubLabel = criticalActions > 0
+              ? `${criticalActions} critical · ${openActions} total`
+              : openActions > 0
+                ? `${openActions} open · 0 critical`
+                : 'queue clear'
+            return (
+              <DivisionHero
+                accentColor="var(--orange)"
+                accentColorSoft="#ff6d7a"
+                signature="pulse"
+                title="Customer Experience"
+                subtitle="Live ticket triage, SLA, team load, and post-cutover operational KPIs."
+                rightMeta={
+                  <>
+                    {snapshot?.cache_info ? (
+                      <CacheFreshnessBadge
+                        info={snapshot.cache_info}
+                        onRefreshed={async () => {
+                          const fresh = await api.cxSnapshot().catch(() => null)
+                          if (fresh) setSnapshot(fresh)
+                        }}
+                      />
+                    ) : null}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {DRILL_ROUTES.map(route => (
+                        <Link key={route.path} to={route.path} className="range-button" style={{ textDecoration: 'none', fontSize: 11 }}>
+                          {route.icon} {route.label}
+                        </Link>
+                      ))}
+                    </div>
+                  </>
+                }
+                primary={{
+                  label: criticalActions > 0 ? 'Critical actions open now' : 'Open CX actions',
+                  value: pulseValue,
+                  sublabel: pulseSubLabel,
+                  state: pulseState,
+                  extra: { context: snapshot?.cutover?.active ? `post-cutover (since ${snapshot.cutover.date})` : 'pre-cutover (legacy model)' },
                 }}
+                flanking={[
+                  {
+                    label: 'SLA compliance',
+                    value: slaMetric ? pct(slaMetric.current, 0) : '—',
+                    sublabel: slaMetric ? `target ${pct(slaMetric.target, 0)}` : undefined,
+                    state: slaMetric
+                      ? slaMetric.current >= slaMetric.target ? 'good'
+                      : slaMetric.current >= slaMetric.target - 5 ? 'warn'
+                      : 'bad'
+                      : 'neutral',
+                    progress: slaMetric ? Math.min(1, slaMetric.current / 100) : undefined,
+                  },
+                  {
+                    label: 'First response',
+                    value: frtMetric ? hrs(frtMetric.current) : '—',
+                    sublabel: frtMetric ? `target ${hrs(frtMetric.target)}` : undefined,
+                    state: frtMetric
+                      ? frtMetric.current <= frtMetric.target ? 'good'
+                      : frtMetric.current <= frtMetric.target * 1.5 ? 'warn'
+                      : 'bad'
+                      : 'neutral',
+                  },
+                ]}
+                tiles={[
+                  {
+                    label: 'Open backlog',
+                    value: whole(openBacklog),
+                    sublabel: snapshot?.cutover?.active ? 'post-cutover' : 'legacy corpus',
+                    state: snapshot?.cutover?.active
+                      ? (openBacklog > 90 ? 'warn' : 'good')
+                      : 'neutral',
+                  },
+                  {
+                    label: 'Reopen rate',
+                    value: reopenMetric ? pct(reopenMetric.current) : '—',
+                    state: reopenMetric
+                      ? reopenMetric.current <= reopenMetric.target ? 'good'
+                      : reopenMetric.current <= reopenMetric.red_threshold ? 'warn'
+                      : 'bad'
+                      : 'neutral',
+                  },
+                  {
+                    label: 'Escalation rate',
+                    value: escalationMetric ? pct(escalationMetric.current) : '—',
+                    state: escalationMetric
+                      ? escalationMetric.current <= escalationMetric.target ? 'good'
+                      : escalationMetric.current <= escalationMetric.red_threshold ? 'warn'
+                      : 'bad'
+                      : 'neutral',
+                  },
+                  {
+                    label: 'Social sentiment',
+                    value: socialPulse && socialPulse.avg_sentiment_score != null
+                      ? `${Math.round(socialPulse.avg_sentiment_score * 100)}%`
+                      : '—',
+                    state: socialPulse
+                      ? (socialPulse.avg_sentiment_score ?? 0) >= 0.3 ? 'good'
+                      : (socialPulse.avg_sentiment_score ?? 0) >= 0 ? 'warn'
+                      : 'bad'
+                      : 'neutral',
+                  },
+                  {
+                    label: 'FCR rate',
+                    value: pct(fcrMetrics.rate, 0),
+                    state: fcrMetrics.rate >= 80 ? 'good' : fcrMetrics.rate >= 60 ? 'warn' : 'bad',
+                  },
+                  {
+                    label: 'Total tickets',
+                    value: fmtInt(tickets.length),
+                    sublabel: `${tickets.filter(t => !t.resolved_at_source).length} open`,
+                    state: 'neutral',
+                  },
+                ]}
               />
-            ) : null}
-          </div>
-
-          {/* Quick Stats & Navigation Bar */}
-          <div className="scope-note" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>Quick Stats:</span>
-              <span className={`badge ${fcrMetrics.rate >= 80 ? 'badge-good' : fcrMetrics.rate >= 60 ? 'badge-warn' : 'badge-bad'}`}>
-                FCR {pct(fcrMetrics.rate)}
-              </span>
-              <span className="badge badge-neutral">{tickets.length} Total Tickets</span>
-              <span className="badge badge-neutral">{tickets.filter(t => !t.resolved_at_source).length} Open</span>
-              {socialPulse && (
-                <span className={`badge ${(socialPulse.avg_sentiment_score ?? 0) >= 0.3 ? 'badge-good' : (socialPulse.avg_sentiment_score ?? 0) >= 0 ? 'badge-warn' : 'badge-bad'}`}>
-                  Social {Math.round((socialPulse.avg_sentiment_score ?? 0) * 100)}%
-                </span>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>Drill-down:</span>
-              {DRILL_ROUTES.map(route => (
-                <Link key={route.path} to={route.path} className="range-button" style={{ textDecoration: 'none', fontSize: 12 }}>
-                  {route.icon} {route.label}
-                </Link>
-              ))}
-            </div>
-          </div>
+            )
+          })()}
 
           {/* Truth Legend */}
           <TruthLegend />

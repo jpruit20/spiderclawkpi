@@ -10,6 +10,7 @@ import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 import { AISelfGradeCard } from '../components/AISelfGradeCard'
 import { WeeklyGaugeCluster } from '../components/WeeklyGaugeCluster'
+import { DivisionHero } from '../components/DivisionHero'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -132,82 +133,115 @@ export function CommandCenter() {
           30 s poll; click any gauge for Opus's rationale + drill. */}
       <WeeklyGaugeCluster />
 
-      {/* ── ROW 2 · BUSINESS + FLEET HEROES ────────────────────────────
-          Two big visual cards that dominate the fold. Sparklines,
-          gauge arcs, trend arrows. Click → deep page. */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-          gap: 10,
-        }}
-      >
-        <SparklineHero
-          title="Revenue · trailing 7d"
-          primaryValue={currency(data.revenue.trailing_7)}
-          secondaryValue={`vs ${currency(data.revenue.prior_7)} prior 7d`}
-          delta={
-            data.revenue.wow_pct != null
-              ? `${data.revenue.wow_pct >= 0 ? '+' : ''}${data.revenue.wow_pct.toFixed(0)}%`
-              : undefined
-          }
-          deltaDir={
-            data.revenue.wow_delta > 0 ? 'up' : data.revenue.wow_delta < 0 ? 'down' : 'flat'
-          }
-          upIsGood
-          values={revSparkline}
-          state={
-            data.revenue.wow_pct == null ? 'neutral'
-            : data.revenue.wow_pct >= 5 ? 'good'
-            : data.revenue.wow_pct >= -5 ? 'neutral'
-            : 'bad'
-          }
-          icon="💰"
-          href="/revenue"
-        />
-        {data.telemetry ? (
-          <SparklineHero
-            title="Fleet · active right now"
-            primaryValue={fmtInt(data.telemetry.active_devices)}
-            secondaryValue={`active devices (last 15m) · ${fmtInt(data.telemetry.engaged_devices)} cooking yesterday`}
-            delta={
-              data.telemetry.cook_success_rate != null
-                ? `${fmtPct(data.telemetry.cook_success_rate)} success`
-                : undefined
+      {/* ── ROW 2 · EXECUTIVE HERO ─────────────────────────────────────
+          Unified division-hero shell: North-Star revenue primary,
+          fleet + cook-success flanking, support KPI tiles on the
+          right. The `northStar` signature is the Command Center's
+          visual fingerprint — no other page uses it. */}
+      {(() => {
+        const wow = data.revenue.wow_pct
+        // Target = prior 7d. progress = trailing_7 / prior_7, clamped.
+        // >1 means we're ahead of last week; <1 means slipping.
+        const progress = data.revenue.prior_7 > 0
+          ? data.revenue.trailing_7 / data.revenue.prior_7
+          : 0
+        const revState: 'good' | 'warn' | 'bad' | 'neutral' =
+          wow == null ? 'neutral'
+          : wow >= 5 ? 'good'
+          : wow >= -5 ? 'warn'
+          : 'bad'
+        const successRate = data.telemetry?.cook_success_rate
+        const successState: 'good' | 'warn' | 'bad' | 'neutral' =
+          successRate == null ? 'neutral'
+          : successRate >= 0.69 ? 'good'
+          : successRate >= 0.55 ? 'warn'
+          : 'bad'
+        const criticalAnomalies = (data.anomalies || [])
+          .map(a => ({ a, tier: calibratedAnomalySeverity(a) }))
+          .filter(x => x.tier === 'bad').length
+        const warnAnomalies = (data.anomalies || [])
+          .map(a => ({ a, tier: calibratedAnomalySeverity(a) }))
+          .filter(x => x.tier === 'warn').length
+        const openDrafts = data.headline.drafts_awaiting_review
+        const wismo7 = data.wismo?.last_7 ?? data.headline.wismo_last_7 ?? 0
+        return (
+          <DivisionHero
+            accentColor="#6ea8ff"
+            accentColorSoft="#39d08f"
+            signature="northStar"
+            title="Command Center"
+            subtitle="Executive cockpit — business health, fleet state, and anything that needs attention today."
+            rightMeta={
+              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
+                <div>Updated {formatFreshness(data.generated_at)}</div>
+                <div>Business date {data.business_date}</div>
+              </div>
             }
-            deltaDir={
-              data.telemetry.cook_success_rate != null && data.telemetry.cook_success_rate >= 0.69
-                ? 'up'
-                : 'down'
-            }
-            upIsGood
-            values={[]}
-            state={
-              data.telemetry.cook_success_rate == null ? 'neutral'
-              : data.telemetry.cook_success_rate >= 0.69 ? 'good'
-              : data.telemetry.cook_success_rate >= 0.55 ? 'warn'
-              : 'bad'
-            }
-            subtitle={
-              data.telemetry.error_rate != null
-                ? `err rate ${fmtPct(data.telemetry.error_rate)}`
-                : undefined
-            }
-            icon="🔥"
-            href="/division/product-engineering"
+            primary={{
+              label: 'Trailing 7-day revenue vs prior 7-day',
+              value: currency(data.revenue.trailing_7),
+              sublabel: `vs ${currency(data.revenue.prior_7)} prior 7d · ${
+                wow != null ? `${wow >= 0 ? '+' : ''}${wow.toFixed(0)}% WoW` : 'WoW n/a'
+              }`,
+              state: revState,
+              progress,
+              extra: { targetLabel: 'Prior 7d' },
+            }}
+            flanking={[
+              {
+                label: 'Fleet active now',
+                value: data.telemetry ? fmtInt(data.telemetry.active_devices) : '—',
+                sublabel: data.telemetry
+                  ? `${fmtInt(data.telemetry.engaged_devices)} cooking yesterday`
+                  : 'telemetry offline',
+                state: data.telemetry ? 'good' : 'neutral',
+              },
+              {
+                label: 'Cook success rate',
+                value: successRate != null ? fmtPct(successRate) : '—',
+                sublabel: data.telemetry?.error_rate != null
+                  ? `err rate ${fmtPct(data.telemetry.error_rate)}`
+                  : undefined,
+                state: successState,
+                progress: successRate ?? undefined,
+                delta: successRate != null ? {
+                  dir: successRate >= 0.69 ? 'up' : successRate >= 0.55 ? 'flat' : 'down',
+                  label: successRate >= 0.69 ? 'healthy' : successRate >= 0.55 ? 'watch' : 'below',
+                  good: successRate >= 0.69,
+                } : undefined,
+              },
+            ]}
+            tiles={[
+              {
+                label: 'Critical anomalies',
+                value: String(criticalAnomalies),
+                sublabel: criticalAnomalies === 0 ? 'clear' : 'needs eyes',
+                state: criticalAnomalies === 0 ? 'good' : 'bad',
+              },
+              {
+                label: 'Warn anomalies',
+                value: String(warnAnomalies),
+                sublabel: warnAnomalies === 0 ? 'clear' : 'watch',
+                state: warnAnomalies === 0 ? 'good' : 'warn',
+              },
+              {
+                label: 'Drafts awaiting review',
+                value: String(openDrafts),
+                sublabel: 'needs a decision',
+                state: openDrafts > 15 ? 'warn' : openDrafts > 0 ? 'neutral' : 'good',
+                onClick: () => { window.location.href = '/deci' },
+              },
+              {
+                label: 'WISMO · 7d',
+                value: String(wismo7),
+                sublabel: 'target: 0',
+                state: wismo7 === 0 ? 'good' : wismo7 <= 10 ? 'warn' : 'bad',
+                onClick: () => { window.location.href = '/division/customer-experience' },
+              },
+            ]}
           />
-        ) : (
-          <SparklineHero
-            title="Fleet · telemetry"
-            primaryValue="—"
-            secondaryValue="waiting on latest materializer run"
-            values={[]}
-            state="neutral"
-            icon="🔥"
-            href="/division/product-engineering"
-          />
-        )}
-      </div>
+        )
+      })()}
 
       {/* ── ROW 3 · ANOMALIES + INSIGHTS ───────────────────────────────
           Anomalies as centered-baseline z-score bars (no prose).

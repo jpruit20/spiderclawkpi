@@ -5,6 +5,7 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { DivisionHero } from '../components/DivisionHero'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
@@ -712,40 +713,132 @@ export function ProductEngineeringDivision() {
 
   return (
     <div className="page-grid venom-page">
-      {/* Header */}
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">Product Development Hub</h2>
-          <p className="venom-subtitle">
-            {streamBacked ? 'Live' : 'Degraded'} · Updated {formatFreshness(collection?.newest_sample_timestamp_seen)} · {fmtInt(devicesReporting || activeCooks)} devices reporting
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2 }}>
-            {([
-              { key: 'fleet' as SubView, label: 'Fleet Health' },
-              { key: 'voice' as SubView, label: 'Voice of Customer' },
-              { key: 'roadmap' as SubView, label: 'Innovation Radar' },
-            ]).map(tab => (
-              <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
-            ))}
-            <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
-          </div>
-          {/* Date Range Picker */}
-          <div style={{ position: 'relative' }}>
-            <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>
-              {dateStart.slice(5)} to {dateEnd.slice(5)} ({daysDiff}d)
-            </button>
-            {showDatePicker && (
-              <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 20, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <label style={{ fontSize: 12, color: 'var(--muted)' }}>From <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="deci-input" /></label>
-                <label style={{ fontSize: 12, color: 'var(--muted)' }}>To <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="deci-input" /></label>
-                <button className="range-button" onClick={() => setShowDatePicker(false)}>Apply</button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* ── DIVISION HERO ──────────────────────────────────────────
+          Product / Engineering signature: `concentric`. Three nested
+          arcs show the fleet in layers — the total installed base
+          (outer), devices phoning home recently (mid), and devices
+          actively cooking right now (inner). The shape is the page's
+          fingerprint; a user recognizes Product Engineering from the
+          nested rings alone. */}
+      {(() => {
+        const installedBase = probeInstalledBase || 13000
+        const devicesHeadline = devicesReporting || activeCooks
+        const ring24hProgress = installedBase > 0 ? devices24h / installedBase : 0
+        const ringNowProgress = installedBase > 0 ? activeCooks / installedBase : 0
+        const stabilityState: 'good' | 'warn' | 'bad' | 'neutral' =
+          stabilityScore == null ? 'neutral'
+          : stabilityScore >= 0.85 ? 'good'
+          : stabilityScore >= 0.65 ? 'warn'
+          : 'bad'
+        const successState: 'good' | 'warn' | 'bad' | 'neutral' =
+          successRate == null ? 'neutral'
+          : successRate >= 0.69 ? 'good'
+          : successRate >= 0.55 ? 'warn'
+          : 'bad'
+        const disconnectState: 'good' | 'warn' | 'bad' | 'neutral' =
+          disconnectRate == null ? 'neutral'
+          : disconnectRate <= 0.05 ? 'good'
+          : disconnectRate <= 0.10 ? 'warn'
+          : 'bad'
+        return (
+          <DivisionHero
+            accentColor="var(--green)"
+            accentColorSoft="var(--blue)"
+            signature="concentric"
+            title="Product Development Hub"
+            subtitle={`${streamBacked ? 'Live' : 'Degraded'} · Updated ${formatFreshness(collection?.newest_sample_timestamp_seen)} · ${fmtInt(devicesHeadline)} devices reporting`}
+            rightMeta={
+              <>
+                <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2 }}>
+                  {([
+                    { key: 'fleet' as SubView, label: 'Fleet Health' },
+                    { key: 'voice' as SubView, label: 'Voice of Customer' },
+                    { key: 'roadmap' as SubView, label: 'Innovation Radar' },
+                  ]).map(tab => (
+                    <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
+                  ))}
+                  <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>
+                    {dateStart.slice(5)} to {dateEnd.slice(5)} ({daysDiff}d)
+                  </button>
+                  {showDatePicker && (
+                    <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 20, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <label style={{ fontSize: 12, color: 'var(--muted)' }}>From <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="deci-input" /></label>
+                      <label style={{ fontSize: 12, color: 'var(--muted)' }}>To <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="deci-input" /></label>
+                      <button className="range-button" onClick={() => setShowDatePicker(false)}>Apply</button>
+                    </div>
+                  )}
+                </div>
+              </>
+            }
+            primary={{
+              label: 'Fleet — installed → reporting → cooking',
+              value: fmtInt(activeCooks),
+              sublabel: 'cooking now',
+              state: successState,
+              progress: 1,
+              progressSecondary: Math.min(1, ring24hProgress),
+              progressInner: Math.min(1, ringNowProgress),
+              layers: [
+                { label: 'Installed', value: fmtInt(installedBase) },
+                { label: 'Reporting 24h', value: fmtInt(devices24h) },
+                { label: 'Cooking now', value: fmtInt(activeCooks) },
+              ],
+            }}
+            flanking={[
+              {
+                label: 'Cook success rate',
+                value: successRate != null ? `${Math.round(successRate * 100)}%` : '—',
+                sublabel: sampleSize ? `n=${fmtInt(sampleSize)}` : undefined,
+                state: successState,
+                progress: successRate ?? undefined,
+              },
+              {
+                label: 'Stability score',
+                value: stabilityScore != null ? `${Math.round(stabilityScore * 100)}%` : '—',
+                sublabel: 'cook temp + probe',
+                state: stabilityState,
+                progress: stabilityScore ?? undefined,
+              },
+            ]}
+            tiles={[
+              {
+                label: 'Disconnect rate',
+                value: disconnectRate != null ? `${(disconnectRate * 100).toFixed(1)}%` : '—',
+                state: disconnectState,
+              },
+              {
+                label: 'Overshoot rate',
+                value: overshootRate != null ? `${(overshootRate * 100).toFixed(1)}%` : '—',
+                state: overshootRate == null ? 'neutral' : overshootRate <= 0.05 ? 'good' : overshootRate <= 0.10 ? 'warn' : 'bad',
+              },
+              {
+                label: 'Median RSSI',
+                value: medianRssi != null ? `${Math.round(medianRssi)} dBm` : '—',
+                state: medianRssi == null ? 'neutral' : medianRssi >= -70 ? 'good' : medianRssi >= -80 ? 'warn' : 'bad',
+              },
+              {
+                label: 'Probe failures (30d)',
+                value: probeFailureCount != null ? fmtInt(probeFailureCount) : '—',
+                sublabel: probeRatePer1kActive != null ? `${probeRatePer1kActive.toFixed(1)}/1k active` : undefined,
+                state: probeFailureCount == null ? 'neutral' : probeFailureCount === 0 ? 'good' : 'warn',
+              },
+              {
+                label: 'P50 stabilize',
+                value: p50Stabilize != null ? `${Math.round(p50Stabilize / 60)}m` : '—',
+                state: p50Stabilize == null ? 'neutral' : p50Stabilize <= 600 ? 'good' : p50Stabilize <= 900 ? 'warn' : 'bad',
+              },
+              {
+                label: 'Sessions (window)',
+                value: fmtInt(historyStats?.totalSessions || sampleSize || 0),
+                state: 'neutral',
+              },
+            ]}
+          />
+        )
+      })()}
 
       {/* AI-written telemetry analysis — comprehensive baseline + future monthly reports */}
       <TelemetryReportCard reportType="comprehensive" />
