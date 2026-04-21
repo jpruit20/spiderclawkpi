@@ -39,6 +39,7 @@ import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
 import { useAuth } from '../components/AuthGate'
 import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
+import { CookTimelineChart } from '../components/CookTimelineChart'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
 
@@ -320,6 +321,7 @@ function FleetControlHealthCard() {
   const [stateFilter, setStateFilter] = useState<string>('')
   const [productFilter, setProductFilter] = useState<string>('')
   const [page, setPage] = useState<number>(1)
+  const [focusedMac, setFocusedMac] = useState<string | null>(null)
 
   // Reset to page 1 whenever filters/sort change — otherwise the user
   // lands on page 4 of a smaller filtered list and sees "no devices."
@@ -441,7 +443,8 @@ function FleetControlHealthCard() {
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('gap_abs')}>Gap{sortIndicator('gap_abs')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('intensity')}>Fan{sortIndicator('intensity')}</th>
                   <th>Ramp</th>
-                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('cook_elapsed')} title="Live fire detected: first sample with pit ≥140°F in this engagement">Cook (≥140°F){sortIndicator('cook_elapsed')}</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('cook_elapsed')} title="Live fire detected: first sample with pit ≥140°F in this engagement">Cook started{sortIndicator('cook_elapsed')}</th>
+                  <th title="When the user last set a target temperature on the controller.">Target set</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('firmware')}>Firmware{sortIndicator('firmware')}</th>
                   <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('sample_ts')}>Last sample{sortIndicator('sample_ts')}</th>
                 </tr>
@@ -449,9 +452,20 @@ function FleetControlHealthCard() {
               <tbody>
                 {data.devices.map(d => {
                   const badge = STATE_BADGE[d.state] ?? STATE_BADGE.unknown
+                  const clickable = !!d.mac
                   return (
-                    <tr key={d.device_id} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }} title={d.reason}>{d.mac ?? '—'}</td>
+                    <tr
+                      key={d.device_id}
+                      onClick={clickable ? () => setFocusedMac(d.mac!) : undefined}
+                      style={{
+                        borderTop: '1px solid var(--border)',
+                        cursor: clickable ? 'pointer' : 'default',
+                      }}
+                      onMouseEnter={e => { if (clickable) (e.currentTarget.style.background = 'rgba(255,255,255,0.03)') }}
+                      onMouseLeave={e => { if (clickable) (e.currentTarget.style.background = 'transparent') }}
+                      title={clickable ? `${d.reason} · Click for cook timeline` : d.reason}
+                    >
+                      <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{d.mac ?? '—'}</td>
                       <td title={d.grill_type ?? undefined}>{d.product ?? '—'}</td>
                       <td>
                         <span style={{ background: badge.bg, color: badge.fg, padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
@@ -470,9 +484,19 @@ function FleetControlHealthCard() {
                           : '—'}
                       </td>
                       <td title={d.cook_start_ts ?? undefined}>
-                        {d.cook_elapsed_seconds != null
-                          ? `${Math.round(d.cook_elapsed_seconds / 60)}m`
+                        {d.cook_start_ts
+                          ? new Date(d.cook_start_ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
                           : (d.state === 'ramping_up' ? 'no fire yet' : '—')}
+                        {d.cook_elapsed_seconds != null ? (
+                          <span style={{ color: 'var(--muted)', fontSize: 10, marginLeft: 4 }}>
+                            ({Math.round(d.cook_elapsed_seconds / 60)}m)
+                          </span>
+                        ) : null}
+                      </td>
+                      <td title={d.target_set_at ?? undefined}>
+                        {d.target_set_at
+                          ? new Date(d.target_set_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+                          : '—'}
                       </td>
                       <td>{d.firmware_version ?? '—'}</td>
                       <td>{fmtDateTime(d.sample_timestamp)}</td>
@@ -523,6 +547,15 @@ function FleetControlHealthCard() {
       ) : (
         <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>No devices matching filter.</div>
       )}
+
+      {focusedMac ? (
+        <CookTimelineChart
+          mac={focusedMac}
+          lookbackHours={24}
+          modal
+          onClose={() => setFocusedMac(null)}
+        />
+      ) : null}
     </section>
   )
 }
@@ -667,20 +700,26 @@ function CookBehaviorEncyclopediaCard() {
         <div style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)' }}>
           No baselines computed yet. Click "Rebuild now" or wait for the 08:30 UTC nightly run.
         </div>
-      ) : (
+      ) : (() => {
+        // Hide Fan + coverage columns when no baseline row has populated
+        // steady_fan_p* — the DynamoDB session source doesn't carry fan
+        // data, so these are structurally empty until the stream-based
+        // session rebuild lands. Showing empty columns looked like a bug.
+        const anyFan = data.baselines.some(b => b.steady_fan_p50 != null)
+        return (
         <div style={{ marginTop: 12, overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 980 }}>
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 820 }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                 <th style={{ padding: '6px 8px' }}>Target band</th>
                 <th>Sessions</th>
                 <th>Ramp p10 / p50 / p90</th>
-                <th>Fan p10 / p50 / p90</th>
+                {anyFan ? <th>Fan p10 / p50 / p90</th> : null}
                 <th>Stddev p50 / p90</th>
                 <th>Cool p50</th>
                 <th>Duration p50</th>
                 <th>Ramp coverage</th>
-                <th>Fan coverage</th>
+                {anyFan ? <th>Fan coverage</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -692,16 +731,18 @@ function CookBehaviorEncyclopediaCard() {
                     <td style={{ padding: '6px 8px', fontWeight: 500 }}>{b.target_temp_band}–{Number(b.target_temp_band) + 49}°F</td>
                     <td>{b.sample_size}</td>
                     <td>{fmtSeconds(b.ramp_time_p10)} / {fmtSeconds(b.ramp_time_p50)} / {fmtSeconds(b.ramp_time_p90)}</td>
-                    <td>{fmtNum(b.steady_fan_p10, '%')} / {fmtNum(b.steady_fan_p50, '%')} / {fmtNum(b.steady_fan_p90, '%')}</td>
+                    {anyFan ? <td>{fmtNum(b.steady_fan_p10, '%')} / {fmtNum(b.steady_fan_p50, '%')} / {fmtNum(b.steady_fan_p90, '%')}</td> : null}
                     <td>{fmtNum(b.steady_temp_stddev_p50, '°F')} / {fmtNum(b.steady_temp_stddev_p90, '°F')}</td>
                     <td>{fmtNum(b.cool_down_rate_p50, '°/m')}</td>
                     <td>{fmtSeconds(b.typical_duration_p50)}</td>
                     <td style={{ color: rd && rd.coverage != null && rd.coverage < 0.5 ? 'var(--red)' : 'inherit' }}>
                       {rd && rd.coverage != null ? `${Math.round(rd.coverage * 100)}% (n=${rd.n})` : '—'}
                     </td>
-                    <td style={{ color: fd && fd.coverage != null && fd.coverage < 0.5 ? 'var(--red)' : 'inherit' }}>
-                      {fd && fd.coverage != null ? `${Math.round(fd.coverage * 100)}% (n=${fd.n})` : '—'}
-                    </td>
+                    {anyFan ? (
+                      <td style={{ color: fd && fd.coverage != null && fd.coverage < 0.5 ? 'var(--red)' : 'inherit' }}>
+                        {fd && fd.coverage != null ? `${Math.round(fd.coverage * 100)}% (n=${fd.n})` : '—'}
+                      </td>
+                    ) : null}
                   </tr>
                 )
               })}
@@ -709,9 +750,11 @@ function CookBehaviorEncyclopediaCard() {
           </table>
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
             Coverage = % of last 48h sessions whose actual values fell inside the p10–p90 band. Drops below 50% flag drift.
+            {!anyFan ? ' Fan columns hidden — source data is empty until the stream-based session rebuild lands.' : ''}
           </div>
         </div>
-      )}
+        )
+      })()}
     </section>
   )
 }
@@ -1039,7 +1082,12 @@ function DeviceDrillDown() {
         onRemove={onDeleteRecent}
       />
 
-      {activeMac ? <DevicePanel mac={activeMac} /> : (
+      {activeMac ? (
+        <>
+          <CookTimelineChart mac={activeMac} lookbackHours={24} />
+          <DevicePanel mac={activeMac} />
+        </>
+      ) : (
         <section className="card">
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>
             Tip: the office grill is MAC <code>fcb467f9b456</code>. Paste any format — separators and case don't matter.

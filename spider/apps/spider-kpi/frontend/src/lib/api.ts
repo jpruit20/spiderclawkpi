@@ -58,6 +58,7 @@ import type {
   SocialTrendsResponse,
   ProductComplaintsResponse,
   WeeklyGaugeResponse,
+  CookTimelineResponse,
   YouTubePerformance,
   AmazonProductHealth,
   MarketIntelligence,
@@ -797,6 +798,11 @@ export const api = {
     request<FirmwareDeviceControlSignals>(
       `/api/firmware/device/${encodeURIComponent(mac)}/control-signals`, { signal },
     ),
+  firmwareDeviceCookTimeline: (mac: string, lookbackHours: number = 24, signal?: AbortSignal) =>
+    request<CookTimelineResponse>(
+      `/api/firmware/device/${encodeURIComponent(mac)}/cook-timeline?lookback_hours=${lookbackHours}`,
+      { signal, timeoutMs: 30000 },
+    ),
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>
@@ -1158,6 +1164,7 @@ export interface FirmwareFleetControlDevice {
   sample_timestamp: string | null
   cook_start_ts: string | null
   cook_elapsed_seconds: number | null
+  target_set_at: string | null
 }
 
 export interface FirmwareFleetControlHealth {

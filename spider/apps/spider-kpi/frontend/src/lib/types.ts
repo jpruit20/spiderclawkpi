@@ -550,6 +550,24 @@ export interface WeeklyGauge {
   change_pct: number | null
 }
 
+export interface CookTimelinePoint {
+  ts: string | null
+  current_temp: number | null
+  target_temp: number | null
+  intensity: number | null
+  engaged: boolean | null
+}
+
+export interface CookTimelineResponse {
+  mac: string
+  cook_start_ts: string | null
+  cook_end_ts: string | null
+  is_active: boolean
+  target_set_at: string | null
+  live_fire_threshold_f: number
+  points: CookTimelinePoint[]
+}
+
 export interface WeeklyGaugeResponse {
   week_start: string
   overall_theme: string | null
