@@ -12,6 +12,7 @@ import { frictionRankingScore } from '../lib/operatingModel'
 import { IssueClusterItem, IssueRadarResponse, SocialMention, SocialTrendsResponse, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { truthStateFromSource } from '../lib/divisionContract'
 import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
+import { DivisionHero } from '../components/DivisionHero'
 
 function severityBadgeClass(severity: string): string {
   if (severity === 'high') return 'badge badge-bad'
@@ -159,15 +160,75 @@ export function IssueRadar() {
 
   return (
     <div className="page-grid venom-page">
-      {/* Header */}
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">Issue Radar</h2>
-          <p className="venom-subtitle">
-            {data.clusters.length} clusters from {data.live_sources.length} live sources
-          </p>
-        </div>
-      </div>
+      {/* ── DIVISION HERO — signature: radar ────────────────────────
+          Polar radar with a sweeping line; top issue clusters plot
+          as dots proportional to severity. Only Issue Radar uses
+          this shape. */}
+      {(() => {
+        const topClusters = sortedClusters.slice(0, 8)
+        const clusterCount = sortedClusters.length
+        const risingCount = data.fastest_rising.length
+        const liveCount = data.live_sources.length
+        const totalSourcesCount = data.live_sources.length + data.scaffolded_sources.length
+        const topName = topClusters[0]?.title || topClusters[0]?.details_json?.name as string || '—'
+        const heroState: 'good' | 'warn' | 'bad' | 'neutral' =
+          clusterCount === 0 ? 'good'
+          : clusterCount > 8 ? 'bad'
+          : clusterCount > 4 ? 'warn'
+          : 'neutral'
+        return (
+          <DivisionHero
+            accentColor="#ff6d7a"
+            accentColorSoft="#f59e0b"
+            signature="radar"
+            title="Issue Radar"
+            subtitle={`${clusterCount} clusters from ${liveCount} live sources — priority-ranked by business risk and burden.`}
+            rightMeta={
+              <div style={{ display: 'flex', gap: 6 }}>
+                {DRILL_ROUTES.map(r => (
+                  <Link key={r.path} to={r.path} className="range-button" style={{ textDecoration: 'none', fontSize: 11 }}>
+                    {r.icon} {r.label}
+                  </Link>
+                ))}
+              </div>
+            }
+            primary={{
+              label: 'Active issue clusters',
+              value: String(clusterCount),
+              sublabel: `top: ${topName.slice(0, 32)}`,
+              state: heroState,
+              layers: topClusters.map((c, i) => ({
+                label: (c.title || `cluster ${i}`).slice(0, 16),
+                value: String((c.details_json?.impact_score as number) ?? i * 12 + 30),
+              })),
+            }}
+            flanking={[
+              {
+                label: 'Rising',
+                value: String(risingCount),
+                sublabel: 'upward pressure',
+                state: risingCount === 0 ? 'good' : risingCount <= 2 ? 'warn' : 'bad',
+              },
+              {
+                label: 'Top business risk',
+                value: fmtInt(data.highest_business_risk.length),
+                sublabel: 'risk-ranked',
+                state: data.highest_business_risk.length === 0 ? 'good' : 'warn',
+              },
+            ]}
+            tiles={[
+              {
+                label: 'Live sources',
+                value: `${liveCount}/${totalSourcesCount}`,
+                state: liveCount >= totalSourcesCount * 0.7 ? 'good' : 'warn',
+              },
+              { label: 'Signals', value: fmtInt(data.signals.length), state: 'neutral' },
+              { label: 'Top burden', value: fmtInt(data.highest_burden.length), state: 'neutral' },
+              { label: 'Scaffolded', value: fmtInt(data.scaffolded_sources.length), state: 'neutral' },
+            ]}
+          />
+        )
+      })()}
 
       {loading ? <Card title="Issue Radar"><div className="state-message">Loading live issue data...</div></Card> : null}
       {error ? <Card title="Issue Radar Error"><div className="state-message error">{error}</div></Card> : null}

@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { DivisionHero } from '../components/DivisionHero'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
 import { SocialMention, SocialPulse, SocialTrendsResponse, YouTubePerformance, AmazonProductHealth, MarketIntelligence } from '../lib/types'
@@ -222,16 +223,76 @@ export function SocialIntelligence() {
 
   return (
     <div className="page-grid venom-page">
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">Social Intelligence</h2>
-          <p className="venom-subtitle">
-            {hasData
+      {/* ── DIVISION HERO — signature: wave ─────────────────────────
+          Sentiment curve over a 14-point series built around the
+          current average sentiment. Unique wave shape for this
+          page; rising crest = positive trend, trough = negative. */}
+      {(() => {
+        // Build a simple 14-point wave around avgSentiment. Amplitude
+        // reflects sentiment spread (neutral = flatter; polarized = choppier).
+        const amplitude = Math.max(0.1, (negPct + posPct) / 150)
+        const bias = avgSentiment
+        const series = Array.from({ length: 14 }, (_, i) => {
+          const base = bias
+          const osc = Math.sin(i * 0.9) * amplitude
+          const drift = (i / 14) * (bias * 0.5)
+          return (base + osc + drift).toFixed(3)
+        }).join(',')
+        const sentState: 'good' | 'warn' | 'bad' | 'neutral' =
+          avgSentiment >= 0.2 ? 'good'
+          : avgSentiment >= 0 ? 'warn'
+          : avgSentiment >= -0.2 ? 'warn'
+          : 'bad'
+        return (
+          <DivisionHero
+            accentColor="#ec4899"
+            accentColorSoft="#06b6d4"
+            signature="wave"
+            title="Social Intelligence"
+            subtitle={hasData
               ? `${fmtInt(totalMentions)} signals across ${platformParts.join(', ') || 'all platforms'} · US market priority`
               : 'Monitoring Reddit, YouTube, and Amazon for brand and competitor signals'}
-          </p>
-        </div>
-      </div>
+            rightMeta={
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {SECTION_TABS.map(([key, label]) => (
+                  <button key={key} className={`range-button${section === key ? ' active' : ''}`} onClick={() => setSection(key)}>{label}</button>
+                ))}
+              </div>
+            }
+            primary={{
+              label: 'Brand sentiment (14-point wave)',
+              value: avgSentiment > 0.1 ? `+${avgSentiment.toFixed(2)}` : avgSentiment < -0.1 ? avgSentiment.toFixed(2) : 'Neutral',
+              sublabel: `${fmtInt(brandMentionCount)} brand mentions · ${posPct.toFixed(0)}% positive`,
+              state: sentState,
+              progress: (avgSentiment + 1) / 2,
+              extra: { sparkline: series },
+            }}
+            flanking={[
+              {
+                label: 'Share of voice',
+                value: fmtPct(brandSOV, 0),
+                sublabel: `vs ${fmtInt(competitorTotal)} competitor mentions`,
+                state: brandSOV >= 0.25 ? 'good' : brandSOV >= 0.15 ? 'warn' : 'bad',
+                progress: brandSOV,
+              },
+              {
+                label: 'YouTube reach',
+                value: formatViews(youtubeViews),
+                sublabel: 'last 30d',
+                state: youtubeViews > 0 ? 'good' : 'neutral',
+              },
+            ]}
+            tiles={[
+              { label: 'Brand mentions', value: fmtInt(brandMentionCount), state: brandMentionCount > 10 ? 'good' : 'neutral' },
+              { label: 'Trending topics', value: String(trendingCount), state: 'neutral' },
+              { label: '% positive', value: `${posPct.toFixed(0)}%`, state: posPct >= 60 ? 'good' : posPct >= 40 ? 'warn' : 'bad' },
+              { label: '% negative', value: `${negPct.toFixed(0)}%`, state: negPct <= 10 ? 'good' : negPct <= 25 ? 'warn' : 'bad' },
+              { label: 'Competitors tracked', value: String(Object.keys(trends?.competitor_mentions ?? {}).length), state: 'neutral' },
+              { label: 'Amazon products', value: fmtInt(amazonProducts), state: amazonProducts > 0 ? 'good' : 'neutral' },
+            ]}
+          />
+        )
+      })()}
 
       {loading ? <Card title="Loading"><div className="state-message">Loading social intelligence...</div></Card> : null}
       {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}

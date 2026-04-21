@@ -36,7 +36,17 @@ from app.services.weekly_gauges_catalog import CATALOG, list_catalog_for_prompt
 logger = logging.getLogger(__name__)
 
 
-GAUGE_COUNT = 8
+GAUGE_COUNT = 5
+
+# Anchor gauges — permanently shown at the top of the Command Center
+# hero (revenue primary + fleet/success flanking). Opus MUST NOT pick
+# these, because they're always visible; picking them would waste a
+# curated slot on a metric we're already showing as fixed anchors.
+ANCHOR_KEYS: tuple[str, ...] = (
+    "revenue_7d",
+    "fleet_active_now",
+    "cook_success_rate_7d",
+)
 
 
 class GaugePick(BaseModel):
@@ -59,10 +69,17 @@ Thousands of Venom controllers are in the field; the company sells
 through Shopify, runs paid media on Meta/Google/TikTok via TripleWhale,
 and handles customer support in Freshdesk.
 
-Your job every Monday: pick the 8 most-important gauges for the company's
-Command Center dashboard top strip. The selection is shown for the coming
-week. Same 8 gauges stay up all week; their values update live. You are
-curating *what leadership needs to see this week*, not a generic KPI set.
+Your job every Monday: pick the 5 most-important *curated* gauges for
+the company's Command Center dashboard top strip. The selection is shown
+for the coming week. Same 5 gauges stay up all week; their values update
+live. You are curating *what leadership needs to see this week*, not a
+generic KPI set.
+
+There are also 3 ANCHOR gauges permanently shown at the top of the
+Command Center — revenue, fleet active, cook success. Do NOT include
+these in your 5 picks. Their keys are listed in the user message and
+are already covered visually — picking them again wastes a slot. Pick
+metrics that complement the anchors, not duplicate them.
 
 How to pick:
 1. Read the current business context (past 4 weeks of KPIs, open DECI
@@ -251,10 +268,14 @@ def run_weekly_gauge_selection(
     else:
         pin_note = ""
 
+    anchor_note = (
+        "\n\nANCHOR GAUGES (already permanently shown — do NOT pick these):\n"
+        + "\n".join(f"  - {k}" for k in ANCHOR_KEYS)
+    )
     user_msg = (
         f"Select {GAUGE_COUNT} Command Center priority gauges for the "
         f"week starting {target_week.isoformat()}. Here is the current "
-        f"business context:\n\n{context}{pin_note}"
+        f"business context:\n\n{context}{anchor_note}{pin_note}"
     )
 
     started = datetime.now(timezone.utc)
@@ -280,9 +301,13 @@ def run_weekly_gauge_selection(
     if bundle is None:
         return {"ok": False, "week_start": target_week.isoformat(), "error": "parsed_output_none", "generated": 0}
 
-    # Validate keys exist in catalog; drop unknowns and filter to first 8
+    # Validate keys exist in catalog AND are not anchors (Opus was told
+    # not to pick anchors, but defend against the prompt being ignored).
     valid_picks: list[GaugePick] = []
     for pick in bundle.gauges:
+        if pick.metric_key in ANCHOR_KEYS:
+            logger.warning("Opus picked anchor key %r — dropping (anchors are rendered separately)", pick.metric_key)
+            continue
         if pick.metric_key in CATALOG:
             valid_picks.append(pick)
         else:
@@ -290,16 +315,17 @@ def run_weekly_gauge_selection(
     valid_picks = valid_picks[:GAUGE_COUNT]
 
     if len(valid_picks) < GAUGE_COUNT:
-        # Pad with catalog defaults so we always have 8
+        # Pad with catalog defaults so we always have GAUGE_COUNT picks.
+        # Skip anchors — they're rendered separately in the hero.
         used = {p.metric_key for p in valid_picks}
         fallback_order = [
-            "revenue_7d", "mer_7d", "orders_7d", "cook_success_rate_7d",
-            "tickets_created_7d", "csat_7d", "fleet_active_now", "first_response_hours_7d",
+            "mer_7d", "orders_7d", "tickets_created_7d", "csat_7d",
+            "first_response_hours_7d", "aov_7d", "conversion_rate_7d", "sessions_7d",
         ]
         for key in fallback_order:
             if len(valid_picks) >= GAUGE_COUNT:
                 break
-            if key in used or key not in CATALOG:
+            if key in used or key in ANCHOR_KEYS or key not in CATALOG:
                 continue
             valid_picks.append(GaugePick(
                 metric_key=key,

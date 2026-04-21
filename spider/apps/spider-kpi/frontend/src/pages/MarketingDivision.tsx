@@ -27,6 +27,7 @@ import { buildPresetRange, businessTodayDate, filterRowsByRange, RangeState } fr
 import { CompareMode as Mode } from '../lib/compare'
 import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
+import { DivisionHero } from '../components/DivisionHero'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -492,13 +493,96 @@ export function MarketingDivision() {
   return (
     <div className="page-grid venom-page">
 
-      {/* ---- Header ---- */}
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">Marketing Division</h2>
-          <p className="venom-subtitle">Bailey's operating page</p>
-        </div>
-      </div>
+      {/* ── DIVISION HERO — signature: funnel ─────────────────────────
+          Trapezoidal conversion funnel is the Marketing fingerprint.
+          Stage widths taper from sessions → add-to-cart → orders. */}
+      {(() => {
+        const topOfFunnel = Math.max(1, sessions)
+        const atcProgress = Math.min(1, addToCartEstimate / topOfFunnel)
+        const orderProgress = Math.min(1, purchaseEstimate / topOfFunnel)
+        const merState: 'good' | 'warn' | 'bad' | 'neutral' =
+          mer >= 2.0 ? 'good' : mer >= 1.5 ? 'warn' : mer > 0 ? 'bad' : 'neutral'
+        const convState: 'good' | 'warn' | 'bad' | 'neutral' =
+          conversion >= 3 ? 'good' : conversion >= 1.5 ? 'warn' : conversion > 0 ? 'bad' : 'neutral'
+        const aovState: 'good' | 'warn' | 'bad' | 'neutral' =
+          priorAov === 0 ? 'neutral'
+          : aov >= priorAov ? 'good'
+          : aov >= priorAov * 0.9 ? 'warn'
+          : 'bad'
+        return (
+          <DivisionHero
+            accentColor="#ec4899"
+            accentColorSoft="#8b5cf6"
+            signature="funnel"
+            title="Marketing Division"
+            subtitle="Bailey's operating page — paid media, site funnel, channel mix, and campaign execution."
+            rightMeta={
+              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
+                <div>{range.preset ? `Range · ${range.preset}` : 'Custom range'}</div>
+                <div>Updated {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+              </div>
+            }
+            primary={{
+              label: 'Sessions → Add-to-cart → Orders',
+              value: fmtInt(orders),
+              sublabel: `${fmtInt(sessions)} sessions`,
+              state: convState,
+              progress: 1,
+              progressSecondary: atcProgress,
+              progressInner: orderProgress,
+              layers: [
+                { label: 'Sessions', value: fmtInt(sessions) },
+                { label: 'Add to cart', value: fmtInt(Math.round(addToCartEstimate)) },
+                { label: 'Orders', value: fmtInt(orders) },
+              ],
+            }}
+            flanking={[
+              {
+                label: 'MER',
+                value: mer > 0 ? mer.toFixed(2) : '—',
+                sublabel: priorMer > 0 ? `vs ${priorMer.toFixed(2)} prior` : 'target 2.0',
+                state: merState,
+                progress: Math.min(1, mer / 3),
+                delta: priorMer > 0 ? {
+                  dir: mer > priorMer ? 'up' : mer < priorMer ? 'down' : 'flat',
+                  label: `${Math.abs(((mer - priorMer) / priorMer) * 100).toFixed(0)}%`,
+                  good: mer >= priorMer,
+                } : undefined,
+              },
+              {
+                label: 'Ad spend',
+                value: currency(adSpend),
+                sublabel: priorAdSpend > 0 ? `vs ${currency(priorAdSpend)} prior` : undefined,
+                state: 'neutral',
+              },
+            ]}
+            tiles={[
+              {
+                label: 'Revenue',
+                value: currency(revenue),
+                sublabel: priorRevenue > 0 ? `${((revenue - priorRevenue) / priorRevenue * 100).toFixed(0)}% vs prior` : undefined,
+                state: priorRevenue > 0 ? (revenue >= priorRevenue ? 'good' : 'bad') : 'neutral',
+              },
+              {
+                label: 'AOV',
+                value: aov > 0 ? currency(aov) : '—',
+                state: aovState,
+              },
+              {
+                label: 'Conversion',
+                value: conversion > 0 ? `${conversion.toFixed(2)}%` : '—',
+                state: convState,
+              },
+              {
+                label: 'Orders',
+                value: fmtInt(orders),
+                sublabel: priorOrders > 0 ? `vs ${fmtInt(priorOrders)} prior` : undefined,
+                state: priorOrders > 0 ? (orders >= priorOrders ? 'good' : 'warn') : 'neutral',
+              },
+            ]}
+          />
+        )
+      })()}
 
       <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
       <CompareToolbar mode={compareMode} onChange={setCompareMode as (mode: CompareMode) => void} />

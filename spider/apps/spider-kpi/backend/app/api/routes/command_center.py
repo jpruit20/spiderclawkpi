@@ -12,6 +12,7 @@ from app.api.deps import db_session, require_dashboard_session
 from app.api.routes.auth import get_user_from_request
 from app.models import WeeklyGaugeSelection
 from app.services.weekly_gauges_catalog import CATALOG, resolve_metric
+from app.services.weekly_gauges_selector import ANCHOR_KEYS
 from app.services.weekly_gauges_selector import (
     _iso_week_start,
     run_weekly_gauge_selection,
@@ -80,6 +81,11 @@ def get_weekly_gauges(db: Session = Depends(db_session)) -> dict[str, Any]:
         if rows:
             fell_back = True
 
+    # Filter out anchor gauges — they're rendered as fixed anchors in
+    # the hero (revenue / fleet / cook success). Legacy week-rows may
+    # still contain anchor picks; drop them at serve time so the UI
+    # never shows a duplicate.
+    rows = [r for r in rows if r.metric_key not in ANCHOR_KEYS]
     gauges = [_serialize_gauge(db, r) for r in rows]
     theme = None
     if rows and rows[0].selection_context_json:

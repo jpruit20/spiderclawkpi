@@ -22,6 +22,7 @@ import {
 import {
   api,
   type AlphaCohortResponse,
+  type FirmwareOverview,
   type FirmwareOverviewMetrics,
   type FirmwareDeviceSummary,
   type FirmwareDeviceShadow,
@@ -42,6 +43,8 @@ import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 import { CookTimelineChart } from '../components/CookTimelineChart'
 import { FirmwareReleaseHistoryCard } from '../components/FirmwareReleaseHistoryCard'
 import { DiagnosticsCard } from '../components/DiagnosticsCard'
+import { DivisionHero } from '../components/DivisionHero'
+import { fmtInt } from '../lib/format'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
 
@@ -72,6 +75,7 @@ function fmtDateTime(iso: string | null | undefined): string {
 
 export function FirmwareHub() {
   const [tab, setTab] = useState<TabKey>('overview')
+  const [heroData, setHeroData] = useState<FirmwareOverview | null>(null)
   const { user } = useAuth()
   const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
   const tabs: Array<{ key: TabKey; label: string }> = [
@@ -85,25 +89,84 @@ export function FirmwareHub() {
     tabs.push({ key: 'deploy', label: 'Deploy' })
     tabs.push({ key: 'log', label: 'Deploy Log' })
   }
+
+  useEffect(() => {
+    let cancelled = false
+    api.firmwareOverview().then(d => { if (!cancelled) setHeroData(d) }).catch(() => {/* silent */})
+    return () => { cancelled = true }
+  }, [])
+
+  // ── Derive firmware adoption layers for the `adoption` signature.
+  // Top 4 versions by device count; outer arc = dominant version.
+  const dist = heroData?.firmware_distribution || []
+  const sorted = [...dist].sort((a, b) => b.devices - a.devices).slice(0, 4)
+  const activeDevices = heroData?.active_devices || 0
+  const heroLayers = sorted.length > 0
+    ? sorted.map(v => ({ label: v.firmware_version || 'unknown', value: `${fmtInt(v.devices)} · ${v.pct.toFixed(0)}%` }))
+    : [
+        { label: 'v—', value: '—' },
+        { label: 'v—', value: '—' },
+        { label: 'v—', value: '—' },
+      ]
+  const dominantPct = sorted[0]?.pct ? sorted[0].pct / 100 : 0.4
+  const secondPct = sorted[1]?.pct ? sorted[1].pct / 100 : 0.2
+  const thirdPct = sorted[2]?.pct ? sorted[2].pct / 100 : 0.1
+  const dominantVersion = sorted[0]?.firmware_version || '—'
+
   return (
     <div className="page-grid">
-      <section className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <div className="card-title">Firmware Hub</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-            Program health, cohort status, and per-device drill-down. Live shadow polls every 15 s.
+      {/* ── DIVISION HERO — signature: adoption ─────────────────────
+          Nested arcs per firmware version show rollout state. The
+          outer arc is the dominant version; inner arcs are older
+          versions fading out. Unique to the firmware hub. */}
+      <DivisionHero
+        accentColor="#06b6d4"
+        accentColorSoft="#3b82f6"
+        signature="adoption"
+        title="Firmware Hub"
+        subtitle="Program health, cohort status, live fleet adoption. Live shadow polls every 15 s."
+        rightMeta={
+          <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
+            {tabs.map(t => (
+              <button
+                key={t.key}
+                className={`range-button${tab === t.key ? ' active' : ''}`}
+                onClick={() => setTab(t.key)}
+              >{t.label}</button>
+            ))}
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
-          {tabs.map(t => (
-            <button
-              key={t.key}
-              className={`range-button${tab === t.key ? ' active' : ''}`}
-              onClick={() => setTab(t.key)}
-            >{t.label}</button>
-          ))}
-        </div>
-      </section>
+        }
+        primary={{
+          label: `Fleet on ${dominantVersion}`,
+          value: sorted[0] ? `${sorted[0].pct.toFixed(0)}%` : '—',
+          sublabel: `${fmtInt(activeDevices)} active devices`,
+          state: sorted[0]?.pct && sorted[0].pct >= 70 ? 'good' : sorted[0]?.pct && sorted[0].pct >= 50 ? 'warn' : 'neutral',
+          progress: dominantPct,
+          progressSecondary: secondPct,
+          progressInner: thirdPct,
+          layers: heroLayers,
+        }}
+        flanking={[
+          {
+            label: 'Active devices',
+            value: fmtInt(activeDevices),
+            sublabel: `last ${heroData?.window_hours ?? 1}h window`,
+            state: activeDevices > 0 ? 'good' : 'neutral',
+          },
+          {
+            label: 'Versions in flight',
+            value: String(dist.length),
+            sublabel: dist.length > 4 ? 'fragmented' : 'consolidated',
+            state: dist.length <= 3 ? 'good' : dist.length <= 5 ? 'warn' : 'bad',
+          },
+        ]}
+        tiles={[
+          { label: 'Dominant', value: dominantVersion, state: 'neutral' },
+          { label: 'Runner-up', value: sorted[1]?.firmware_version || '—', state: 'neutral' },
+          { label: 'Legacy tail', value: sorted[3]?.firmware_version || '—', state: 'neutral' },
+          { label: 'Tabs', value: String(tabs.length), state: 'neutral' },
+        ]}
+      />
 
       {tab === 'overview' ? <OverviewTab /> : null}
       {tab === 'alpha' ? <AlphaCohortPanel /> : null}

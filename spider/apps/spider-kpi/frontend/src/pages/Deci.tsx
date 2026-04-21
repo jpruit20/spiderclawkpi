@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../components/AuthGate'
 import { Card } from '../components/Card'
 import { DeciDraftsCard } from '../components/DeciDraftsCard'
+import { DivisionHero } from '../components/DivisionHero'
 import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { MetricTile, StatusLight, TileGrid } from '../components/tiles'
@@ -139,21 +140,71 @@ export function Deci() {
 
   return (
     <div className="page-grid venom-page">
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">DECI Decision Operating System</h2>
-          <p className="venom-subtitle">
-            Driver &middot; Executor &middot; Contributor &middot; Informed — active control layer for every decision at Spider Grills
-          </p>
-        </div>
-      </div>
-
-      {/* View tabs */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-        {TAB_ITEMS.map(([v, label]) => (
-          <button key={v} className={`range-button${view === v ? ' active' : ''}`} onClick={() => setView(v)}>{label}</button>
-        ))}
-      </div>
+      {/* ── DIVISION HERO — signature: chevron ─────────────────────
+          Forward chevrons = decision velocity. Filled count
+          reflects active-decision throughput vs the healthy band. */}
+      {(() => {
+        const total = decisions.length
+        const complete = decisions.filter(d => d.status === 'complete').length
+        const inProgress = decisions.filter(d => d.status === 'in_progress').length
+        const blocked = decisions.filter(d => d.status === 'blocked').length
+        const noDriver = decisions.filter(d => !d.driver_id && d.status !== 'complete').length
+        const stale = decisions.filter(d => d.status !== 'complete' &&
+          (Date.now() - new Date(d.updated_at).getTime()) / 86400000 > 7).length
+        const escalated = decisions.filter(d =>
+          d.escalation_status === 'escalated' || d.escalation_status === 'warning').length
+        const velocity = total > 0 ? complete / total : 0
+        const state: 'good' | 'warn' | 'bad' | 'neutral' =
+          blocked > 3 || noDriver > 3 ? 'bad'
+          : blocked > 0 || stale > 2 ? 'warn'
+          : total > 0 ? 'good'
+          : 'neutral'
+        return (
+          <DivisionHero
+            accentColor="#8b5cf6"
+            accentColorSoft="#ec4899"
+            signature="chevron"
+            title="DECI Decision Operating System"
+            subtitle="Driver · Executor · Contributor · Informed — active control layer for every decision at Spider Grills."
+            rightMeta={
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {TAB_ITEMS.map(([v, label]) => (
+                  <button key={v} className={`range-button${view === v ? ' active' : ''}`} onClick={() => setView(v)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            }
+            primary={{
+              label: 'Decision velocity',
+              value: String(inProgress),
+              sublabel: `${complete} complete · ${total} total`,
+              state,
+              progress: velocity,
+            }}
+            flanking={[
+              {
+                label: 'Blocked',
+                value: String(blocked),
+                sublabel: 'need escalation',
+                state: blocked === 0 ? 'good' : blocked <= 2 ? 'warn' : 'bad',
+              },
+              {
+                label: 'No driver',
+                value: String(noDriver),
+                sublabel: 'governance gap',
+                state: noDriver === 0 ? 'good' : 'bad',
+              },
+            ]}
+            tiles={[
+              { label: 'Stale >7d', value: String(stale), state: stale === 0 ? 'good' : stale <= 3 ? 'warn' : 'bad' },
+              { label: 'Escalated', value: String(escalated), state: escalated === 0 ? 'good' : 'warn' },
+              { label: 'Active leaders', value: String(team.filter(m => m.active).length), state: 'neutral' },
+              { label: 'Domains', value: String(domains.length), state: 'neutral' },
+            ]}
+          />
+        )
+      })()}
 
       {loading ? <Card title="Loading"><div className="state-message">Loading DECI framework...</div></Card> : null}
       {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}

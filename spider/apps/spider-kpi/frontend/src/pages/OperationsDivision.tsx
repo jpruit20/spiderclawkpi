@@ -4,6 +4,7 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
+import { DivisionHero } from '../components/DivisionHero'
 import { Link } from 'react-router-dom'
 
 const KETTLE_CART_BANNER_EXPIRES_AT = Date.parse('2026-04-22T03:00:00Z')
@@ -45,6 +46,53 @@ export function OperationsDivision() {
   return (
     <>
       <KettleCartRequestBanner />
+      {/* ── DIVISION HERO — signature: throughput ─────────────────────
+          Horizontal flow bar with animated shimmer. Stays in a muted
+          "awaiting feed" state until Business Central is live;
+          becomes a live operational cockpit post-integration. */}
+      <DivisionHero
+        accentColor="#6ea8ff"
+        accentColorSoft="#39d08f"
+        signature="throughput"
+        title="Operations Division"
+        subtitle="Conor's operating page — order throughput, aging, exceptions. Awaiting Business Central to go live-decision-grade."
+        rightMeta={
+          <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
+            <div>ERP feed · <span style={{ color: 'var(--orange)' }}>blocked</span></div>
+            <div>ClickUp · live</div>
+          </div>
+        }
+        primary={{
+          label: 'Order throughput — awaiting ERP feed',
+          value: '—',
+          sublabel: 'Business Central integration pending',
+          state: 'neutral',
+          progress: 0,
+          layers: [{ label: 'Stage', value: 'Source not connected' }],
+        }}
+        flanking={[
+          {
+            label: 'Open tasks (ClickUp)',
+            value: '—',
+            sublabel: 'live feed below',
+            state: 'neutral',
+          },
+          {
+            label: 'Late-ship exposure',
+            value: '—',
+            sublabel: 'needs ERP truth',
+            state: 'neutral',
+          },
+        ]}
+        tiles={[
+          { label: 'Order throughput', value: '—', state: 'neutral' },
+          { label: 'Fulfillment speed', value: '—', state: 'neutral' },
+          { label: 'Aged orders', value: '—', state: 'neutral' },
+          { label: 'Inventory bottlenecks', value: '—', state: 'neutral' },
+          { label: 'Exception volume', value: '—', state: 'neutral' },
+          { label: 'Late-ship reasons', value: '—', state: 'neutral' },
+        ]}
+      />
       <BlockedDivisionPage
         title="Operations"
         owner="Conor"

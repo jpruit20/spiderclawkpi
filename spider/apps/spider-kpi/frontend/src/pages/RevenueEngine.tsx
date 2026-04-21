@@ -11,6 +11,7 @@ import { BaselineBand } from '../components/BaselineBand'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { ChannelMixCard } from '../components/ChannelMixCard'
+import { DivisionHero } from '../components/DivisionHero'
 import { ApiError, api } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
@@ -117,12 +118,90 @@ export function RevenueEngine() {
 
   return (
     <div className="page-grid venom-page">
-      <div className="venom-header">
-        <div>
-          <h2 className="venom-title">Revenue Engine</h2>
-          <p className="venom-subtitle">Financial performance and efficiency</p>
-        </div>
-      </div>
+      {/* ── DIVISION HERO — signature: revenueDial ─────────────────
+          Dual-arc dial: outer = revenue vs target (prior × 1.1 as an
+          implicit growth goal), inner = margin %. The dial shape is
+          unique to the Revenue Engine. */}
+      {(() => {
+        const target = revPrior * 1.1  // +10% growth as the implicit plan
+        const revProgress = target > 0 ? rev / target : 0
+        const marginPct = rev > 0 ? grossProfit / rev : 0
+        const revState: 'good' | 'warn' | 'bad' | 'neutral' =
+          revProgress >= 1 ? 'good' : revProgress >= 0.85 ? 'warn' : revProgress > 0 ? 'bad' : 'neutral'
+        const merState: 'good' | 'warn' | 'bad' | 'neutral' =
+          mer >= 2.0 ? 'good' : mer >= 1.5 ? 'warn' : mer > 0 ? 'bad' : 'neutral'
+        return (
+          <DivisionHero
+            accentColor="#f59e0b"
+            accentColorSoft="#ec4899"
+            signature="revenueDial"
+            title="Revenue Engine"
+            subtitle="Financial scoreboard — revenue, margin, MER, AOV, conversion. Gross Profit is a proxy until COGS + shipping cost data land."
+            rightMeta={
+              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
+                <div>{range.preset ? `Range · ${range.preset}` : 'Custom range'}</div>
+                <div>{currentRows.length} days in window</div>
+              </div>
+            }
+            primary={{
+              label: 'Revenue vs prior +10% target',
+              value: currency(rev),
+              sublabel: `target ${currency(target)}`,
+              state: revState,
+              progress: revProgress,
+              progressSecondary: Math.max(0, marginPct),
+            }}
+            flanking={[
+              {
+                label: 'MER',
+                value: mer > 0 ? mer.toFixed(2) : '—',
+                sublabel: merPrior > 0 ? `vs ${merPrior.toFixed(2)} prior` : 'target 2.0',
+                state: merState,
+                progress: Math.min(1, mer / 3),
+              },
+              {
+                label: 'Gross profit',
+                value: currency(grossProfit),
+                sublabel: grossProfitPrior !== 0 ? `${((grossProfit - grossProfitPrior) / Math.abs(grossProfitPrior) * 100).toFixed(0)}% vs prior` : undefined,
+                state: grossProfit >= grossProfitPrior ? 'good' : 'warn',
+              },
+            ]}
+            tiles={[
+              {
+                label: 'Orders',
+                value: fmtInt(orders),
+                sublabel: ordersPrior > 0 ? `${((orders - ordersPrior) / ordersPrior * 100).toFixed(0)}%` : undefined,
+                state: orders >= ordersPrior ? 'good' : 'warn',
+              },
+              {
+                label: 'AOV',
+                value: aovAvg > 0 ? currency(aovAvg) : '—',
+                state: aovAvg >= aovPrior ? 'good' : 'warn',
+              },
+              {
+                label: 'Sessions',
+                value: fmtInt(sessions),
+                state: sessions >= sessionsPrior ? 'good' : 'warn',
+              },
+              {
+                label: 'Conversion',
+                value: convAvg > 0 ? `${convAvg.toFixed(2)}%` : '—',
+                state: convAvg >= convPrior ? 'good' : 'warn',
+              },
+              {
+                label: 'Refunds',
+                value: currency(refunds),
+                state: 'neutral',
+              },
+              {
+                label: 'Discount rate',
+                value: `${discountRate.toFixed(1)}%`,
+                state: discountRate <= 10 ? 'good' : discountRate <= 20 ? 'warn' : 'bad',
+              },
+            ]}
+          />
+        )
+      })()}
 
       {loading ? <Card title="Loading"><div className="state-message">Loading revenue data…</div></Card> : null}
       {error ? <Card title="Error"><div className="state-message error">{error}</div></Card> : null}
