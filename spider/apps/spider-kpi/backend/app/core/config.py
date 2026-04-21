@@ -293,6 +293,17 @@ class Settings(BaseSettings):
     historical_start_date: str = "2024-01-01"
     backfill_days: int = 824
 
+    # CX operations cutover. Before this date, the team was using Freshdesk
+    # inconsistently (tickets left open, no SLA, ad-hoc tagging). On and
+    # after this date, operational KPIs (open_backlog, SLA breach, FRT,
+    # resolution time, reopen rate, team load) filter to tickets
+    # created_at >= cutover so the team's accountability window is honest.
+    # Pre-cutover data stays accessible as a historical reference view.
+    cx_cutover_date: str = Field(
+        default="2026-05-01",
+        validation_alias=AliasChoices('CX_CUTOVER_DATE'),
+    )
+
     @field_validator("allowed_signup_domains", mode="before")
     @classmethod
     def parse_allowed_signup_domains(cls, value: Any):

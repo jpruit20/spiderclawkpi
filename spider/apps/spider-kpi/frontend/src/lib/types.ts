@@ -690,6 +690,12 @@ export interface CacheInfo {
   source: string
 }
 
+export interface CXCutoverInfo {
+  date: string | null
+  active: boolean
+  days_until: number
+}
+
 export interface CXSnapshotResponse {
   snapshot_timestamp?: string | null
   header_metrics: CXMetricItem[]
@@ -698,6 +704,7 @@ export interface CXSnapshotResponse {
   today_focus: CXActionItem[]
   team_load: CXTeamLoadItem[]
   insights: CXInsightItem[]
+  cutover?: CXCutoverInfo | null
   cache_info?: CacheInfo | null
 }
 

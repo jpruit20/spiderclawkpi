@@ -10,6 +10,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
+import { CXCutoverBanner } from '../components/CXCutoverBanner'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
@@ -623,6 +624,11 @@ export function CustomerExperienceDivision() {
 
           {/* Truth Legend */}
           <TruthLegend />
+
+          {/* CX cutover banner — before the May 1 reset it warns the team
+              that metrics reflect the legacy model; after cutover it shows
+              a green "data since {date}" confirmation. */}
+          <CXCutoverBanner cutover={snapshot?.cutover ?? null} />
 
           {/* KPI Strip */}
           <VenomKpiStrip cards={kpiCards} cols={4} />
@@ -1598,6 +1604,43 @@ export function CustomerExperienceDivision() {
               ))}
             </div>
           </section>
+          </CollapsibleSection>
+
+          {/* ==============================================================
+              HISTORICAL REFERENCE — pre-cutover Freshdesk corpus.
+              5 years of tickets, kept for product/marketing/engineering
+              pattern-mining. Not for team performance comparison: the
+              team was operating under different rules (tickets left
+              open, no SLA, ad-hoc tagging). Collapsed by default.
+              ============================================================== */}
+          <CollapsibleSection
+            id="cx-historical-reference"
+            title="Historical reference (pre-cutover)"
+            subtitle="5 years of Freshdesk data, searchable for product patterns and root-cause analysis. Not compared against current team performance — the operating model was different."
+            accentColor="#8b8b8b"
+            defaultOpen={false}
+          >
+            <section className="card" style={{ padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--fg)' }}>What's in here:</strong>
+                {' '}all Freshdesk tickets created before the CX operations
+                cutover ({snapshot?.cutover?.date || 'set CX_CUTOVER_DATE'}).
+                Useful for product complaint trends, seasonal patterns,
+                top-issue clustering, firmware/model correlations, and
+                historical volume forecasting. Not useful for judging team
+                performance — the pre-cutover team wasn't closing tickets
+                on resolution, so "open backlog" and "resolution time"
+                numbers from this era are Freshdesk-bookkeeping artifacts,
+                not behavior signals.
+              </div>
+            </section>
+            {/* Historical product-complaint search — always open here,
+                since the whole point of this section is lookup. */}
+            <ProductComplaintsCard
+              title="Historical complaint lookup (all Freshdesk + social + reviews)"
+              subtitle="Searches the full pre-cutover corpus plus social/reviews/community. Keep for product + marketing + engineering use; do not use for team performance comparisons."
+              defaultDays={1825}
+            />
           </CollapsibleSection>
         </>
       ) : null}

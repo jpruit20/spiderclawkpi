@@ -7,7 +7,18 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, defer
 
+from app.core.config import get_settings
 from app.models import CXAction, FreshdeskAgentDaily, FreshdeskTicket, IssueCluster, KPIDaily
+
+
+def _parse_cutover_date() -> date | None:
+    raw = (get_settings().cx_cutover_date or '').strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
 
 KPI_CONFIG: dict[str, dict[str, Any]] = {
     'open_backlog': {
@@ -267,7 +278,15 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
     # was 11M inner-loop iterations per request (~18s). A 90-day window
     # keeps full trend coverage with <10% of the work.
     from datetime import date as _date, timedelta as _td
-    window_start = _date.today() - _td(days=90)
+    today = _date.today()
+    cutover_date = _parse_cutover_date()
+    cutover_active = bool(cutover_date and today >= cutover_date)
+    # Operational scope: 90-day trailing by default, but once the cutover
+    # date has landed, never reach back before it — the pre-cutover team
+    # was operating under different rules and would drag metrics down.
+    window_start = today - _td(days=90)
+    if cutover_active and cutover_date and cutover_date > window_start:
+        window_start = cutover_date
     rows = db.execute(
         select(KPIDaily)
         .where(KPIDaily.business_date >= window_start)
@@ -283,18 +302,26 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
     # the start7 boundary has coverage for the earliest date.
     from sqlalchemy import or_
     tickets_cutoff = window_start - _td(days=7)
-    tickets = db.execute(
+    ticket_query = (
         select(FreshdeskTicket)
         .options(
             defer(FreshdeskTicket.description_text),
             defer(FreshdeskTicket.description_html),
             defer(FreshdeskTicket.raw_payload),
         )
-        .where(or_(
+    )
+    if cutover_active and cutover_date:
+        # Post-cutover: operational view is strictly forward-looking.
+        # Don't let pre-cutover "still open in Freshdesk" rows count —
+        # those are the ghost backlog (closed in reality, never clicked).
+        ticket_query = ticket_query.where(FreshdeskTicket.created_at_source >= cutover_date)
+    else:
+        ticket_query = ticket_query.where(or_(
             FreshdeskTicket.created_at_source >= tickets_cutoff,
             FreshdeskTicket.resolved_at_source.is_(None),
         ))
-        .order_by(desc(FreshdeskTicket.updated_at_source))
+    tickets = db.execute(
+        ticket_query.order_by(desc(FreshdeskTicket.updated_at_source))
     ).scalars().all()
     agents = db.execute(select(FreshdeskAgentDaily).order_by(FreshdeskAgentDaily.business_date, FreshdeskAgentDaily.agent_name, FreshdeskAgentDaily.agent_id)).scalars().all()
     # Resolve agent_id → human name from the already-loaded agents rows,
@@ -321,6 +348,11 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
     }
     metrics = getCustomerExperienceMetrics(base_snapshot)
     snapshot_timestamp = metrics['snapshot_timestamp']
+    cutover_info = {
+        'date': cutover_date.isoformat() if cutover_date else None,
+        'active': cutover_active,
+        'days_until': (cutover_date - today).days if (cutover_date and not cutover_active) else 0,
+    }
     if snapshot_timestamp is None:
         return {
             'snapshot_timestamp': None,
@@ -331,6 +363,7 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
             'actions': [],
             'today_focus': [],
             'product_linked': product_linked,
+            'cutover': cutover_info,
         }
     snapshot_date = snapshot_timestamp.date()
     start7 = ordered_dates[max(0, len(ordered_dates) - 7)] if ordered_dates else snapshot_date
@@ -403,4 +436,5 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
         'actions': actions,
         'today_focus': open_actions[:3],
         'product_linked': product_linked,
+        'cutover': cutover_info,
     }

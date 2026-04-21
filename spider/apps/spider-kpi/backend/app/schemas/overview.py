@@ -235,6 +235,12 @@ class CacheInfoOut(BaseModel):
     source: str = "cache"   # 'cache' when served from aggregate_cache, 'live' when fallback computed
 
 
+class CXCutoverOut(BaseModel):
+    date: Optional[str] = None
+    active: bool = False
+    days_until: int = 0
+
+
 class CXSnapshotOut(BaseModel):
     snapshot_timestamp: Optional[datetime] = None
     header_metrics: list[CXMetricOut]
@@ -243,6 +249,7 @@ class CXSnapshotOut(BaseModel):
     today_focus: list[CXActionOut]
     team_load: list[CXTeamLoadOut]
     insights: list[CXInsightOut]
+    cutover: Optional[CXCutoverOut] = None
     cache_info: Optional[CacheInfoOut] = None
 
 
