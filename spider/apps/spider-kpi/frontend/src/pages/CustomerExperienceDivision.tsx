@@ -5,6 +5,7 @@ import { Card } from '../components/Card'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
@@ -576,13 +577,24 @@ export function CustomerExperienceDivision() {
 
       {!loading && !error ? (
         <>
-          <ProvenanceBanner
-            compact
-            truthState="canonical"
-            lastUpdated={snapshotTimestamp !== 'n/a' ? snapshotTimestamp : undefined}
-            scope="Freshdesk + social signals · Jeremiah's team"
-            caveat={tickets.length === 0 ? 'No tickets loaded — Freshdesk may be disconnected.' : undefined}
-          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+            <ProvenanceBanner
+              compact
+              truthState="canonical"
+              lastUpdated={snapshotTimestamp !== 'n/a' ? snapshotTimestamp : undefined}
+              scope="Freshdesk + social signals · Jeremiah's team"
+              caveat={tickets.length === 0 ? 'No tickets loaded — Freshdesk may be disconnected.' : undefined}
+            />
+            {snapshot?.cache_info ? (
+              <CacheFreshnessBadge
+                info={snapshot.cache_info}
+                onRefreshed={async () => {
+                  const fresh = await api.cxSnapshot().catch(() => null)
+                  if (fresh) setSnapshot(fresh)
+                }}
+              />
+            ) : null}
+          </div>
 
           {/* Quick Stats & Navigation Bar */}
           <div className="scope-note" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>

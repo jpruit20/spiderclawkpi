@@ -1266,6 +1266,13 @@ export interface FirmwareOverviewMetrics {
   firmware_distribution: Array<{ firmware_version: string; devices: number; pct: number }>
   product_distribution: Array<{ product: string; devices: number; pct: number }>
   active_devices_window: number
+  cache_info?: {
+    key: string
+    computed_at: string | null
+    duration_ms: number | null
+    age_seconds: number | null
+    source: string
+  } | null
 }
 
 export interface FirmwareDeviceRecent {

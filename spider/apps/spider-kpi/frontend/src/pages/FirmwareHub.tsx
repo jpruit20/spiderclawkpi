@@ -38,6 +38,7 @@ import {
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
 import { useAuth } from '../components/AuthGate'
+import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
 
@@ -757,14 +758,27 @@ function OverviewTab() {
               Cook success, PID quality, and disconnect rate across the window.
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
-            {PRESETS.map(p => (
-              <button
-                key={p.key}
-                className={`range-button${preset === p.key ? ' active' : ''}`}
-                onClick={() => applyPreset(p.key)}
-              >{p.label}</button>
-            ))}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            {metrics?.cache_info ? (
+              <CacheFreshnessBadge
+                info={metrics.cache_info}
+                onRefreshed={() => {
+                  const ctl = new AbortController()
+                  api.firmwareOverviewMetrics({ start, end, firmware_version: firmwareFilter || undefined }, ctl.signal)
+                    .then(d => setMetrics(d))
+                    .catch(() => {})
+                }}
+              />
+            ) : null}
+            <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2, flexWrap: 'wrap' }}>
+              {PRESETS.map(p => (
+                <button
+                  key={p.key}
+                  className={`range-button${preset === p.key ? ' active' : ''}`}
+                  onClick={() => applyPreset(p.key)}
+                >{p.label}</button>
+              ))}
+            </div>
           </div>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>

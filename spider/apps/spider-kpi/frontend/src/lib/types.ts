@@ -663,6 +663,14 @@ export interface CXTeamLoadItem {
   snapshot_timestamp: string
 }
 
+export interface CacheInfo {
+  key: string
+  computed_at: string | null
+  duration_ms: number | null
+  age_seconds: number | null
+  source: string
+}
+
 export interface CXSnapshotResponse {
   snapshot_timestamp?: string | null
   header_metrics: CXMetricItem[]
@@ -671,6 +679,7 @@ export interface CXSnapshotResponse {
   today_focus: CXActionItem[]
   team_load: CXTeamLoadItem[]
   insights: CXInsightItem[]
+  cache_info?: CacheInfo | null
 }
 
 export type KpiDisplayMode = 'latest_complete_day' | 'today_intraday' | 'selected_range_summary'
