@@ -261,11 +261,28 @@ def getCustomerExperienceMetrics(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
-    rows = db.execute(select(KPIDaily).order_by(KPIDaily.business_date)).scalars().all()
+    # Trailing-window scope only. The snapshot consumes at most the
+    # last ~60 days of the series (7/14/30/60-day trends). Loading all
+    # 1,207 KPIDaily rows and iterating 9,387 tickets for each of them
+    # was 11M inner-loop iterations per request (~18s). A 90-day window
+    # keeps full trend coverage with <10% of the work.
+    from datetime import date as _date, timedelta as _td
+    window_start = _date.today() - _td(days=90)
+    rows = db.execute(
+        select(KPIDaily)
+        .where(KPIDaily.business_date >= window_start)
+        .order_by(KPIDaily.business_date)
+    ).scalars().all()
     # Defer the heavy text/JSONB columns we don't need here. Loading all
     # 9k+ ticket rows including description_text, description_html,
     # subject, and the full raw_payload JSONB was pulling ~40 MB into
     # Python and taking ~15s. None of those fields are read by cx_snapshot.
+    # Scope tickets to the same trailing window, plus any still-open
+    # tickets regardless of age (for accurate open_backlog and aged
+    # counts at snapshot_date). 7-day lookback on the window start so
+    # the start7 boundary has coverage for the earliest date.
+    from sqlalchemy import or_
+    tickets_cutoff = window_start - _td(days=7)
     tickets = db.execute(
         select(FreshdeskTicket)
         .options(
@@ -273,6 +290,10 @@ def build_customer_experience_snapshot(db: Session) -> dict[str, Any]:
             defer(FreshdeskTicket.description_html),
             defer(FreshdeskTicket.raw_payload),
         )
+        .where(or_(
+            FreshdeskTicket.created_at_source >= tickets_cutoff,
+            FreshdeskTicket.resolved_at_source.is_(None),
+        ))
         .order_by(desc(FreshdeskTicket.updated_at_source))
     ).scalars().all()
     agents = db.execute(select(FreshdeskAgentDaily).order_by(FreshdeskAgentDaily.business_date, FreshdeskAgentDaily.agent_name, FreshdeskAgentDaily.agent_id)).scalars().all()
