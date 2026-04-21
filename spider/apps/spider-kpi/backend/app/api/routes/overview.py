@@ -171,10 +171,37 @@ def telemetry_history_daily(db: Session = Depends(db_session)):
 
 @router.get("/cx/snapshot", response_model=CXSnapshotOut)
 def get_cx_snapshot(db: Session = Depends(db_session)):
+    """Cache-first: serve the precomputed snapshot (written by the
+    scheduler every N minutes) in <20 ms. Only CX action-state eval
+    still runs on the request path — those writes invalidate quickly
+    and need live data. On a cold cache (fresh deploy), we compute
+    synchronously once and persist for subsequent reads."""
+    from app.services import aggregate_cache
+    import app.services.cache_builders  # noqa: F401 — ensures builders registered
+    from app.services.cache_builders import CX_SNAPSHOT_KEY
+
+    # Action-state eval still needs live data — it writes to CXAction
+    # rows that the snapshot itself reads. Run before fetching cache.
     evaluateCustomerExperienceActions(db)
     evaluateActionClosure(db)
     db.commit()
-    return build_customer_experience_snapshot(db)
+
+    entry = aggregate_cache.get(db, CX_SNAPSHOT_KEY)
+    source = "cache"
+    if entry is None:
+        entry = aggregate_cache.build_if_missing(db, CX_SNAPSHOT_KEY)
+        source = "live"
+    if entry is None:
+        return build_customer_experience_snapshot(db)
+    payload = dict(entry.payload)
+    payload["cache_info"] = {
+        "key": entry.key,
+        "computed_at": entry.computed_at.isoformat(),
+        "duration_ms": entry.duration_ms,
+        "age_seconds": entry.age_seconds(),
+        "source": source,
+    }
+    return payload
 
 
 @router.get("/cx/actions", response_model=list[CXActionOut])

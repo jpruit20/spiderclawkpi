@@ -1,4 +1,5 @@
 from app.models.entities import (
+    AggregateCache,
     AIFeedback,
     AIInsight,
     AISelfGrade,
@@ -72,6 +73,7 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AggregateCache",
     "AIFeedback",
     "AIInsight",
     "AISelfGrade",

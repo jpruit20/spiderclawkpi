@@ -500,6 +500,30 @@ def overview_metrics(
 ) -> dict[str, Any]:
     from app.services.product_taxonomy import classify_product
 
+    # Cache-first on the default 7-day view (the one the Product
+    # Engineering page hits on every load). Custom windows or firmware
+    # filters skip this and go straight to live compute + the tiny TTL
+    # cache further down.
+    if start is None and end is None and firmware_version is None:
+        from app.services import aggregate_cache
+        import app.services.cache_builders  # noqa: F401 — registers builders
+        from app.services.cache_builders import FIRMWARE_METRICS_7D_KEY
+        entry = aggregate_cache.get(db, FIRMWARE_METRICS_7D_KEY)
+        source = "cache"
+        if entry is None:
+            entry = aggregate_cache.build_if_missing(db, FIRMWARE_METRICS_7D_KEY)
+            source = "live"
+        if entry is not None:
+            payload = dict(entry.payload)
+            payload["cache_info"] = {
+                "key": entry.key,
+                "computed_at": entry.computed_at.isoformat(),
+                "duration_ms": entry.duration_ms,
+                "age_seconds": entry.age_seconds(),
+                "source": source,
+            }
+            return payload
+
     now = datetime.now(timezone.utc)
     end_dt = _parse_date(end, now)
     start_dt = _parse_date(start, end_dt - timedelta(days=7))

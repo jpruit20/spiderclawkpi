@@ -160,6 +160,52 @@ def seed(db: Session = Depends(db_session)):
     return seeded
 
 
+@router.post("/cache/rebuild")
+def rebuild_aggregate_cache(
+    key: str | None = None,
+    db: Session = Depends(db_session),
+):
+    """Force-rebuild one or every aggregate-cache builder.
+
+    Normally runs every 15 min via scheduler. Call this when you know
+    upstream data has changed and don't want to wait for the next tick
+    (e.g. right after an ingest backfill). Returns per-key duration.
+    """
+    import app.services.cache_builders  # noqa: F401 — registers builders
+    from app.services.aggregate_cache import rebuild, rebuild_all, registered_keys
+    if key:
+        if key not in registered_keys():
+            return {"ok": False, "error": f"unknown cache key {key!r}", "available": registered_keys()}
+        entry = rebuild(db, key)
+        return {"ok": True, "key": key, "duration_ms": entry.duration_ms, "computed_at": entry.computed_at.isoformat()}
+    return {"ok": True, "results": rebuild_all(db)}
+
+
+@router.get("/cache/status")
+def aggregate_cache_status(db: Session = Depends(db_session)):
+    """Show what's in the aggregate_cache + age + last build duration.
+    Useful when a cached endpoint looks wrong."""
+    import app.services.cache_builders  # noqa: F401
+    from app.services.aggregate_cache import get, registered_keys
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    rows = []
+    for k in registered_keys():
+        entry = get(db, k)
+        if entry is None:
+            rows.append({"key": k, "present": False})
+            continue
+        rows.append({
+            "key": k,
+            "present": True,
+            "computed_at": entry.computed_at.isoformat(),
+            "age_seconds": (now - entry.computed_at).total_seconds(),
+            "duration_ms": entry.duration_ms,
+            "source_version": entry.source_version,
+        })
+    return {"keys": rows}
+
+
 @router.get('/debug/ga4')
 def debug_ga4():
     return ga4_debug_self_check()

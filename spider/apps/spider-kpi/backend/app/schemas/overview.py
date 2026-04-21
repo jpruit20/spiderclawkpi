@@ -226,6 +226,14 @@ class CXTeamLoadOut(BaseModel):
     snapshot_timestamp: datetime
 
 
+class CacheInfoOut(BaseModel):
+    key: str
+    computed_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    age_seconds: Optional[float] = None
+    source: str = "cache"   # 'cache' when served from aggregate_cache, 'live' when fallback computed
+
+
 class CXSnapshotOut(BaseModel):
     snapshot_timestamp: Optional[datetime] = None
     header_metrics: list[CXMetricOut]
@@ -234,6 +242,7 @@ class CXSnapshotOut(BaseModel):
     today_focus: list[CXActionOut]
     team_load: list[CXTeamLoadOut]
     insights: list[CXInsightOut]
+    cache_info: Optional[CacheInfoOut] = None
 
 
 class CXActionUpdateIn(BaseModel):

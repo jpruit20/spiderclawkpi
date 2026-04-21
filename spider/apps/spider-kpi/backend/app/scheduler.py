@@ -265,6 +265,29 @@ def run_cook_behavior_rebuild_job() -> None:
         db.close()
 
 
+def run_aggregate_cache_rebuild_job() -> None:
+    """Every 15 min: rebuild every registered aggregate-cache builder.
+
+    Endpoints served from this cache see <20 ms read paths (just a
+    single SELECT by cache_key, no heavy aggregation). This job is the
+    only place the expensive compute runs. Any builder that fails is
+    logged; the rest continue.
+    """
+    db = SessionLocal()
+    try:
+        import app.services.cache_builders  # noqa: F401 — registers builders
+        from app.services.aggregate_cache import rebuild_all
+        results = rebuild_all(db)
+        import logging as _logging
+        _logging.getLogger(__name__).info("aggregate_cache rebuild_all: %s", results)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("aggregate_cache rebuild_all failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_weekly_gauge_selection_job() -> None:
     """Monday 10:00 UTC / 06:00 ET: Opus picks the 8 Command Center
     priority gauges for the coming week. Idempotent per (iso_week_start,
@@ -320,4 +343,9 @@ def build_scheduler() -> BackgroundScheduler:
     # what's actually important this week (active DECI decisions,
     # recent incidents, 28-day KPI momentum).
     scheduler.add_job(run_weekly_gauge_selection_job, "cron", day_of_week="mon", hour=10, minute=0, id="weekly-gauge-selection", replace_existing=True, max_instances=1, coalesce=True)
+    # Tier 2 cache: rebuild every 15 min. The first run happens
+    # ~15 min after boot; endpoints fall back to synchronous
+    # build_if_missing before then so the first request on a fresh
+    # deploy is slower but correct.
+    scheduler.add_job(run_aggregate_cache_rebuild_job, "interval", minutes=15, id="aggregate-cache-rebuild", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

@@ -1643,3 +1643,28 @@ class WeeklyGaugeSelection(TimestampMixin, Base):
     selected_by: Mapped[str] = mapped_column(String(32), default="opus-4-7", nullable=False)
     selection_context_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AggregateCache(TimestampMixin, Base):
+    """Materialized-cache row for expensive endpoint payloads.
+
+    Scheduler-driven builders compute aggregates (cx_snapshot, fleet
+    metrics, firmware distributions, etc.) and write the resulting JSON
+    here keyed by a short contract string (e.g. ``cx:snapshot:v1``).
+    API endpoints read this table first and fall back to live compute
+    only when the row is missing. ``source_version`` lets us bust a key
+    when the builder's output shape changes.
+    """
+    __tablename__ = "aggregate_cache"
+    __table_args__ = (
+        UniqueConstraint("cache_key", name="uq_aggregate_cache_key"),
+        Index("ix_aggregate_cache_key", "cache_key"),
+        Index("ix_aggregate_cache_computed_at", "computed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    source_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
