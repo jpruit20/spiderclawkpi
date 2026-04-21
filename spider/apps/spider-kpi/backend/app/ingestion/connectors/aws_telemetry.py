@@ -551,12 +551,17 @@ def sync_aws_telemetry(
             sessions, derivation_stats = _derive_sessions(records)
         # NOTE: sync_aws_telemetry treats telemetry_sessions as its own
         # scratch space — it always rebuilds its rows from the current
-        # DynamoDB scan on each run. The S3 historical backfill writes
-        # rows with source_event_id prefixed 's3:'; those MUST be preserved
-        # here. (Before 2026-04-18 this blanket-wiped the table every
-        # sync — it silently erased 12k+ backfilled sessions in a single
-        # scheduler fire.)
-        db.execute(delete(TelemetrySession).where(~TelemetrySession.source_event_id.like('s3:%')))
+        # DynamoDB scan on each run. Historical backfill rows and
+        # stream-built sessions MUST be preserved:
+        #   * 's3:...' — S3 historical backfill (12k+ rows, 2023 era)
+        #   * 'stream:...' — live stream-based session builder (added
+        #     2026-04-21 after the DynamoDB source went stale)
+        # Without this guard the connector silently blew away every
+        # session on each scheduler fire.
+        db.execute(delete(TelemetrySession).where(
+            ~TelemetrySession.source_event_id.like('s3:%'),
+            ~TelemetrySession.source_event_id.like('stream:%'),
+        ))
         db.execute(delete(TelemetryDaily))
         db.flush()
 
