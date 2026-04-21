@@ -101,31 +101,40 @@ export function RadialGauge({
   const accent = CATEGORY_ACCENTS[category || 'unknown'] || '#94a3b8'
   const position = normalizedPosition(value, sparkline, band, target ?? null)
 
-  // 270° arc spanning from -135° to +135° (bottom gap of 90°)
-  const ARC_DEGREES = 270
-  const START_ANGLE = 135  // starting angle in CSS terms (top-left)
-  const needleAngle = START_ANGLE + position * ARC_DEGREES
-
-  // Arc path geometry
+  // 270° arc with a centered gap at the bottom. Using compass degrees
+  // (0° = up, +CW), the arc spans 225° (sw) → 495° (= 135° se) sweeping
+  // CW through the top. The midpoint of the arc is therefore at compass
+  // 360° = 0° — i.e. position=0.5 lands the needle straight UP. The
+  // needle's default SVG orientation is also compass 0° (drawn as a
+  // vertical line from (cx, cy) to (cx, cy - 50)), so applying a CSS
+  // rotation equal to the compass angle aligns the needle with the
+  // corresponding arc location.
+  const ARC_DEG = 270
+  const ARC_START_COMPASS = 225
   const r = 62
   const cx = 80
   const cy = 80
-  const toRad = (d: number) => (d - 90) * (Math.PI / 180)
-  const arcStart = { x: cx + r * Math.cos(toRad(START_ANGLE)), y: cy + r * Math.sin(toRad(START_ANGLE)) }
-  const arcEnd = { x: cx + r * Math.cos(toRad(START_ANGLE + ARC_DEGREES)), y: cy + r * Math.sin(toRad(START_ANGLE + ARC_DEGREES)) }
-  const largeArc = ARC_DEGREES > 180 ? 1 : 0
+  const compassToPoint = (deg: number) => ({
+    x: cx + r * Math.sin(deg * Math.PI / 180),
+    y: cy - r * Math.cos(deg * Math.PI / 180),
+  })
+  const needleAngle = ARC_START_COMPASS + position * ARC_DEG
+
+  const arcStart = compassToPoint(ARC_START_COMPASS)
+  const arcEnd = compassToPoint(ARC_START_COMPASS + ARC_DEG)
+  const largeArc = ARC_DEG > 180 ? 1 : 0
   const bgPath = `M ${arcStart.x} ${arcStart.y} A ${r} ${r} 0 ${largeArc} 1 ${arcEnd.x} ${arcEnd.y}`
 
-  // Healthy-band arc — highlight segment on the dial
+  // Healthy-band arc — highlight segment on the dial. Same compass math.
   const healthyArc = useMemo(() => {
     if (healthyLow == null && healthyHigh == null) return null
     const lowPos = normalizedPosition(healthyLow ?? 0, sparkline, band, target ?? null)
     const highPos = normalizedPosition(healthyHigh ?? (target ?? 0) * 1.2, sparkline, band, target ?? null)
-    const a = START_ANGLE + lowPos * ARC_DEGREES
-    const b = START_ANGLE + highPos * ARC_DEGREES
-    const pA = { x: cx + r * Math.cos(toRad(a)), y: cy + r * Math.sin(toRad(a)) }
-    const pB = { x: cx + r * Math.cos(toRad(b)), y: cy + r * Math.sin(toRad(b)) }
-    const la = b - a > 180 ? 1 : 0
+    const a = ARC_START_COMPASS + lowPos * ARC_DEG
+    const b = ARC_START_COMPASS + highPos * ARC_DEG
+    const pA = compassToPoint(a)
+    const pB = compassToPoint(b)
+    const la = (b - a) > 180 ? 1 : 0
     return `M ${pA.x} ${pA.y} A ${r} ${r} 0 ${la} 1 ${pB.x} ${pB.y}`
   }, [healthyLow, healthyHigh, target, sparkline])
 
@@ -205,7 +214,7 @@ export function RadialGauge({
         />
         {/* Needle */}
         <motion.g
-          initial={{ rotate: START_ANGLE }}
+          initial={{ rotate: ARC_START_COMPASS }}
           animate={{ rotate: needleAngle }}
           transition={{ type: 'spring', stiffness: 110, damping: 14, mass: 0.8 }}
           style={{ transformOrigin: `${cx}px ${cy}px` }}
