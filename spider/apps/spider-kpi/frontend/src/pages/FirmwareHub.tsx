@@ -40,6 +40,7 @@ import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/Firmwa
 import { useAuth } from '../components/AuthGate'
 import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 import { CookTimelineChart } from '../components/CookTimelineChart'
+import { FirmwareReleaseHistoryCard } from '../components/FirmwareReleaseHistoryCard'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
 
@@ -809,6 +810,7 @@ function OverviewTab() {
     <>
       <FleetControlHealthCard />
       <CookBehaviorEncyclopediaCard />
+      <FirmwareReleaseHistoryCard />
       <section className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>

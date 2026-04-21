@@ -370,6 +370,24 @@ def device_active_cook(mac: str, db: Session = Depends(db_session)) -> dict[str,
     }
 
 
+@router.get("/release-history")
+def firmware_release_history() -> dict[str, Any]:
+    """Static historical firmware release + V2 bug tracker snapshot.
+
+    Loaded from app/data/firmware_release_history.json, which is
+    regenerated from the source xlsx files in historical_data/ via
+    scripts. Kept as a JSON artifact rather than a DB table because
+    it's a reference dataset — read-only, curated by hand, rarely
+    changes, and shipping it as code means Git history tracks edits.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    p = _Path(__file__).resolve().parents[2] / "data" / "firmware_release_history.json"
+    if not p.exists():
+        return {"releases": [], "bugs": [], "error": "firmware_release_history.json not found"}
+    return _json.loads(p.read_text())
+
+
 @router.get("/device-id/{device_id}/resolve-mac")
 def device_id_to_mac(device_id: str, db: Session = Depends(db_session)) -> dict[str, Any]:
     """Resolve a hashed device_id to its most-recently-seen MAC.

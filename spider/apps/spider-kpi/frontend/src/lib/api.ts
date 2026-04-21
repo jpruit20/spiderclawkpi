@@ -808,6 +808,10 @@ export const api = {
       `/api/firmware/device-id/${encodeURIComponent(deviceId)}/resolve-mac`,
       { signal },
     ),
+  firmwareReleaseHistory: (signal?: AbortSignal) =>
+    request<{ releases: Array<Record<string, unknown>>; bugs: Array<Record<string, unknown>>; error?: string }>(
+      '/api/firmware/release-history', { signal },
+    ),
   firmwareDeviceLookup: (query: string, signal?: AbortSignal) =>
     request<FirmwareLookupResult>(`/api/firmware/device/lookup?query=${encodeURIComponent(query)}`, { signal }),
   firmwareDeviceSummary: (mac: string, signal?: AbortSignal) =>
