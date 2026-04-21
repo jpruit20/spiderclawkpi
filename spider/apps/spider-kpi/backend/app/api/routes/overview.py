@@ -239,7 +239,12 @@ def get_cx_snapshot(db: Session = Depends(db_session)):
         entry = aggregate_cache.build_if_missing(db, CX_SNAPSHOT_KEY)
         source = "live"
     if entry is None:
-        return build_customer_experience_snapshot(db)
+        # Last-resort fallback when no builder is registered. Round-trip
+        # the raw snapshot through CXSnapshotOut so ORM objects inside
+        # `actions` get serialized to plain dicts before Pydantic response
+        # validation runs.
+        raw = build_customer_experience_snapshot(db)
+        return CXSnapshotOut.model_validate(raw).model_dump(mode="json")
     payload = dict(entry.payload)
     payload["cache_info"] = {
         "key": entry.key,

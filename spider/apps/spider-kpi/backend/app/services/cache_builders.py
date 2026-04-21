@@ -30,7 +30,14 @@ CX_SNAPSHOT_KEY = "cx:snapshot:v1"
 
 
 def _build_cx_snapshot(db: Session) -> dict[str, Any]:
-    return build_customer_experience_snapshot(db)
+    """Round-trip through CXSnapshotOut so ORM objects inside ``actions``
+    / ``today_focus`` get serialized to plain dicts before they hit the
+    JSONB store. Without this step, json.dumps(default=str) stringifies
+    the ORM instances to garbage like "<CXAction object at 0x...>" and
+    breaks response-model validation on reads."""
+    from app.schemas.overview import CXSnapshotOut
+    raw = build_customer_experience_snapshot(db)
+    return CXSnapshotOut.model_validate(raw).model_dump(mode="json")
 
 
 # ── firmware_metrics_7d — the default Product Engineering view ─────────
@@ -141,9 +148,15 @@ OVERVIEW_KEY = "overview:base:v1"
 def _build_overview(db: Session) -> dict[str, Any]:
     """Full /api/overview payload. Was 10.5s on the live droplet because
     it rolls up alerts, diagnostics, recommendations, source health,
-    and a telemetry summary in a single shot."""
+    and a telemetry summary in a single shot. Round-trip through the
+    OverviewResponse schema so any ORM objects inside (Alert, Diagnostic,
+    Recommendation, SourceHealth) serialize to plain dicts before hitting
+    JSONB — otherwise json.dumps(default=str) stringifies them to
+    garbage and response validation fails on reads."""
     from app.services.overview import build_overview
-    return build_overview(db)
+    from app.schemas.overview import OverviewResponse
+    raw = build_overview(db)
+    return OverviewResponse.model_validate(raw).model_dump(mode="json")
 
 
 # ── firmware_overview — Firmware Hub landing card ──────────────────────
