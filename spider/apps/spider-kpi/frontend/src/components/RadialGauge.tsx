@@ -119,6 +119,12 @@ export function RadialGauge({
     y: cy - r * Math.cos(deg * Math.PI / 180),
   })
   const needleAngle = ARC_START_COMPASS + position * ARC_DEG
+  // Needle tip as an explicit coordinate — same compass math as the
+  // arc points, just at a shorter radius so the tip sits inside the
+  // arc band (radius 50 vs the arc's 62).
+  const NEEDLE_LEN = 50
+  const needleTipX = cx + NEEDLE_LEN * Math.sin(needleAngle * Math.PI / 180)
+  const needleTipY = cy - NEEDLE_LEN * Math.cos(needleAngle * Math.PI / 180)
 
   const arcStart = compassToPoint(ARC_START_COMPASS)
   const arcEnd = compassToPoint(ARC_START_COMPASS + ARC_DEG)
@@ -213,23 +219,24 @@ export function RadialGauge({
           animate={{ pathLength: position }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
         />
-        {/* Needle — must pivot at the geometric arc center (cx, cy).
-            Browsers default SVG transform-box to fill-box, which makes
-            CSS transform-origin resolve against the needle's own
-            bounding box (NOT the arc). Force transform-box: view-box
-            so `80px 80px` lands at viewBox coordinate (80, 80) = the
-            true arc center. Without this explicit setting every gauge
-            rotates around its needle bbox midpoint, which is visibly
-            off-center. Only the needle line rotates; the pivot circles
-            are drawn outside the motion group so they're not affected
-            even if the transform-box default ever regresses. */}
+        {/* Needle — drawn directly from pivot (cx, cy) to the computed
+            tip (needleTipX, needleTipY). Using CSS transforms on SVG
+            children is unreliable across framer-motion + browser
+            transform-box defaults (the prior attempts either rotated
+            around the needle's own bbox or detached the line from the
+            pivot entirely). Computing the tip in React and animating
+            the x2/y2 attributes as a motion value guarantees the line
+            geometrically connects pivot → tip on every frame, with no
+            transform-origin ambiguity. */}
         <motion.line
-          x1={cx} y1={cy} x2={cx} y2={cy - 50}
+          x1={cx} y1={cy}
           stroke={color} strokeWidth={2.5} strokeLinecap="round"
-          initial={{ rotate: ARC_START_COMPASS }}
-          animate={{ rotate: needleAngle }}
+          initial={{
+            x2: cx + 50 * Math.sin(ARC_START_COMPASS * Math.PI / 180),
+            y2: cy - 50 * Math.cos(ARC_START_COMPASS * Math.PI / 180),
+          }}
+          animate={{ x2: needleTipX, y2: needleTipY }}
           transition={{ type: 'spring', stiffness: 110, damping: 14, mass: 0.8 }}
-          style={{ transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px` }}
         />
         <circle cx={cx} cy={cy} r={5} fill={color} />
         <circle cx={cx} cy={cy} r={2} fill="rgba(255,255,255,0.85)" />
