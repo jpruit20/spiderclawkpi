@@ -7,6 +7,8 @@ import {
 } from '../components/tiles'
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
+import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
+import { AISelfGradeCard } from '../components/AISelfGradeCard'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -368,6 +370,8 @@ export function CommandCenter() {
         <InsightsPanel insights={data.insights} highCount={h.insights_high_urgency} />
       )}
 
+      <AISelfGradeCard />
+
       {/* ── ROW 4 · DIVISION TILES ─────────────────────────────────────
           Each tile = a page. Status dot + 1-2 key numbers give the
           at-a-glance health; click = navigation to deep detail. */}
@@ -446,6 +450,7 @@ function InsightsPanel({
   highCount: number
 }) {
   const [expanded, setExpanded] = useState(false)
+  const { reactions, updateReaction } = useMyFeedback('ai_insight')
   if (!insights || insights.length === 0) return null
   const accent = highCount > 0 ? '#ef4444' : '#b88bff'
 
@@ -513,6 +518,15 @@ function InsightsPanel({
                   <strong>Suggested:</strong> {ins.suggested_action}
                 </p>
               )}
+              <div style={{ marginTop: 6 }}>
+                <FeedbackPills
+                  artifactType="ai_insight"
+                  artifactId={String(ins.id)}
+                  currentReaction={reactions.get(String(ins.id)) ?? null}
+                  compact
+                  onChange={r => updateReaction(String(ins.id), r)}
+                />
+              </div>
             </div>
           ))}
         </div>

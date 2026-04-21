@@ -834,6 +834,78 @@ export const api = {
       `/api/firmware/deploy/releases/${release_id}/approve`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
     ),
+  // ── AI feedback + self-grade ──────────────────────────────────────────
+  aiFeedbackPost: (body: { artifact_type: AIFeedbackArtifactType; artifact_id: string; reaction: AIFeedbackReaction; note?: string }) =>
+    request<{ ok: boolean; id: number; reaction: AIFeedbackReaction }>(
+      '/api/ai/feedback',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    ),
+  aiFeedbackMine: (artifact_type?: AIFeedbackArtifactType, signal?: AbortSignal) => {
+    const qs = artifact_type ? `?artifact_type=${encodeURIComponent(artifact_type)}` : ''
+    return request<AIFeedbackMineResponse>(`/api/ai/feedback/mine${qs}`, { signal })
+  },
+  aiFeedbackSummary: (window_days = 30, signal?: AbortSignal) =>
+    request<AIFeedbackSummaryResponse>(`/api/ai/feedback/summary?window_days=${window_days}`, { signal }),
+  aiSelfGradeList: (limit = 12, signal?: AbortSignal) =>
+    request<{ grades: AISelfGradeRow[] }>(`/api/ai/self-grade?limit=${limit}`, { signal }),
+  aiSelfGradeRun: () =>
+    request<{ ok: boolean; id?: number; has_prompt_delta?: boolean }>(
+      '/api/ai/self-grade/run',
+      { method: 'POST' },
+    ),
+  aiSelfGradeApprove: (grade_id: number) =>
+    request<AISelfGradeRow>(
+      `/api/ai/self-grade/${grade_id}/approve`,
+      { method: 'POST' },
+    ),
+  aiSelfGradeReject: (grade_id: number) =>
+    request<AISelfGradeRow>(
+      `/api/ai/self-grade/${grade_id}/reject`,
+      { method: 'POST' },
+    ),
+}
+
+export type AIFeedbackArtifactType = 'ai_insight' | 'deci_draft' | 'issue_signal' | 'firmware_verdict'
+export type AIFeedbackReaction = 'acted_on' | 'already_knew' | 'wrong' | 'ignore'
+
+export interface AIFeedbackMineRow {
+  artifact_type: AIFeedbackArtifactType
+  artifact_id: string
+  reaction: AIFeedbackReaction
+  note: string | null
+  updated_at: string | null
+}
+export interface AIFeedbackMineResponse {
+  reactions: AIFeedbackMineRow[]
+}
+export interface AIFeedbackSummaryResponse {
+  window_days: number
+  by_type: Record<string, {
+    counts: Record<string, number>
+    total: number
+    precision_score: number
+  }>
+}
+export interface AISelfGradeRow {
+  id: number
+  run_at: string | null
+  window_days: number
+  model: string
+  artifacts_scored: number
+  feedback_count: number
+  precision_by_source: Record<string, {
+    grade: string
+    precision_note: string
+    specific_wins: string[]
+    specific_misses: string[]
+  }> | null
+  rejection_themes: Array<{ theme: string; frequency: number; example: string }> | null
+  overall_summary: string | null
+  prompt_delta: string | null
+  approved_at: string | null
+  approved_by: string | null
+  applied_at: string | null
+  duration_ms: number | null
 }
 
 export interface FirmwareStreamEvent {

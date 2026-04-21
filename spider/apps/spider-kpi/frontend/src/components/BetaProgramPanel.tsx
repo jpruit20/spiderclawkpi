@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type BetaReleaseSummary, type BetaVerdictEvidence } from '../lib/api'
+import { FeedbackPills, useMyFeedback } from './FeedbackPills'
 
 /**
  * Firmware Beta + Gamma Waves program panel.
@@ -53,6 +54,7 @@ export function BetaProgramPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'candidates' | 'cohort' | 'verdict' | 'taxonomy'>('candidates')
+  const { reactions: verdictReactions, updateReaction: updateVerdictReaction } = useMyFeedback('firmware_verdict')
 
   // Draft create-release form
   const [showCreate, setShowCreate] = useState(false)
@@ -429,6 +431,18 @@ export function BetaProgramPanel() {
               Run verdict pass now
             </button>
           </div>
+          {selected && (
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>Was this verdict useful?</span>
+              <FeedbackPills
+                artifactType="firmware_verdict"
+                artifactId={String(selected.id)}
+                currentReaction={verdictReactions.get(String(selected.id)) ?? null}
+                compact
+                onChange={r => updateVerdictReaction(String(selected.id), r)}
+              />
+            </div>
+          )}
           {Object.keys(releaseTally).length === 0 ? (
             <div className="state-message">
               No verdict data yet. Run the verdict pass once enough opted-in devices have spent 14+ days on the new firmware. For a release that was pushed today, check back in two weeks (or in testing, mark the cohort as OTA-pushed with a backdated t0).

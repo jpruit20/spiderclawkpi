@@ -265,6 +265,23 @@ def run_cook_behavior_rebuild_job() -> None:
         db.close()
 
 
+def run_ai_self_grade_job() -> None:
+    """Weekly Sunday 14:00 UTC / 10:00 ET: Opus grades the last 7d of
+    AI-generated artifacts against the team's feedback reactions and
+    proposes a prompt_delta for the insight engine. The delta is NOT
+    auto-applied — Joseph approves each one explicitly via the UI."""
+    db = SessionLocal()
+    try:
+        from app.services.ai_self_grade import run_weekly_self_grade
+        run_weekly_self_grade(db)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("ai_self_grade failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_seed, "date", id="seed-on-start", max_instances=1, coalesce=True)
@@ -277,4 +294,8 @@ def build_scheduler() -> BackgroundScheduler:
     # Nightly cook-behavior knowledge-base rebuild + self-evaluation.
     # Runs before beta-verdict so downstream jobs see fresh baselines.
     scheduler.add_job(run_cook_behavior_rebuild_job, "cron", hour=8, minute=30, id="cook-behavior-nightly", replace_existing=True, max_instances=1, coalesce=True)
+    # Weekly Sunday 14:00 UTC / 10:00 ET — Opus grades its own last-7d
+    # output against team feedback. Proposes a prompt_delta that Joseph
+    # approves (or rejects) from the dashboard.
+    scheduler.add_job(run_ai_self_grade_job, "cron", day_of_week="sun", hour=14, minute=0, id="ai-self-grade-weekly", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

@@ -1520,3 +1520,66 @@ class FreshdeskCookCorrelation(TimestampMixin, Base):
     sessions_matched: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     evidence_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class AIFeedback(TimestampMixin, Base):
+    """One reaction per (user, AI-generated artifact). Closes the loop on
+    whether the dashboard's AI outputs actually landed.
+
+    Artifact types:
+      * ``ai_insight``       — rows in ``ai_insights``
+      * ``deci_draft``       — rows in ``deci_drafts``
+      * ``issue_signal``     — rows in ``issue_signals`` (AI-classified ones)
+      * ``firmware_verdict`` — entries in ``firmware_releases.beta_report_json``
+
+    Reactions drive the weekly ``ai_self_grade`` pass + per-source
+    precision metrics. ``note`` is an optional free-text rationale
+    (especially useful on ``wrong``).
+    """
+    __tablename__ = "ai_feedback"
+    __table_args__ = (
+        UniqueConstraint("user_email", "artifact_type", "artifact_id", name="uq_ai_feedback_user_artifact"),
+        Index("ix_ai_feedback_artifact", "artifact_type", "artifact_id"),
+        Index("ix_ai_feedback_reaction_created", "reaction", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    artifact_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    # acted_on | already_knew | wrong | ignore
+    reaction: Mapped[str] = mapped_column(String(20), nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class AISelfGrade(Base):
+    """Weekly Opus self-evaluation. Reads the last 7d of AI-generated
+    artifacts joined to their ``ai_feedback`` reactions and any
+    downstream outcomes (ticket resolutions, DECI acceptance, firmware
+    verdict updates), writes a per-source precision breakdown plus a
+    ``prompt_delta`` — a suggested diff to append to next week's
+    insight-engine system prompt.
+
+    ``approved_at`` is null until Joseph explicitly approves via the
+    UI. ``applied_at`` is set when the delta is folded into the live
+    prompt. Auto-apply is off by design — Opus grading its own output
+    and immediately rewriting its own prompt is a tight loop that can
+    drift without human supervision.
+    """
+    __tablename__ = "ai_self_grade"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    window_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    artifacts_scored: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    feedback_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    precision_by_source: Mapped[Optional[dict]] = mapped_column(JSONB)
+    rejection_themes: Mapped[Optional[dict]] = mapped_column(JSONB)
+    overall_summary: Mapped[Optional[str]] = mapped_column(Text)
+    prompt_delta: Mapped[Optional[str]] = mapped_column(Text)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[Optional[str]] = mapped_column(String(320))
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    usage_json: Mapped[Optional[dict]] = mapped_column(JSONB)

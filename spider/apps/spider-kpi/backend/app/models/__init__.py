@@ -1,5 +1,7 @@
 from app.models.entities import (
+    AIFeedback,
     AIInsight,
+    AISelfGrade,
     Alert,
     AppSideDaily,
     AppSideDeviceObservation,
@@ -68,7 +70,9 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AIFeedback",
     "AIInsight",
+    "AISelfGrade",
     "Alert",
     "AppSideDaily",
     "AppSideDeviceObservation",

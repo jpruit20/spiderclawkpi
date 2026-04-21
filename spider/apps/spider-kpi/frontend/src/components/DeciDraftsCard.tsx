@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api'
 import type { DeciDraft } from '../lib/types'
 import { formatFreshness } from '../lib/format'
 import { NearbyEventsBadge } from './NearbyEventsBadge'
+import { FeedbackPills, useMyFeedback } from './FeedbackPills'
 
 /**
  * Auto-generated DECI drafts awaiting review. Drops at the top of the DECI
@@ -33,6 +34,7 @@ export function DeciDraftsCard({ onChange }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
+  const { reactions, updateReaction } = useMyFeedback('deci_draft')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -165,6 +167,15 @@ export function DeciDraftsCard({ onChange }: Props) {
                     />
                   </div>
                 )}
+                <div style={{ marginTop: 6 }}>
+                  <FeedbackPills
+                    artifactType="deci_draft"
+                    artifactId={d.id}
+                    currentReaction={reactions.get(d.id) ?? null}
+                    compact
+                    onChange={r => updateReaction(d.id, r)}
+                  />
+                </div>
               </div>
             )
           })}

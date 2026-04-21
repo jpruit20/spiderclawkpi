@@ -11,6 +11,7 @@ import { ApiError, api } from '../lib/api'
 import { frictionRankingScore } from '../lib/operatingModel'
 import { IssueClusterItem, IssueRadarResponse, SocialMention, SocialTrendsResponse, SourceHealthItem, TelemetrySummary } from '../lib/types'
 import { truthStateFromSource } from '../lib/divisionContract'
+import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 
 function severityBadgeClass(severity: string): string {
   if (severity === 'high') return 'badge badge-bad'
@@ -48,6 +49,7 @@ export function IssueRadar() {
   const [socialTrends, setSocialTrends] = useState<SocialTrendsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { reactions: signalReactions, updateReaction: updateSignalReaction } = useMyFeedback('issue_signal')
 
   useEffect(() => {
     let cancelled = false
@@ -371,6 +373,15 @@ export function IssueRadar() {
                         <span className={severityBadgeClass(signal.severity)}>{signal.severity}</span>
                         <span className="badge badge-neutral">{signal.source}</span>
                       </div>
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <FeedbackPills
+                        artifactType="issue_signal"
+                        artifactId={String(signal.id)}
+                        currentReaction={signalReactions.get(String(signal.id)) ?? null}
+                        compact
+                        onChange={r => updateSignalReaction(String(signal.id), r)}
+                      />
                     </div>
                   </div>
                 ))}
