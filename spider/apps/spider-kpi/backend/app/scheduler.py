@@ -265,6 +265,22 @@ def run_cook_behavior_rebuild_job() -> None:
         db.close()
 
 
+def run_weekly_gauge_selection_job() -> None:
+    """Monday 10:00 UTC / 06:00 ET: Opus picks the 8 Command Center
+    priority gauges for the coming week. Idempotent per (iso_week_start,
+    rank); respects pinned gauges from the prior week."""
+    db = SessionLocal()
+    try:
+        from app.services.weekly_gauges_selector import run_weekly_gauge_selection
+        run_weekly_gauge_selection(db)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("weekly_gauge_selection failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_ai_self_grade_job() -> None:
     """Weekly Sunday 14:00 UTC / 10:00 ET: Opus grades the last 7d of
     AI-generated artifacts against the team's feedback reactions and
@@ -298,4 +314,10 @@ def build_scheduler() -> BackgroundScheduler:
     # output against team feedback. Proposes a prompt_delta that Joseph
     # approves (or rejects) from the dashboard.
     scheduler.add_job(run_ai_self_grade_job, "cron", day_of_week="sun", hour=14, minute=0, id="ai-self-grade-weekly", replace_existing=True, max_instances=1, coalesce=True)
+    # Weekly Monday 10:00 UTC / 06:00 ET — Opus picks the Command Center
+    # priority gauges for the coming week. Replaces the static 4-tile
+    # top strip with a curated 8-gauge cluster whose selection adapts to
+    # what's actually important this week (active DECI decisions,
+    # recent incidents, 28-day KPI momentum).
+    scheduler.add_job(run_weekly_gauge_selection_job, "cron", day_of_week="mon", hour=10, minute=0, id="weekly-gauge-selection", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

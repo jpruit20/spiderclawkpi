@@ -1611,3 +1611,35 @@ class AISelfGrade(Base):
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
     usage_json: Mapped[Optional[dict]] = mapped_column(JSONB)
+
+
+class WeeklyGaugeSelection(TimestampMixin, Base):
+    """Opus 4.7's weekly pick of the 8 most-important business gauges.
+
+    One row per (iso_week_start, rank). The Monday cron job runs Opus
+    against the metric catalog + recent company context and writes 8
+    rows for the coming week. Current values are NOT persisted here —
+    they're resolved live from the catalog at read time so the gauge
+    animates with fresh data every 30 s. This table only stores the
+    selection, Opus's rationale, the target + healthy band, and any
+    user pin that should override next week's pick.
+    """
+    __tablename__ = "weekly_gauge_selection"
+    __table_args__ = (
+        UniqueConstraint("iso_week_start", "rank", name="uq_weekly_gauge_week_rank"),
+        Index("ix_weekly_gauge_week", "iso_week_start"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    iso_week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    target_value: Mapped[Optional[float]] = mapped_column(Float)
+    healthy_band_low: Mapped[Optional[float]] = mapped_column(Float)
+    healthy_band_high: Mapped[Optional[float]] = mapped_column(Float)
+    gauge_style: Mapped[str] = mapped_column(String(32), default="radial", nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    selected_by: Mapped[str] = mapped_column(String(32), default="opus-4-7", nullable=False)
+    selection_context_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

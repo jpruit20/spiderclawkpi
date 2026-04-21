@@ -16,6 +16,7 @@ from app.api.deps import require_auth
 from app.api.routes.auth import router as auth_router
 from app.api.routes.beta_program import router as beta_router, public_router as beta_public_router
 from app.api.routes.clickup import router as clickup_router, webhook_router as clickup_webhook_router
+from app.api.routes.command_center import router as command_center_router
 from app.api.routes.ecrs import router as ecrs_router
 from app.api.routes.executive import router as executive_router
 from app.api.routes.firmware import router as firmware_router
@@ -99,6 +100,7 @@ app.include_router(ai_feedback_router)
 app.include_router(app_side_router)
 app.include_router(clickup_router)
 app.include_router(clickup_webhook_router)
+app.include_router(command_center_router)
 app.include_router(ecrs_router)
 app.include_router(executive_router)
 app.include_router(firmware_router)

@@ -68,6 +68,7 @@ from app.models.entities import (
     TWRawPayload,
     TWSummaryDaily,
     TWSummaryIntraday,
+    WeeklyGaugeSelection,
 )
 
 __all__ = [
@@ -140,4 +141,5 @@ __all__ = [
     "TWRawPayload",
     "TWSummaryDaily",
     "TWSummaryIntraday",
+    "WeeklyGaugeSelection",
 ]
