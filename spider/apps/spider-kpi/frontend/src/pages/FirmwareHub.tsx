@@ -31,6 +31,9 @@ import {
   type FirmwareFleetControlHealth,
   type FirmwareSession,
   type GammaStatusResponse,
+  type CookBehaviorBaseline,
+  type CookBehaviorBaselinesResponse,
+  type CookBehaviorBacktestResponse,
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
@@ -294,16 +297,32 @@ function GammaWavesPanel() {
 // Fleet control health (Agustin app-control review)
 // ---------------------------------------------------------------------------
 
+const STATE_BADGE: Record<string, { bg: string; fg: string; label: string }> = {
+  ramping_up:     { bg: '#fef3c7', fg: '#92400e', label: 'Ramping up' },
+  in_control:     { bg: '#d1fae5', fg: '#065f46', label: 'In control' },
+  out_of_control: { bg: '#fee2e2', fg: '#991b1b', label: 'Out of control' },
+  cooling_down:   { bg: '#dbeafe', fg: '#1e40af', label: 'Cooling down' },
+  manual_mode:    { bg: '#ede9fe', fg: '#5b21b6', label: 'Manual mode' },
+  error:          { bg: '#fecaca', fg: '#7f1d1d', label: 'Error' },
+  idle:           { bg: '#f3f4f6', fg: '#6b7280', label: 'Idle' },
+  unknown:        { bg: '#f3f4f6', fg: '#6b7280', label: 'Unknown' },
+}
+
+type ControlSortKey = 'gap_abs' | 'gap' | 'target' | 'intensity' | 'firmware' | 'sample_ts' | 'state'
+
 function FleetControlHealthCard() {
   const [data, setData] = useState<FirmwareFleetControlHealth | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [sort, setSort] = useState<ControlSortKey>('gap_abs')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [stateFilter, setStateFilter] = useState<string>('')
 
   useEffect(() => {
     let alive = true
     const pull = async () => {
       try {
-        const d = await api.firmwareFleetControlHealth()
+        const d = await api.firmwareFleetControlHealth({ sort, sort_dir: sortDir, state: stateFilter || undefined })
         if (!alive) return
         setData(d)
         setError(null)
@@ -316,15 +335,30 @@ function FleetControlHealthCard() {
     pull()
     const t = window.setInterval(pull, 30_000)
     return () => { alive = false; window.clearInterval(t) }
-  }, [])
+  }, [sort, sortDir, stateFilter])
+
+  const toggleSort = (k: ControlSortKey) => {
+    if (sort === k) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSort(k)
+      setSortDir('desc')
+    }
+  }
+  const sortIndicator = (k: ControlSortKey) =>
+    sort === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   if (loading && !data) return <section className="card"><div className="state-message">Loading fleet control health…</div></section>
   if (error && !data) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
   if (!data) return null
 
-  const controlPct = data.active_cooks > 0
-    ? `${Math.round((data.in_control / data.active_cooks) * 100)}%`
-    : '—'
+  const t = data.tallies || {}
+  const ramping = t.ramping_up ?? 0
+  const inControl = t.in_control ?? 0
+  const oocBadge = t.out_of_control ?? 0
+  const cooling = t.cooling_down ?? 0
+  const manual = t.manual_mode ?? 0
+  const errs = t.error ?? 0
 
   return (
     <section className="card">
@@ -332,56 +366,93 @@ function FleetControlHealthCard() {
         <div>
           <div className="card-title" style={{ marginBottom: 2 }}>Fleet control health — live</div>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-            Last {Math.round(data.window_seconds / 60)} min · in-control = |target − current| ≤ {data.in_control_gap_f}°F · refreshes every 30 s
+            Last {Math.round(data.window_seconds / 60)} min · time-aware classifier {data.baseline_driven ? '(baseline-driven)' : '(heuristic)'} · refreshes every 30 s
           </div>
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)' }}>
           fetched {new Date(data.fetched_at).toLocaleTimeString()}
         </div>
       </div>
-      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
-        <Stat label="Reporting (10 min)" value={data.total_reporting_devices.toLocaleString()} />
+      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10 }}>
+        <Stat label="Reporting" value={data.total_reporting_devices.toLocaleString()} />
         <Stat label="Active cooks" value={data.active_cooks.toLocaleString()} />
-        <Stat label="In control" value={`${data.in_control} / ${data.active_cooks} (${controlPct})`} />
-        <Stat label="Out of control" value={data.out_of_control_count.toLocaleString()} />
+        <Stat label="In control" value={inControl.toLocaleString()} />
+        <Stat label="Ramping up" value={ramping.toLocaleString()} />
+        <Stat label="Out of control" value={oocBadge.toLocaleString()} />
+        <Stat label="Errors" value={errs.toLocaleString()} />
+        <Stat label="Manual" value={manual.toLocaleString()} />
+        <Stat label="Cooling" value={cooling.toLocaleString()} />
       </div>
-      {data.out_of_control_devices.length > 0 ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
-            Currently out of control (largest gap first):
-          </div>
+
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>Filter state:</span>
+        <select
+          value={stateFilter}
+          onChange={(e) => setStateFilter(e.target.value)}
+          style={{ fontSize: 12, padding: '3px 6px' }}
+        >
+          <option value="">All</option>
+          <option value="out_of_control">Out of control only</option>
+          <option value="error">Errors only</option>
+          <option value="ramping_up">Ramping up</option>
+          <option value="in_control">In control</option>
+          <option value="cooling_down">Cooling down</option>
+          <option value="manual_mode">Manual mode</option>
+          <option value="idle">Idle</option>
+        </select>
+      </div>
+
+      {data.devices.length > 0 ? (
+        <div style={{ marginTop: 10 }}>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 640 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 820 }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                   <th style={{ padding: '6px 8px' }}>MAC</th>
-                  <th>Target</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('state')}>State{sortIndicator('state')}</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('target')}>Target{sortIndicator('target')}</th>
                   <th>Current</th>
-                  <th>Gap</th>
-                  <th>Intensity</th>
-                  <th>Firmware</th>
-                  <th>Last sample</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('gap_abs')}>Gap{sortIndicator('gap_abs')}</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('intensity')}>Fan{sortIndicator('intensity')}</th>
+                  <th>Ramp</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('firmware')}>Firmware{sortIndicator('firmware')}</th>
+                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('sample_ts')}>Last sample{sortIndicator('sample_ts')}</th>
                 </tr>
               </thead>
               <tbody>
-                {data.out_of_control_devices.map(d => (
-                  <tr key={d.device_id} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{d.mac ?? '—'}</td>
-                    <td>{fmtTemp(d.target_temp)}</td>
-                    <td>{fmtTemp(d.current_temp)}</td>
-                    <td style={{ color: d.gap_f != null && d.gap_f < 0 ? 'var(--red)' : '#f59e0b' }}>
-                      {d.gap_f != null ? `${d.gap_f > 0 ? '+' : ''}${Math.round(d.gap_f)}°F` : '—'}
-                    </td>
-                    <td>{d.intensity != null ? `${Math.round(d.intensity)}%` : '—'}</td>
-                    <td>{d.firmware_version ?? '—'}</td>
-                    <td>{fmtDateTime(d.sample_timestamp)}</td>
-                  </tr>
-                ))}
+                {data.devices.map(d => {
+                  const badge = STATE_BADGE[d.state] ?? STATE_BADGE.unknown
+                  return (
+                    <tr key={d.device_id} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }} title={d.reason}>{d.mac ?? '—'}</td>
+                      <td>
+                        <span style={{ background: badge.bg, color: badge.fg, padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td>{fmtTemp(d.target_temp)}</td>
+                      <td>{fmtTemp(d.current_temp)}</td>
+                      <td style={{ color: d.is_anomalous ? 'var(--red)' : 'inherit' }}>
+                        {d.gap_f != null ? `${d.gap_f > 0 ? '+' : ''}${Math.round(d.gap_f)}°F` : '—'}
+                      </td>
+                      <td>{d.intensity != null ? `${Math.round(d.intensity)}%` : '—'}</td>
+                      <td>
+                        {d.ramp_elapsed_seconds != null && d.ramp_budget_seconds != null
+                          ? `${Math.round(d.ramp_elapsed_seconds / 60)}m / ${Math.round(d.ramp_budget_seconds / 60)}m`
+                          : '—'}
+                      </td>
+                      <td>{d.firmware_version ?? '—'}</td>
+                      <td>{fmtDateTime(d.sample_timestamp)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>No devices matching filter.</div>
+      )}
     </section>
   )
 }
@@ -426,6 +497,155 @@ function fmtPctRaw(v: number | null | undefined): string {
   return `${pct.toFixed(1)}%`
 }
 
+// ---------------------------------------------------------------------------
+// Cook Behavior Encyclopedia
+// ---------------------------------------------------------------------------
+
+function fmtSeconds(v: number | null): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  if (v < 60) return `${Math.round(v)}s`
+  const m = Math.floor(v / 60)
+  const s = Math.round(v - m * 60)
+  return s > 0 ? `${m}m ${s}s` : `${m}m`
+}
+
+function fmtNum(v: number | null, suffix = ''): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  return `${Math.round(v * 10) / 10}${suffix}`
+}
+
+function CookBehaviorEncyclopediaCard() {
+  const [data, setData] = useState<CookBehaviorBaselinesResponse | null>(null)
+  const [drift, setDrift] = useState<CookBehaviorBacktestResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildMsg, setRebuildMsg] = useState<string | null>(null)
+  const { user } = useAuth()
+  const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
+
+  const load = async () => {
+    try {
+      const [b, bt] = await Promise.all([
+        api.firmwareCookBehaviorBaselines(),
+        api.firmwareCookBehaviorBacktest(),
+      ])
+      setData(b)
+      setDrift(bt)
+      setError(null)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const onRebuild = async () => {
+    setRebuilding(true)
+    setRebuildMsg(null)
+    try {
+      const r = await api.firmwareCookBehaviorRebuild()
+      setRebuildMsg('Rebuild complete.')
+      await load()
+      void r
+    } catch (e: unknown) {
+      setRebuildMsg(`Rebuild failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRebuilding(false)
+    }
+  }
+
+  if (loading) return <section className="card"><div className="state-message">Loading cook-behavior encyclopedia…</div></section>
+  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
+  if (!data) return null
+
+  const driftByKey = new Map<string, { coverage: number | null; err: number | null; n: number }>()
+  drift?.rows.forEach(r => {
+    driftByKey.set(`${r.target_temp_band}:${r.metric}`, {
+      coverage: r.coverage_pct,
+      err: r.median_error_pct,
+      n: r.sample_size,
+    })
+  })
+
+  return (
+    <section className="card">
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div className="card-title" style={{ marginBottom: 2 }}>Cook Behavior Encyclopedia</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Learned baselines per target-temp band. Rebuilt nightly 08:30 UTC from every cook session.
+          </div>
+        </div>
+        {isOwner ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {rebuildMsg ? <span style={{ fontSize: 11, color: 'var(--muted)' }}>{rebuildMsg}</span> : null}
+            <button
+              onClick={onRebuild}
+              disabled={rebuilding}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              {rebuilding ? 'Rebuilding…' : 'Rebuild now'}
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {data.baselines.length === 0 ? (
+        <div style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)' }}>
+          No baselines computed yet. Click "Rebuild now" or wait for the 08:30 UTC nightly run.
+        </div>
+      ) : (
+        <div style={{ marginTop: 12, overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 980 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                <th style={{ padding: '6px 8px' }}>Target band</th>
+                <th>Sessions</th>
+                <th>Ramp p10 / p50 / p90</th>
+                <th>Fan p10 / p50 / p90</th>
+                <th>Stddev p50 / p90</th>
+                <th>Cool p50</th>
+                <th>Duration p50</th>
+                <th>Ramp coverage</th>
+                <th>Fan coverage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.baselines.map(b => {
+                const rd = driftByKey.get(`${b.target_temp_band}:ramp_time`)
+                const fd = driftByKey.get(`${b.target_temp_band}:steady_fan`)
+                return (
+                  <tr key={`${b.target_temp_band}:${b.baseline_version}`} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px', fontWeight: 500 }}>{b.target_temp_band}–{Number(b.target_temp_band) + 49}°F</td>
+                    <td>{b.sample_size}</td>
+                    <td>{fmtSeconds(b.ramp_time_p10)} / {fmtSeconds(b.ramp_time_p50)} / {fmtSeconds(b.ramp_time_p90)}</td>
+                    <td>{fmtNum(b.steady_fan_p10, '%')} / {fmtNum(b.steady_fan_p50, '%')} / {fmtNum(b.steady_fan_p90, '%')}</td>
+                    <td>{fmtNum(b.steady_temp_stddev_p50, '°F')} / {fmtNum(b.steady_temp_stddev_p90, '°F')}</td>
+                    <td>{fmtNum(b.cool_down_rate_p50, '°/m')}</td>
+                    <td>{fmtSeconds(b.typical_duration_p50)}</td>
+                    <td style={{ color: rd && rd.coverage != null && rd.coverage < 0.5 ? 'var(--red)' : 'inherit' }}>
+                      {rd && rd.coverage != null ? `${Math.round(rd.coverage * 100)}% (n=${rd.n})` : '—'}
+                    </td>
+                    <td style={{ color: fd && fd.coverage != null && fd.coverage < 0.5 ? 'var(--red)' : 'inherit' }}>
+                      {fd && fd.coverage != null ? `${Math.round(fd.coverage * 100)}% (n=${fd.n})` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
+            Coverage = % of last 48h sessions whose actual values fell inside the p10–p90 band. Drops below 50% flag drift.
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function OverviewTab() {
   const [preset, setPreset] = useState<RangePreset>('7d')
   const initial = rangeForPreset('7d')
@@ -459,6 +679,7 @@ function OverviewTab() {
   return (
     <>
       <FleetControlHealthCard />
+      <CookBehaviorEncyclopediaCard />
       <section className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>

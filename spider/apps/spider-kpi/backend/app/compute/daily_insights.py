@@ -37,8 +37,11 @@ from app.models import (
     BetaCohortMember,
     ClickUpTask,
     ClickUpTasksDaily,
+    CookBehaviorBacktest,
+    CookBehaviorBaseline,
     FirmwareIssueTag,
     FirmwareRelease,
+    FreshdeskCookCorrelation,
     FreshdeskTicket,
     FreshdeskTicketsDaily,
     IssueSignal,
@@ -574,6 +577,136 @@ def build_context(db: Session, lookback_days: int = 30) -> tuple[str, list[str]]
             lines.append(f"  - {r.version} ({r.status}) addresses={addr}{health_str}")
             lines.append(f"      cohort: {cohort_str}")
             lines.append(f"      verdict tally: {tally_str}")
+        lines.append("")
+
+    # --- COOK BEHAVIOR BASELINES + DRIFT ---------------------------------
+    # The cook-behavior encyclopedia: learned p10/p50/p90 of ramp_time,
+    # steady_fan, and steady_stddev per (target_temp_band, firmware). The
+    # backtest tells us whether yesterday's sessions actually landed
+    # inside the current baseline bands (coverage ~0.80 is healthy; much
+    # lower means the fleet has drifted — usually from a new firmware
+    # rollout or changing user mix).
+    rollup_baselines = db.execute(
+        select(CookBehaviorBaseline)
+        .where(CookBehaviorBaseline.firmware_version.is_(None))
+        .order_by(CookBehaviorBaseline.target_temp_band)
+    ).scalars().all()
+    fw_baselines = db.execute(
+        select(CookBehaviorBaseline)
+        .where(CookBehaviorBaseline.firmware_version.is_not(None))
+    ).scalars().all()
+    if rollup_baselines:
+        sources.append("cook_baselines")
+        lines.append("## COOK BEHAVIOR ENCYCLOPEDIA (learned p10/p50/p90 per target-temp band)")
+        lines.append("  These are the learned expected cook behaviors from the last 30 days of sessions.")
+        lines.append("  A ramp_time, steady_fan, or steady_stddev far from the p50 (or outside p10-p90) is anomalous.")
+        for b in rollup_baselines[:12]:
+            lines.append(
+                f"  - band={b.target_temp_band}°F n={b.sample_size}  "
+                f"ramp p10/p50/p90={b.ramp_time_p10 or '—'}/{b.ramp_time_p50 or '—'}/{b.ramp_time_p90 or '—'}s  "
+                f"fan p50={b.steady_fan_p50 or '—'}  stddev p50={b.steady_temp_stddev_p50 or '—'}°F"
+            )
+        # Firmware deltas — where does a specific firmware diverge most
+        # from the rollup? Pick the top 5 (ramp_p50 delta) as suggestive
+        # regressions/improvements. Skips bins with <8 samples.
+        rollup_by_band = {b.target_temp_band: b for b in rollup_baselines}
+        deltas: list[tuple[str, str, float, int]] = []
+        for b in fw_baselines:
+            if (b.sample_size or 0) < 8:
+                continue
+            rollup = rollup_by_band.get(b.target_temp_band)
+            if not rollup or rollup.ramp_time_p50 is None or b.ramp_time_p50 is None:
+                continue
+            if rollup.ramp_time_p50 <= 0:
+                continue
+            delta_pct = (b.ramp_time_p50 - rollup.ramp_time_p50) / rollup.ramp_time_p50 * 100.0
+            deltas.append((b.firmware_version or "?", b.target_temp_band, delta_pct, b.sample_size or 0))
+        deltas.sort(key=lambda t: -abs(t[2]))
+        if deltas:
+            lines.append("  - Firmware-specific ramp divergence from fleet rollup (top by magnitude):")
+            for fw, band, dpct, n in deltas[:8]:
+                lines.append(f"      fw={fw}  band={band}°F  ramp_p50 Δ={dpct:+.1f}% vs rollup (n={n})")
+        # Drift: latest backtest run
+        latest_backtest_at = db.execute(
+            select(func.max(CookBehaviorBacktest.run_at))
+        ).scalar()
+        if latest_backtest_at:
+            backtest_rows = db.execute(
+                select(CookBehaviorBacktest)
+                .where(CookBehaviorBacktest.run_at == latest_backtest_at)
+                .order_by(CookBehaviorBacktest.coverage_pct.asc().nullslast())
+            ).scalars().all()
+            if backtest_rows:
+                low_cov = [r for r in backtest_rows if r.coverage_pct is not None and r.coverage_pct < 0.55 and (r.sample_size or 0) >= 8]
+                if low_cov:
+                    lines.append(f"  - Drift alerts (coverage < 55%, from {latest_backtest_at.date().isoformat()} backtest):")
+                    for r in low_cov[:10]:
+                        lines.append(
+                            f"      band={r.target_temp_band}°F metric={r.metric}  "
+                            f"coverage={r.coverage_pct:.0%} (expected ~80%)  "
+                            f"below/above={r.below_band_count}/{r.above_band_count}  n={r.sample_size}"
+                        )
+                healthy_count = sum(1 for r in backtest_rows if r.coverage_pct is not None and r.coverage_pct >= 0.65)
+                lines.append(f"  - Backtest summary: {len(backtest_rows)} (band,metric) pairs scored, {healthy_count} healthy (coverage ≥ 65%).")
+        lines.append("")
+
+    # --- FRESHDESK TICKETS WITH CORRELATED COOK SESSIONS -----------------
+    # Tickets where we resolved a MAC and found ≥1 TelemetrySession within
+    # ±2h of ticket creation. Each row is a "this customer was cooking
+    # when they wrote in" — Opus can use these to say "X% of tickets had
+    # a cook overshoot by more than 50°F in the 2h window", which is the
+    # kind of cross-source pattern a single dashboard block can't surface.
+    corr_cutoff = now_utc - timedelta(days=14)
+    corr_rows = db.execute(
+        select(FreshdeskCookCorrelation)
+        .where(FreshdeskCookCorrelation.ticket_created_at >= corr_cutoff)
+        .where(FreshdeskCookCorrelation.sessions_matched > 0)
+        .order_by(FreshdeskCookCorrelation.ticket_created_at.desc())
+        .limit(40)
+    ).scalars().all()
+    if corr_rows:
+        sources.append("freshdesk/cook_correlation")
+        lines.append("## TICKETS WITH CORRELATED COOK SESSIONS (last 14d, ±2h window)")
+        lines.append("  Each row is a ticket whose customer had a cook session running within 2h of writing in.")
+        lines.append("  If a cluster share a common outcome (overshoot, did_not_reach, disconnect), that's likely WHY they wrote in.")
+        outcome_counter: Counter = Counter()
+        overshoot_count = 0
+        undershoot_count = 0
+        disconnect_count = 0
+        for r in corr_rows:
+            evidence = r.evidence_json or {}
+            sessions = evidence.get("sessions") or []
+            for s in sessions:
+                outcome = s.get("cook_outcome") or "?"
+                outcome_counter[outcome] += 1
+                if (s.get("max_overshoot_f") or 0) >= 25:
+                    overshoot_count += 1
+                if (s.get("max_undershoot_f") or 0) >= 25:
+                    undershoot_count += 1
+                if outcome == "disconnect":
+                    disconnect_count += 1
+        total_sessions = sum(outcome_counter.values())
+        lines.append(
+            f"  - {len(corr_rows)} tickets correlated to {total_sessions} cook sessions. "
+            f"Outcome mix: " + ", ".join(f"{k}={v}" for k, v in outcome_counter.most_common())
+        )
+        lines.append(
+            f"  - Of correlated sessions: {overshoot_count} had ≥25°F overshoot, "
+            f"{undershoot_count} had ≥25°F undershoot, {disconnect_count} disconnected mid-cook."
+        )
+        # Sample 5 most recent as concrete evidence
+        for r in corr_rows[:5]:
+            ev = r.evidence_json or {}
+            sessions = ev.get("sessions") or []
+            if not sessions:
+                continue
+            s = sessions[0]
+            lines.append(
+                f"      ticket={r.ticket_id} @ {r.ticket_created_at.date().isoformat() if r.ticket_created_at else '?'}  "
+                f"target={s.get('target_temp')}  outcome={s.get('cook_outcome')}  "
+                f"overshoot={s.get('max_overshoot_f')}  undershoot={s.get('max_undershoot_f')}  "
+                f"fw={s.get('firmware_version')}"
+            )
         lines.append("")
 
     lines.append("=== END CONTEXT ===")

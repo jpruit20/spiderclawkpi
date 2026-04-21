@@ -45,6 +45,8 @@ from app.models import (
     TelemetrySession,
     TelemetryStreamEvent,
 )
+from app.services import cook_state_classifier as cook_state
+from app.services.cook_behavior_baselines import get_baseline_lookup
 
 
 logger = logging.getLogger(__name__)
@@ -602,79 +604,207 @@ def device_control_signals(mac: str, db: Session = Depends(db_session)) -> dict[
 
 
 @router.get("/fleet/control-health")
-def fleet_control_health(db: Session = Depends(db_session)) -> dict[str, Any]:
-    """Fleet-wide snapshot of who's currently cooking, who's in-control,
-    and who's running hot or cold.
+def fleet_control_health(
+    sort: str = Query("gap_abs", pattern="^(gap_abs|gap|target|intensity|firmware|sample_ts|state)$"),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    state: Optional[str] = Query(None),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Fleet-wide snapshot that uses the TIME-AWARE cook state classifier
+    instead of a naive temp-gap threshold.
 
-    Looks at each device's latest stream event in the last 10 minutes.
-    "Engaged" = reported.engaged=true. "In-control" = |main - target| ≤
-    ``_IN_CONTROL_GAP_F``. Returns both the tallies and the list of
-    out-of-control devices for Agustin to drill into.
+    States returned per device: ramping_up | in_control | out_of_control |
+    cooling_down | manual_mode | error | idle. Only ``out_of_control`` and
+    ``error`` count as anomalies — ramping-up and cooling-down grills are
+    doing exactly what the user asked for and no longer get flagged.
+
+    Sortable + filterable for the frontend overview table.
     """
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(seconds=_CONTROL_WINDOW_SECONDS)
+    # Wider window than before — we need enough history to measure
+    # engagement onset for the ramp-elapsed calculation.
+    window_s = 30 * 60  # 30 min
+    cutoff = now - timedelta(seconds=window_s)
 
-    # Latest event per device_id in window.
-    subq = (
-        select(
-            TelemetryStreamEvent.device_id,
-            func.max(TelemetryStreamEvent.sample_timestamp).label("max_ts"),
-        )
-        .where(TelemetryStreamEvent.sample_timestamp >= cutoff)
-        .group_by(TelemetryStreamEvent.device_id)
-        .subquery()
-    )
-    latest_events = db.execute(
+    events = db.execute(
         select(TelemetryStreamEvent)
-        .join(
-            subq,
-            (TelemetryStreamEvent.device_id == subq.c.device_id)
-            & (TelemetryStreamEvent.sample_timestamp == subq.c.max_ts),
-        )
+        .where(TelemetryStreamEvent.sample_timestamp >= cutoff)
+        .order_by(TelemetryStreamEvent.device_id, TelemetryStreamEvent.sample_timestamp)
     ).scalars().all()
 
-    active_cooks = 0
-    in_control = 0
-    out_of_control: list[dict[str, Any]] = []
-    total_reporting = len(latest_events)
+    by_device: dict[str, list[TelemetryStreamEvent]] = {}
+    for ev in events:
+        by_device.setdefault(ev.device_id, []).append(ev)
 
-    for ev in latest_events:
-        signals = _extract_control_signals(ev.raw_payload)
-        engaged = bool(signals.get("engaged"))
-        if not engaged:
-            continue
-        active_cooks += 1
-        gap = signals.get("gap_f")
-        if isinstance(gap, (int, float)):
-            if abs(gap) <= _IN_CONTROL_GAP_F:
-                in_control += 1
-            else:
-                # Use reported MAC (not device_id) for the UI — MAC is the
-                # user-visible id.
-                reported = ((ev.raw_payload or {}).get("device_data") or {}).get("reported") or {}
-                mac = (reported.get("mac") or "").lower() or None
-                out_of_control.append({
-                    "mac": mac,
-                    "device_id": ev.device_id,
-                    "target_temp": signals.get("target_temp"),
-                    "current_temp": signals.get("current_temp"),
-                    "gap_f": gap,
-                    "intensity": signals.get("intensity"),
-                    "firmware_version": signals.get("firmware_version"),
-                    "sample_timestamp": ev.sample_timestamp.isoformat() if ev.sample_timestamp else None,
-                })
+    try:
+        baseline_lookup = get_baseline_lookup(db)
+    except Exception:
+        # Table missing (pre-migration) or other error — fall back to heuristics.
+        baseline_lookup = None
 
-    out_of_control.sort(key=lambda d: abs(d["gap_f"]) if d["gap_f"] is not None else 0, reverse=True)
+    devices: list[dict[str, Any]] = []
+    tallies: dict[str, int] = {s: 0 for s in cook_state.ALL_STATES}
+    for device_id, dev_events in by_device.items():
+        r = cook_state.classify_from_events(dev_events, baseline_lookup=baseline_lookup, now=now)
+        tallies[r.state] = tallies.get(r.state, 0) + 1
+        latest = dev_events[-1]
+        reported = ((latest.raw_payload or {}).get("device_data") or {}).get("reported") or {}
+        mac = (reported.get("mac") or "").lower() or None
+        devices.append(cook_state.result_to_dict(
+            r, mac=mac, device_id=device_id, firmware_version=latest.firmware_version,
+        ))
+
+    if state and state in cook_state.ALL_STATES:
+        devices = [d for d in devices if d["state"] == state]
+
+    # Sort keys: gap_abs = |gap|; gap = signed; target = target_temp;
+    # intensity = fan %; firmware = version; sample_ts = last sample.
+    def _sort_key(d: dict[str, Any]):
+        if sort == "gap_abs":
+            v = d.get("gap_f")
+            return abs(v) if isinstance(v, (int, float)) else -1
+        if sort == "gap":
+            v = d.get("gap_f")
+            return v if isinstance(v, (int, float)) else 0
+        if sort == "target":
+            v = d.get("target_temp")
+            return v if isinstance(v, (int, float)) else 0
+        if sort == "intensity":
+            v = d.get("intensity")
+            return v if isinstance(v, (int, float)) else 0
+        if sort == "firmware":
+            return d.get("firmware_version") or ""
+        if sort == "sample_ts":
+            return d.get("sample_timestamp") or ""
+        if sort == "state":
+            return d.get("state") or ""
+        return 0
+
+    devices.sort(key=_sort_key, reverse=(sort_dir == "desc"))
+
+    active = tallies.get(cook_state.STATE_IN_CONTROL, 0) + tallies.get(cook_state.STATE_OUT_OF_CONTROL, 0) + tallies.get(cook_state.STATE_RAMPING_UP, 0) + tallies.get(cook_state.STATE_MANUAL_MODE, 0)
+    anomalous = tallies.get(cook_state.STATE_OUT_OF_CONTROL, 0) + tallies.get(cook_state.STATE_ERROR, 0)
 
     return {
-        "window_seconds": _CONTROL_WINDOW_SECONDS,
-        "in_control_gap_f": _IN_CONTROL_GAP_F,
-        "total_reporting_devices": total_reporting,
-        "active_cooks": active_cooks,
-        "in_control": in_control,
-        "out_of_control_count": len(out_of_control),
-        "out_of_control_devices": out_of_control[:50],
+        "window_seconds": window_s,
+        "total_reporting_devices": len(by_device),
+        "active_cooks": active,
+        "tallies": tallies,
+        "anomalous_count": anomalous,
+        "baseline_driven": baseline_lookup is not None,
+        "devices": devices[:200],
         "fetched_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cook behavior knowledge base — the "encyclopedia"
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cook-behavior/baselines")
+def cook_behavior_baselines(
+    firmware_version: Optional[str] = Query(None),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Return the learned baselines per target-temp band.
+
+    If ``firmware_version`` is provided, returns only that firmware's
+    bins (with fallback to rollup rows where the firmware has too few
+    samples). Otherwise returns the all-firmware rollup.
+    """
+    from app.models import CookBehaviorBaseline
+    q = select(CookBehaviorBaseline)
+    if firmware_version:
+        q = q.where(
+            (CookBehaviorBaseline.firmware_version == firmware_version)
+            | (CookBehaviorBaseline.firmware_version.is_(None))
+        )
+    else:
+        q = q.where(CookBehaviorBaseline.firmware_version.is_(None))
+    rows = db.execute(q.order_by(CookBehaviorBaseline.target_temp_band)).scalars().all()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append({
+            "target_temp_band": r.target_temp_band,
+            "firmware_version": r.firmware_version,
+            "baseline_version": r.baseline_version,
+            "sample_size": r.sample_size,
+            "ramp_time_p10": r.ramp_time_p10,
+            "ramp_time_p50": r.ramp_time_p50,
+            "ramp_time_p90": r.ramp_time_p90,
+            "steady_fan_p10": r.steady_fan_p10,
+            "steady_fan_p50": r.steady_fan_p50,
+            "steady_fan_p90": r.steady_fan_p90,
+            "steady_temp_stddev_p50": r.steady_temp_stddev_p50,
+            "steady_temp_stddev_p90": r.steady_temp_stddev_p90,
+            "cool_down_rate_p50": r.cool_down_rate_p50,
+            "typical_duration_p50": r.typical_duration_p50,
+            "computed_at": r.computed_at.isoformat() if r.computed_at else None,
+        })
+    return {
+        "baselines": out,
+        "firmware_version": firmware_version,
+    }
+
+
+@router.get("/cook-behavior/backtest")
+def cook_behavior_backtest(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Latest self-evaluation run: per (band, metric) coverage against
+    p10-p90 bands. Drift shows as coverage << 80%."""
+    from app.services.cook_behavior_backtest import load_latest_drift
+    rows = load_latest_drift(db)
+    return {"rows": rows}
+
+
+@router.post("/cook-behavior/rebuild")
+def cook_behavior_rebuild(
+    request: Request,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Manual trigger — owner-only. Rebuilds baselines + runs backtest
+    end-to-end. Normally runs nightly at 08:30 UTC via the scheduler."""
+    user = _require_session_user(request, db)
+    if (user.email or "").lower() != "joseph@spidergrills.com":
+        raise HTTPException(status_code=403, detail="Owner only")
+    from app.services.cook_behavior_backtest import run_cook_behavior_backtest
+    from app.services.cook_behavior_baselines import rebuild_cook_behavior_baselines
+    try:
+        bt = run_cook_behavior_backtest(db)
+    except Exception as e:
+        bt = {"error": str(e)}
+        db.rollback()
+    rb = rebuild_cook_behavior_baselines(db)
+    return {"backtest": bt, "rebuild": rb}
+
+
+@router.get("/cook-behavior/ticket/{ticket_id}")
+def cook_behavior_ticket_correlation(
+    ticket_id: str,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Fetch the pre-computed Freshdesk↔cook correlation for a ticket.
+
+    Used by support surfaces to show "this ticket was opened during a
+    cook that overshot by 85°F"."""
+    from app.models import FreshdeskCookCorrelation
+    row = db.execute(
+        select(FreshdeskCookCorrelation).where(FreshdeskCookCorrelation.ticket_id == ticket_id)
+    ).scalars().first()
+    if row is None:
+        return {"ticket_id": ticket_id, "correlation": None}
+    return {
+        "ticket_id": ticket_id,
+        "correlation": {
+            "mac": row.mac_normalized,
+            "ticket_created_at": row.ticket_created_at.isoformat() if row.ticket_created_at else None,
+            "window_start": row.window_start.isoformat() if row.window_start else None,
+            "window_end": row.window_end.isoformat() if row.window_end else None,
+            "sessions_matched": row.sessions_matched,
+            "evidence": row.evidence_json,
+            "computed_at": row.computed_at.isoformat() if row.computed_at else None,
+        },
     }
 
 

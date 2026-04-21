@@ -9,7 +9,10 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.services.beta_verdict import run_beta_verdict_pass
+from app.services.cook_behavior_baselines import rebuild_cook_behavior_baselines
+from app.services.cook_behavior_backtest import run_cook_behavior_backtest
 from app.services.cook_rederivation import run_cook_rederivation
+from app.services.freshdesk_cook_correlation import run_freshdesk_cook_correlation
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.clickup import sync_clickup
 from app.ingestion.connectors.freshdesk import sync_freshdesk
@@ -231,6 +234,37 @@ def run_beta_verdict_job() -> None:
         db.close()
 
 
+def run_cook_behavior_rebuild_job() -> None:
+    """Nightly: rebuild cook_behavior_baselines + run backtest + refresh
+    freshdesk↔cook correlations. Runs at 08:30 UTC / 04:30 ET, before the
+    beta-verdict job, so classifier predictions use today's latest stats."""
+    db = SessionLocal()
+    try:
+        # Backtest FIRST — scores the *current* (about-to-be-replaced)
+        # baselines against the latest sessions, so we can tell if the
+        # new rebuild actually improves predictive accuracy.
+        try:
+            run_cook_behavior_backtest(db)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("cook_behavior backtest failed")
+            db.rollback()
+        try:
+            rebuild_cook_behavior_baselines(db)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("cook_behavior rebuild failed")
+            db.rollback()
+        try:
+            run_freshdesk_cook_correlation(db, lookback_days=14)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("freshdesk_cook_correlation failed")
+            db.rollback()
+    finally:
+        db.close()
+
+
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_seed, "date", id="seed-on-start", max_instances=1, coalesce=True)
@@ -240,4 +274,7 @@ def build_scheduler() -> BackgroundScheduler:
     # tags. 09:00 UTC / 05:00 ET — after the main sync cycle has had a
     # chance to land any new telemetry overnight.
     scheduler.add_job(run_beta_verdict_job, "cron", hour=9, minute=0, id="beta-verdict-daily", replace_existing=True, max_instances=1, coalesce=True)
+    # Nightly cook-behavior knowledge-base rebuild + self-evaluation.
+    # Runs before beta-verdict so downstream jobs see fresh baselines.
+    scheduler.add_job(run_cook_behavior_rebuild_job, "cron", hour=8, minute=30, id="cook-behavior-nightly", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

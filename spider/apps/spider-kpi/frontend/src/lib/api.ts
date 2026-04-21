@@ -737,8 +737,30 @@ export const api = {
       { signal },
     )
   },
-  firmwareFleetControlHealth: (signal?: AbortSignal) =>
-    request<FirmwareFleetControlHealth>('/api/firmware/fleet/control-health', { signal }),
+  firmwareCookBehaviorBaselines: (firmware_version?: string, signal?: AbortSignal) => {
+    const qs = firmware_version ? `?firmware_version=${encodeURIComponent(firmware_version)}` : ''
+    return request<CookBehaviorBaselinesResponse>(`/api/firmware/cook-behavior/baselines${qs}`, { signal })
+  },
+  firmwareCookBehaviorBacktest: (signal?: AbortSignal) =>
+    request<CookBehaviorBacktestResponse>('/api/firmware/cook-behavior/backtest', { signal }),
+  firmwareCookBehaviorRebuild: () =>
+    request<{ backtest: unknown; rebuild: unknown }>('/api/firmware/cook-behavior/rebuild', { method: 'POST' }),
+  firmwareCookBehaviorTicket: (ticket_id: string, signal?: AbortSignal) =>
+    request<CookBehaviorTicketResponse>(`/api/firmware/cook-behavior/ticket/${encodeURIComponent(ticket_id)}`, { signal }),
+  firmwareFleetControlHealth: (
+    params?: { sort?: string; sort_dir?: 'asc' | 'desc'; state?: string },
+    signal?: AbortSignal,
+  ) => {
+    const qs = new URLSearchParams()
+    if (params?.sort) qs.set('sort', params.sort)
+    if (params?.sort_dir) qs.set('sort_dir', params.sort_dir)
+    if (params?.state) qs.set('state', params.state)
+    const s = qs.toString()
+    return request<FirmwareFleetControlHealth>(
+      `/api/firmware/fleet/control-health${s ? `?${s}` : ''}`,
+      { signal },
+    )
+  },
   firmwareDeviceControlSignals: (mac: string, signal?: AbortSignal) =>
     request<FirmwareDeviceControlSignals>(
       `/api/firmware/device/${encodeURIComponent(mac)}/control-signals`, { signal },
@@ -997,26 +1019,122 @@ export interface FirmwareDeviceControlSignals {
   signals: FirmwareControlSignals | null
 }
 
+export type CookState =
+  | 'ramping_up'
+  | 'in_control'
+  | 'out_of_control'
+  | 'cooling_down'
+  | 'manual_mode'
+  | 'error'
+  | 'idle'
+  | 'unknown'
+
 export interface FirmwareFleetControlDevice {
   mac: string | null
   device_id: string
+  state: CookState
+  state_label: string
+  confidence: number
+  reason: string
   target_temp: number | null
   current_temp: number | null
   gap_f: number | null
   intensity: number | null
+  engaged: boolean | null
+  door_open: boolean | null
+  paused: boolean | null
+  error_count: number
+  ramp_elapsed_seconds: number | null
+  ramp_budget_seconds: number | null
+  expected_gap_f: number | null
+  is_anomalous: boolean
   firmware_version: string | null
   sample_timestamp: string | null
 }
 
 export interface FirmwareFleetControlHealth {
   window_seconds: number
-  in_control_gap_f: number
   total_reporting_devices: number
   active_cooks: number
-  in_control: number
-  out_of_control_count: number
-  out_of_control_devices: FirmwareFleetControlDevice[]
+  tallies: Partial<Record<CookState, number>>
+  anomalous_count: number
+  baseline_driven: boolean
+  devices: FirmwareFleetControlDevice[]
   fetched_at: string
+}
+
+export interface CookBehaviorBaseline {
+  target_temp_band: string
+  firmware_version: string | null
+  baseline_version: number
+  sample_size: number
+  ramp_time_p10: number | null
+  ramp_time_p50: number | null
+  ramp_time_p90: number | null
+  steady_fan_p10: number | null
+  steady_fan_p50: number | null
+  steady_fan_p90: number | null
+  steady_temp_stddev_p50: number | null
+  steady_temp_stddev_p90: number | null
+  cool_down_rate_p50: number | null
+  typical_duration_p50: number | null
+  computed_at: string | null
+}
+
+export interface CookBehaviorBaselinesResponse {
+  baselines: CookBehaviorBaseline[]
+  firmware_version: string | null
+}
+
+export interface CookBehaviorBacktestRow {
+  run_at: string | null
+  baseline_version: number
+  target_temp_band: string
+  metric: string
+  sample_size: number
+  coverage_pct: number | null
+  median_error_pct: number | null
+  in_band_count: number
+  below_band_count: number
+  above_band_count: number
+}
+
+export interface CookBehaviorBacktestResponse {
+  rows: CookBehaviorBacktestRow[]
+}
+
+export interface CookCorrelationSessionSummary {
+  session_id: string | null
+  start: string | null
+  end: string | null
+  duration_seconds: number | null
+  target_temp: number | null
+  cook_intent: string | null
+  cook_outcome: string | null
+  held_target: boolean | null
+  in_control_pct: number | null
+  disturbance_count: number | null
+  max_overshoot_f: number | null
+  max_undershoot_f: number | null
+  error_count: number | null
+  firmware_version: string | null
+}
+
+export interface CookBehaviorTicketResponse {
+  ticket_id: string
+  correlation: {
+    mac: string | null
+    ticket_created_at: string | null
+    window_start: string | null
+    window_end: string | null
+    sessions_matched: number
+    evidence: {
+      mac_resolution?: boolean
+      device_ids?: string[]
+      sessions?: CookCorrelationSessionSummary[]
+    }
+    computed_at: string | null
+  } | null
 }
 
 export interface FirmwareOverviewMetrics {

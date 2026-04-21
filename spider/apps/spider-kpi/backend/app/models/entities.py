@@ -1428,3 +1428,95 @@ class BetaCohortMember(TimestampMixin, Base):
     ota_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     verdict_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class CookBehaviorBaseline(TimestampMixin, Base):
+    """Per (target_temp_band, firmware_version) learned statistics on how
+    cooks actually progress. Consumed by ``cook_state_classifier`` to
+    replace heuristic ramp budgets and post-reach tolerances. Rebuilt
+    nightly from TelemetrySession.
+
+    ``firmware_version`` NULL = "all firmware" rollup row (used when no
+    firmware-specific bin has enough samples).
+    """
+    __tablename__ = "cook_behavior_baselines"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_temp_band", "firmware_version", "baseline_version",
+            name="uq_cook_behavior_baselines_band_fw_ver",
+        ),
+        Index("ix_cook_behavior_baselines_band", "target_temp_band"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_temp_band: Mapped[str] = mapped_column(String(16), nullable=False)
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64))
+    baseline_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Ramp time (seconds from engage to within ±15°F of target).
+    ramp_time_p10: Mapped[Optional[float]] = mapped_column(Float)
+    ramp_time_p50: Mapped[Optional[float]] = mapped_column(Float)
+    ramp_time_p90: Mapped[Optional[float]] = mapped_column(Float)
+    # Steady-state fan intensity (0-100%).
+    steady_fan_p10: Mapped[Optional[float]] = mapped_column(Float)
+    steady_fan_p50: Mapped[Optional[float]] = mapped_column(Float)
+    steady_fan_p90: Mapped[Optional[float]] = mapped_column(Float)
+    # Post-reach temp stddev (°F).
+    steady_temp_stddev_p50: Mapped[Optional[float]] = mapped_column(Float)
+    steady_temp_stddev_p90: Mapped[Optional[float]] = mapped_column(Float)
+    # Cool-down rate (°F/min).
+    cool_down_rate_p50: Mapped[Optional[float]] = mapped_column(Float)
+    # Typical cook duration (seconds).
+    typical_duration_p50: Mapped[Optional[float]] = mapped_column(Float)
+    computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class CookBehaviorBacktest(TimestampMixin, Base):
+    """Self-evaluation scaffold: on each nightly rebuild, score the
+    PRIOR baseline version against the last N sessions — how often did
+    actual ramp times, steady fans, etc. fall inside the predicted p10-p90
+    bands? Drift metrics surface on the firmware overview.
+    """
+    __tablename__ = "cook_behavior_backtests"
+    __table_args__ = (
+        UniqueConstraint("run_at", "target_temp_band", "metric", name="uq_cook_behavior_backtests_run_band_metric"),
+        Index("ix_cook_behavior_backtests_run_at", "run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    baseline_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_temp_band: Mapped[str] = mapped_column(String(16), nullable=False)
+    metric: Mapped[str] = mapped_column(String(32), nullable=False)   # ramp_time | steady_fan | steady_temp_stddev
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    in_band_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    below_band_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    above_band_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    coverage_pct: Mapped[Optional[float]] = mapped_column(Float)
+    median_error_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+
+class FreshdeskCookCorrelation(TimestampMixin, Base):
+    """Per-ticket bridge to cook sessions near the ticket's creation time.
+
+    Built by ``freshdesk_cook_correlation`` — for each Freshdesk ticket
+    whose requester has a MAC linkage via ``AppSideDeviceObservation``,
+    find TelemetrySession rows for that MAC within ±N hours of the
+    ticket creation and summarize them. Surfaces on VOC pages: "this
+    ticket was opened during a cook that overshot by 85°F".
+    """
+    __tablename__ = "freshdesk_cook_correlations"
+    __table_args__ = (
+        UniqueConstraint("ticket_id", name="uq_freshdesk_cook_correlations_ticket"),
+        Index("ix_freshdesk_cook_correlations_mac", "mac_normalized"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mac_normalized: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    ticket_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    sessions_matched: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    evidence_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
