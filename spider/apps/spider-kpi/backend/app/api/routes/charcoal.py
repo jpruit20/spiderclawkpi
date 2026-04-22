@@ -690,9 +690,19 @@ class CohortModelInput(BaseModel):
         default=90, ge=7, le=365,
         description="Days of telemetry used to derive per-device burn rate.",
     )
+    target_percentile_floor: float = Field(
+        default=0.0, ge=0.0, le=95.0,
+        description=(
+            "Burn-rate percentile floor for the targeted slice. 0 = target "
+            "everyone (the addressable cohort). 75 = only target devices at "
+            "or above the 75th percentile of monthly pounds (i.e. the top "
+            "25% by burn). signup_pct applies to the targeted slice, and "
+            "per-sub economics use its conditional mean."
+        ),
+    )
     signup_pct: float = Field(
         default=15.0, ge=0.0, le=100.0,
-        description="Percentage of the eligible fleet we assume opts into JIT.",
+        description="Percentage of the TARGETED slice we assume opts into JIT.",
     )
     partner_product_id: int = Field(
         ..., description="Primary SKU the cohort subscribes to.",
@@ -734,6 +744,7 @@ def modeling_cohort(
         product_families=payload.product_families,
         min_cooks_in_window=payload.min_cooks_in_window,
         lookback_days=payload.lookback_days,
+        target_percentile_floor=payload.target_percentile_floor,
         signup_pct=payload.signup_pct,
         partner_product_id=payload.partner_product_id,
         margin_pct=payload.margin_pct,

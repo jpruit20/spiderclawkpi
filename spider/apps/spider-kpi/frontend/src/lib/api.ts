@@ -1424,6 +1424,8 @@ export interface CharcoalCohortModelInput {
   product_families?: string[] | null
   min_cooks_in_window?: number
   lookback_days?: number
+  /** 0 = target everyone (addressable). 75 = target top 25% by monthly burn. */
+  target_percentile_floor?: number
   signup_pct?: number
   partner_product_id: number
   margin_pct?: number
@@ -1451,6 +1453,7 @@ export interface CharcoalCohortModelResponse {
     product_families: string[] | null
     min_cooks_in_window: number
     lookback_days: number
+    target_percentile_floor: number
     signup_pct: number
     partner_product_id: number
     margin_pct: number
@@ -1476,6 +1479,20 @@ export interface CharcoalCohortModelResponse {
     p90_lb_per_month_per_device: number
     families_breakdown: Record<string, number>
     lookback_days: number
+  }
+  targeted: {
+    percentile_floor: number
+    threshold_lb_per_month: number
+    targeted_devices: number
+    addressable_devices: number
+    targeted_share_of_addressable_pct: number
+    mean_lb_per_month_per_device: number
+    median_lb_per_month_per_device: number
+    p25_lb_per_month_per_device: number
+    p75_lb_per_month_per_device: number
+    p90_lb_per_month_per_device: number
+    families_breakdown: Record<string, number>
+    lift_over_addressable_mean: number
   }
   projected_initial_signups: number
   per_subscriber_monthly: {

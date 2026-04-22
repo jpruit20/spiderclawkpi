@@ -1437,6 +1437,17 @@ function EnrollmentTab() {
 const FAMILY_OPTIONS = ['Weber Kettle', 'Huntsman', 'Unknown'] as const
 const HORIZON_OPTIONS = [6, 12, 24] as const
 const LOOKBACK_OPTIONS = [30, 60, 90, 180] as const
+// Percentile floors for targeting heavy users. 0 = target all eligible devices;
+// 50 = top half by monthly burn; 75 = top 25%; 90 = top 10%. Signup rate and
+// per-sub economics apply to the targeted slice (conditional mean), not the
+// whole addressable cohort — a heavy-user program has different calculus.
+const TARGETING_OPTIONS = [0, 50, 75, 90] as const
+const TARGETING_LABELS: Record<number, string> = {
+  0: 'All eligible',
+  50: 'Top 50%',
+  75: 'Top 25%',
+  90: 'Top 10%',
+}
 const USD = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 
 function ModelingTab() {
@@ -1448,6 +1459,7 @@ function ModelingTab() {
   const [families, setFamilies] = useState<string[]>([...FAMILY_OPTIONS])
   const [minCooks, setMinCooks] = useState(1)
   const [lookback, setLookback] = useState(90)
+  const [targetFloor, setTargetFloor] = useState<number>(0)
   const [signupPct, setSignupPct] = useState(15)
   const [marginPct, setMarginPct] = useState(10)
   const [churnPct, setChurnPct] = useState(2)
@@ -1481,13 +1493,14 @@ function ModelingTab() {
       product_families: families.length === FAMILY_OPTIONS.length ? null : families,
       min_cooks_in_window: minCooks,
       lookback_days: lookback,
+      target_percentile_floor: targetFloor,
       signup_pct: signupPct,
       partner_product_id: productId,
       margin_pct: marginPct,
       monthly_churn_pct: churnPct,
       horizon_months: horizon,
     }
-  }, [productId, families, minCooks, lookback, signupPct, marginPct, churnPct, horizon])
+  }, [productId, families, minCooks, lookback, targetFloor, signupPct, marginPct, churnPct, horizon])
 
   // Re-model on every slider change (debounced + abortable).
   useEffect(() => {
@@ -1594,9 +1607,34 @@ function ModelingTab() {
             suffix="d" onChange={setLookback}
             help="How far back to look for burn-rate signal. Longer = smoother, shorter = more current." />
 
+          {/* Targeting — picks WHO we target inside the addressable cohort.
+              signup_pct then applies only to this slice, and per-sub burn
+              rate uses the slice's conditional mean (heavier than overall). */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Targeting
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {TARGETING_OPTIONS.map(o => (
+                <button
+                  key={o}
+                  type="button"
+                  className={`range-button${o === targetFloor ? ' active' : ''}`}
+                  onClick={() => setTargetFloor(o)}
+                  style={{ fontSize: 11 }}
+                >
+                  {TARGETING_LABELS[o]}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>
+              Narrow to heavy users by burn-rate percentile. Signup rate + per-sub economics use the slice (not the overall mean).
+            </div>
+          </div>
+
           <Slider label="Signup rate" value={signupPct} min={0} max={100} step={1}
             onChange={setSignupPct} suffix="%"
-            help="Assumed % of the eligible cohort that opts into JIT auto-ship." />
+            help="Assumed % of the TARGETED slice that opts into JIT auto-ship." />
 
           <Slider label="SG margin" value={marginPct} min={0} max={40} step={0.5}
             onChange={setMarginPct} suffix="%"
@@ -1674,11 +1712,62 @@ function SegSelect<T extends number>({ label, value, options, suffix, onChange, 
 }
 
 function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
-  const { cohort, sku, horizon_totals, month_1, per_subscriber_monthly, projected_initial_signups, monthly_curve } = result
+  const { cohort, targeted, sku, horizon_totals, month_1, per_subscriber_monthly, projected_initial_signups, monthly_curve } = result
   const families = Object.entries(cohort.families_breakdown).sort((a, b) => b[1] - a[1])
+  const targetedFamilies = Object.entries(targeted.families_breakdown).sort((a, b) => b[1] - a[1])
+  const isTargeted = targeted.percentile_floor > 0
+  const targetingLabel = TARGETING_LABELS[targeted.percentile_floor] || `Top ${(100 - targeted.percentile_floor).toFixed(0)}%`
 
   return (
     <>
+      {/* Addressable → Targeted callout. Tells Joseph at a glance how
+          much narrower the actual opt-in pool is vs the whole market,
+          and how much richer the targeted user is per device. */}
+      <section className="card" style={{ borderLeft: `3px solid ${isTargeted ? 'var(--orange)' : 'var(--blue)'}` }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Targeting strategy
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
+              {isTargeted ? targetingLabel : 'All eligible devices'}
+              <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
+                {isTargeted
+                  ? `Targeting devices burning ≥ ${targeted.threshold_lb_per_month.toFixed(1)} lb/mo`
+                  : 'No burn-rate filter — average user model'}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Addressable</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{fmtInt(targeted.addressable_devices)}</div>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>{cohort.mean_lb_per_month_per_device.toFixed(1)} lb/mo mean</div>
+            </div>
+            <div style={{ fontSize: 16, color: 'var(--muted)', alignSelf: 'center' }}>→</div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Targeted</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: isTargeted ? 'var(--orange)' : undefined }}>
+                {fmtInt(targeted.targeted_devices)}
+                <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400, marginLeft: 6 }}>
+                  ({targeted.targeted_share_of_addressable_pct.toFixed(0)}%)
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                {targeted.mean_lb_per_month_per_device.toFixed(1)} lb/mo mean
+                {isTargeted && targeted.lift_over_addressable_mean > 1
+                  ? ` · ${targeted.lift_over_addressable_mean.toFixed(2)}× lift`
+                  : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10, lineHeight: 1.5 }}>
+          Signup rate + per-sub economics use the <strong>targeted</strong> slice's conditional mean, not the whole
+          cohort's mean. Heavy-user targeting compounds: {targeted.targeted_devices}× signup_pct× bags/mo× retail× margin.
+        </div>
+      </section>
+
       {/* Top-line KPIs */}
       <section className="card">
         <div className="venom-panel-head">
@@ -1688,9 +1777,12 @@ function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
           </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-          <Tile label="Eligible devices" value={fmtInt(cohort.eligible_devices)} />
+          <Tile label="Targeted devices" value={fmtInt(targeted.targeted_devices)}
+            sub={isTargeted
+              ? `of ${fmtInt(targeted.addressable_devices)} addressable`
+              : 'whole addressable pool'} />
           <Tile label="Initial signups" value={fmtInt(Math.round(projected_initial_signups))}
-            sub={`${result.inputs.signup_pct}% of cohort`} state="info" />
+            sub={`${result.inputs.signup_pct}% of targeted`} state="info" />
           <Tile label={`GMV · ${horizon_totals.months}mo`} value={USD(horizon_totals.gmv_usd)}
             sub={`Month 1: ${USD(month_1.gmv_usd)}`} />
           <Tile label={`SG margin · ${horizon_totals.months}mo`}
@@ -1707,21 +1799,23 @@ function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
         </div>
       </section>
 
-      {/* Per-sub economics + cohort stats */}
+      {/* Per-sub economics + burn distributions (addressable vs targeted) */}
       <section className="card">
         <div className="venom-panel-head"><strong>Per-subscriber monthly</strong></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 14 }}>
           <Tile label="Burn rate"
             value={`${per_subscriber_monthly.lb.toFixed(1)} lb/mo`}
-            sub={`${per_subscriber_monthly.bags.toFixed(2)} bags/mo`} />
+            sub={`${per_subscriber_monthly.bags.toFixed(2)} bags/mo · targeted mean`}
+            state={isTargeted ? 'info' : undefined} />
           <Tile label="Monthly GMV / sub" value={USD(per_subscriber_monthly.gmv_usd)} />
           <Tile label="Monthly SG margin / sub"
             value={USD(per_subscriber_monthly.sg_margin_usd)} />
           <Tile label="Monthly JD payout / sub"
             value={USD(per_subscriber_monthly.jd_payout_usd)} />
         </div>
+
         <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-          Cohort burn-rate distribution (lb/month per device)
+          Addressable burn-rate distribution (lb/month per device · all eligible)
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: 8, marginBottom: 12 }}>
           <Tile label="p25" value={`${cohort.p25_lb_per_month_per_device.toFixed(1)}`} />
@@ -1730,9 +1824,31 @@ function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
           <Tile label="p75" value={`${cohort.p75_lb_per_month_per_device.toFixed(1)}`} />
           <Tile label="p90" value={`${cohort.p90_lb_per_month_per_device.toFixed(1)}`} />
         </div>
+
+        {isTargeted ? (
+          <>
+            <div style={{ fontSize: 10, color: 'var(--orange)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Targeted burn-rate distribution ({targetingLabel})
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: 8, marginBottom: 12 }}>
+              <Tile label="p25" value={`${targeted.p25_lb_per_month_per_device.toFixed(1)}`} />
+              <Tile label="Median" value={`${targeted.median_lb_per_month_per_device.toFixed(1)}`} />
+              <Tile label="Mean" value={`${targeted.mean_lb_per_month_per_device.toFixed(1)}`} state="info" />
+              <Tile label="p75" value={`${targeted.p75_lb_per_month_per_device.toFixed(1)}`} />
+              <Tile label="p90" value={`${targeted.p90_lb_per_month_per_device.toFixed(1)}`} />
+            </div>
+          </>
+        ) : null}
+
         {families.length > 0 ? (
           <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-            Family mix: {families.map(([f, n]) => `${f} ${fmtInt(n)}`).join(' · ')}
+            Addressable family mix: {families.map(([f, n]) => `${f} ${fmtInt(n)}`).join(' · ')}
+            {isTargeted && targetedFamilies.length > 0 ? (
+              <>
+                <br />
+                Targeted family mix: {targetedFamilies.map(([f, n]) => `${f} ${fmtInt(n)}`).join(' · ')}
+              </>
+            ) : null}
           </div>
         ) : null}
       </section>

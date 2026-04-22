@@ -358,6 +358,7 @@ def compute_cohort_model(
     product_families: Optional[list[str]] = None,
     min_cooks_in_window: int = 0,
     lookback_days: int = 90,
+    target_percentile_floor: float = 0.0,
     signup_pct: float = 15.0,
     partner_product_id: Optional[int] = None,
     margin_pct: float = 10.0,
@@ -367,17 +368,28 @@ def compute_cohort_model(
 ) -> dict[str, Any]:
     """Core cohort modeler.
 
-    Selects every active device (session activity within
-    ``lookback_days``) that matches ``product_families`` and has at
-    least ``min_cooks_in_window`` qualifying cook sessions. For each
-    device, runs the thermal model on real session data to get a
-    monthly burn estimate. Applies ``signup_pct`` to count projected
-    subscribers, ``monthly_churn_pct`` to decay them across the
-    horizon, and the SKU's retail price × ``margin_pct`` to get GMV /
-    Spider Grills margin / JD payout.
+    Two-stage cohort definition:
+      1. **Addressable** — every active device matching
+         ``product_families`` + ``min_cooks_in_window`` in the
+         ``lookback_days`` window. This is the "market".
+      2. **Targeted** — the subset of the addressable pool whose
+         monthly burn rate sits at or above
+         ``target_percentile_floor`` (e.g. 75 = top 25% by burn).
+         ``signup_pct`` applies to this narrower pool, NOT to the
+         whole addressable market. Per-subscriber burn rate also uses
+         the targeted slice's mean — not the overall mean — because
+         JIT adoption self-selects heavy users and the conditional
+         mean is much higher than the unconditional mean.
 
-    No side effects — this is a pure read-only projection. The UI can
-    hit it on every slider change.
+    That distinction swings the numbers a lot: at 15% signup the
+    overall-mean model projects SG margin of ~$700/mo, but the same
+    15% applied to the top quartile with the top-quartile's
+    conditional mean projects very differently. Toggle
+    ``target_percentile_floor`` between 0, 50, 75, 90 to see it.
+
+    Applies ``monthly_churn_pct`` geometric decay over ``horizon_months``
+    and the SKU's retail × ``margin_pct`` to get GMV / SG margin / JD
+    payout. No side effects — safe to spam on every slider change.
     """
     now = now or datetime.now(timezone.utc)
     lookback_days = max(7, min(int(lookback_days), 365))
@@ -385,6 +397,7 @@ def compute_cohort_model(
     signup_pct = max(0.0, min(float(signup_pct), 100.0))
     monthly_churn_pct = max(0.0, min(float(monthly_churn_pct), 50.0))
     margin_pct = max(0.0, min(float(margin_pct), 100.0))
+    target_percentile_floor = max(0.0, min(float(target_percentile_floor), 95.0))
 
     cutoff = now - timedelta(days=lookback_days)
     families_set = (
@@ -483,7 +496,7 @@ def compute_cohort_model(
             "lb_per_month": lb_per_month,
         })
 
-    # Cohort stats
+    # Addressable cohort stats (everyone who matches family/cooks filter)
     lb_series = sorted(d["lb_per_month"] for d in eligible)
     families_breakdown: dict[str, int] = {}
     for d in eligible:
@@ -501,13 +514,55 @@ def compute_cohort_model(
         "lookback_days": lookback_days,
     }
 
+    # Targeting: narrow to devices at or above the burn-rate percentile
+    # floor. This is the pool signup_pct applies to; its conditional
+    # mean (NOT the overall mean) drives per-subscriber economics.
+    if target_percentile_floor > 0.0 and lb_series:
+        threshold_lb = _percentile(lb_series, target_percentile_floor / 100.0)
+        targeted = [d for d in eligible if d["lb_per_month"] >= threshold_lb]
+    else:
+        threshold_lb = 0.0
+        targeted = list(eligible)
+
+    targeted_lb_series = sorted(d["lb_per_month"] for d in targeted)
+    targeted_families: dict[str, int] = {}
+    for d in targeted:
+        targeted_families[d["product_family"]] = targeted_families.get(d["product_family"], 0) + 1
+    targeted_mean_lb_per_month = (
+        sum(targeted_lb_series) / len(targeted_lb_series)
+    ) if targeted_lb_series else 0.0
+    targeted_stats = {
+        "percentile_floor": round(target_percentile_floor, 1),
+        "threshold_lb_per_month": round(threshold_lb, 3),
+        "targeted_devices": len(targeted),
+        "addressable_devices": len(eligible),
+        "targeted_share_of_addressable_pct": round(
+            100.0 * len(targeted) / len(eligible), 1
+        ) if eligible else 0.0,
+        "mean_lb_per_month_per_device": round(targeted_mean_lb_per_month, 3),
+        "median_lb_per_month_per_device": round(_percentile(targeted_lb_series, 0.5), 3),
+        "p25_lb_per_month_per_device": round(_percentile(targeted_lb_series, 0.25), 3),
+        "p75_lb_per_month_per_device": round(_percentile(targeted_lb_series, 0.75), 3),
+        "p90_lb_per_month_per_device": round(_percentile(targeted_lb_series, 0.9), 3),
+        "families_breakdown": targeted_families,
+        # How much richer is the targeted slice vs the whole cohort?
+        # Useful gut-check for "does targeting heavy users actually move
+        # the needle" — if this ratio is ~1.0, targeting is buying
+        # nothing; if it's 2x+, it's the main economic lever.
+        "lift_over_addressable_mean": (
+            round(targeted_mean_lb_per_month / mean_lb_per_month, 2)
+            if mean_lb_per_month > 0 else 1.0
+        ),
+    }
+
     # Projected signups + monthly / horizon projections with churn
     retail = float(sku.retail_price_usd or 0.0)
     margin_rate = margin_pct / 100.0
     churn_rate = monthly_churn_pct / 100.0
 
-    initial_signups = len(eligible) * (signup_pct / 100.0)
-    per_sub_monthly_lb = mean_lb_per_month
+    # Signups + per-sub burn now derive from the TARGETED slice.
+    initial_signups = len(targeted) * (signup_pct / 100.0)
+    per_sub_monthly_lb = targeted_mean_lb_per_month
     per_sub_monthly_bags = (per_sub_monthly_lb / bag_size_lb) if bag_size_lb else 0.0
     per_sub_monthly_gmv = per_sub_monthly_bags * retail
     per_sub_monthly_margin = per_sub_monthly_gmv * margin_rate
@@ -561,6 +616,7 @@ def compute_cohort_model(
             "product_families": sorted(families_set) if families_set else None,
             "min_cooks_in_window": min_cooks_in_window,
             "lookback_days": lookback_days,
+            "target_percentile_floor": round(target_percentile_floor, 1),
             "signup_pct": round(signup_pct, 2),
             "partner_product_id": sku.id,
             "margin_pct": round(margin_pct, 2),
@@ -578,6 +634,7 @@ def compute_cohort_model(
             "available": sku.available,
         },
         "cohort": cohort_stats,
+        "targeted": targeted_stats,
         "projected_initial_signups": round(initial_signups, 1),
         "per_subscriber_monthly": {
             "lb": round(per_sub_monthly_lb, 3),
