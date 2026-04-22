@@ -22,7 +22,7 @@ from typing import Any, Optional
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.models import CharcoalJITSubscription, ShopifyOrderEvent, TelemetrySession
+from app.models import CharcoalJITSubscription, PartnerProduct, ShopifyOrderEvent, TelemetrySession
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +212,15 @@ def forecast_subscription(
     total_briq = sum(r[1] for r in fuel_rows)
     lb_per_week = (total_lump if sub.fuel_preference == "lump" else total_briq) / weeks
 
+    # Resolve the partner product (if any) so the financial model can
+    # use today's retail price. Subscription.bag_size_lb is the
+    # authoritative bag size — if a partner product is linked AND has
+    # a bag_size, we honor the partner's; otherwise keep what the user
+    # chose at enrollment.
+    partner_product = None
+    if sub.partner_product_id:
+        partner_product = db.get(PartnerProduct, sub.partner_product_id)
+
     if lb_per_week <= 0:
         payload = {
             "computed_at": now.isoformat(),
@@ -224,8 +233,14 @@ def forecast_subscription(
         sub.next_ship_after = None
         return payload
 
+    # Effective bag size: partner product's bag_size wins if present.
+    effective_bag_lb = (
+        partner_product.bag_size_lb
+        if partner_product and partner_product.bag_size_lb
+        else sub.bag_size_lb
+    )
     lb_per_day = lb_per_week / 7.0
-    days_per_bag = sub.bag_size_lb / lb_per_day
+    days_per_bag = effective_bag_lb / lb_per_day
     next_ship_in_days = max(0.0, days_per_bag - sub.lead_time_days - sub.safety_stock_days)
     next_ship_after = now + timedelta(days=next_ship_in_days)
 
@@ -234,14 +249,41 @@ def forecast_subscription(
         d = now + timedelta(days=next_ship_in_days + days_per_bag * i)
         upcoming.append(d.date().isoformat())
 
+    # ── Financial model ───────────────────────────────────────────
+    # Customer pays the retail price (partner's storefront price).
+    # Spider Grills takes margin_pct; remainder flows to the partner.
+    # No payment processing fees / shipping modeled here yet — those
+    # plug in when the live trigger lands.
+    financial = None
+    if partner_product is not None and partner_product.retail_price_usd > 0:
+        retail = float(partner_product.retail_price_usd)
+        margin_pct = float(sub.margin_pct or 0.0)
+        per_ship_revenue = retail
+        per_ship_margin = retail * (margin_pct / 100.0)
+        per_ship_partner_payout = retail - per_ship_margin
+        shipments_per_year = (lb_per_week * 52.0) / max(1, effective_bag_lb)
+        financial = {
+            "partner": partner_product.partner,
+            "partner_product_title": partner_product.title,
+            "bag_size_lb": effective_bag_lb,
+            "retail_price_usd": round(retail, 2),
+            "margin_pct": round(margin_pct, 2),
+            "per_ship_revenue_usd": round(per_ship_revenue, 2),
+            "per_ship_margin_usd": round(per_ship_margin, 2),
+            "per_ship_partner_payout_usd": round(per_ship_partner_payout, 2),
+            "shipments_per_year": round(shipments_per_year, 2),
+            "annual_revenue_usd": round(shipments_per_year * per_ship_revenue, 2),
+            "annual_margin_usd": round(shipments_per_year * per_ship_margin, 2),
+            "annual_partner_payout_usd": round(shipments_per_year * per_ship_partner_payout, 2),
+        }
+
     payload = {
         "computed_at": now.isoformat(),
         "status": "ok",
         "lookback_days": lookback_days,
         "cooks_in_window": len(fuel_rows),
-        "total_cook_hours": sum((r[2] and 0) + (0) for r in fuel_rows) or None,  # placeholder
         "fuel_preference": sub.fuel_preference,
-        "bag_size_lb": sub.bag_size_lb,
+        "bag_size_lb": effective_bag_lb,
         "lead_time_days": sub.lead_time_days,
         "safety_stock_days": sub.safety_stock_days,
         "lb_per_week": round(lb_per_week, 3),
@@ -249,7 +291,8 @@ def forecast_subscription(
         "days_per_bag": round(days_per_bag, 2),
         "next_ship_in_days": round(next_ship_in_days, 2),
         "upcoming_ship_dates": upcoming,
-        "annual_bags_est": round(lb_per_week * 52.0 / max(1, sub.bag_size_lb), 2),
+        "annual_bags_est": round(lb_per_week * 52.0 / max(1, effective_bag_lb), 2),
+        "financial": financial,
     }
     # Also include the cross-fuel number so the UI can show "if you
     # switched to briquettes you'd need X lb/week instead." Useful if

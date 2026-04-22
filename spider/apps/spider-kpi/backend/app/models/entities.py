@@ -1613,6 +1613,40 @@ class AISelfGrade(Base):
     usage_json: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
+class PartnerProduct(TimestampMixin, Base):
+    """Upstream partner product catalog — currently just Jealous Devil,
+    generic shape so Royal Oak / Kingsford / etc can slot in later.
+
+    A periodic scraper (``app.services.partner_catalog``) pulls the
+    partner's public storefront JSON and upserts one row per product
+    variant. Prices auto-update whenever the partner changes them.
+    """
+    __tablename__ = "partner_products"
+    __table_args__ = (
+        UniqueConstraint("partner", "handle", name="uq_partner_products_partner_handle"),
+        Index("ix_partner_products_partner", "partner"),
+        Index("ix_partner_products_available", "available"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    partner: Mapped[str] = mapped_column(String(64), nullable=False)
+    handle: Mapped[str] = mapped_column(String(256), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    # 'lump' | 'briquette' | 'other' — inferred from title keywords
+    fuel_type: Mapped[Optional[str]] = mapped_column(String(16))
+    # Bag weight in lb, inferred from title (e.g. "35 pounds" → 35). None
+    # if the title doesn't advertise a weight (e.g. merchandise / swag).
+    bag_size_lb: Mapped[Optional[int]] = mapped_column(Integer)
+    retail_price_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    source_url: Mapped[Optional[str]] = mapped_column(String(1024))
+    available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class CharcoalJITSubscription(TimestampMixin, Base):
     """A device enrolled in the Charcoal JIT auto-ship program.
 
@@ -1646,6 +1680,16 @@ class CharcoalJITSubscription(TimestampMixin, Base):
     bag_size_lb: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
     lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     safety_stock_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    # Partner product (Jealous Devil, Royal Oak, etc.) — when set,
+    # retail_price + bag_size flow from the scraped catalog and stay in
+    # sync automatically. If null, bag_size_lb above is used and price
+    # is absent from the financial model.
+    partner_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("partner_products.id", ondelete="SET NULL"),
+    )
+    # Spider Grills' cut on the transaction. Default 10%, tunable
+    # per subscription so we can model outlier deals.
+    margin_pct: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
     shipping_zip: Mapped[Optional[str]] = mapped_column(String(16))
     shipping_lat: Mapped[Optional[float]] = mapped_column(Float)
     shipping_lon: Mapped[Optional[float]] = mapped_column(Float)

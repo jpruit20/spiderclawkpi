@@ -8,6 +8,7 @@ import { ApiError, api } from '../lib/api'
 import type {
   CharcoalDeviceSessionsResponse, CharcoalFleetAggregateResponse, CharcoalFleetFilters,
   CharcoalJITListResponse, CharcoalJITSubscription,
+  CharcoalPartnerProduct, CharcoalPartnerProductsResponse,
 } from '../lib/api'
 import { fmtInt } from '../lib/format'
 import {
@@ -783,18 +784,58 @@ function JITTab({ params }: { params: FuelParams }) {
 
 function EnrollmentTab() {
   const [list, setList] = useState<CharcoalJITListResponse | null>(null)
+  const [products, setProducts] = useState<CharcoalPartnerProduct[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [catalogBusy, setCatalogBusy] = useState(false)
+  const [catalogMsg, setCatalogMsg] = useState<string | null>(null)
 
   const [mac, setMac] = useState('')
   const [userKey, setUserKey] = useState('')
+  const [partnerProductId, setPartnerProductId] = useState<number | null>(null)
   const [fuel, setFuel] = useState<'lump' | 'briquette'>('lump')
   const [bagLb, setBagLb] = useState(20)
   const [leadDays, setLeadDays] = useState(5)
   const [safetyDays, setSafetyDays] = useState(7)
+  const [marginPct, setMarginPct] = useState(10)
   const [zip, setZip] = useState('')
   const [notes, setNotes] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'paused' | 'cancelled'>('')
+
+  // When a partner product is picked, auto-pull fuel type + bag size
+  // so the form doesn't let you enter inconsistent values.
+  useEffect(() => {
+    if (partnerProductId == null) return
+    const p = products.find(x => x.id === partnerProductId)
+    if (p) {
+      if (p.fuel_type === 'lump' || p.fuel_type === 'briquette') setFuel(p.fuel_type)
+      if (p.bag_size_lb) setBagLb(p.bag_size_lb)
+    }
+  }, [partnerProductId, products])
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.charcoalPartnerProducts(true, ctl.signal)
+      .then(r => setProducts(r.products))
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+    return () => ctl.abort()
+  }, [])
+
+  const refreshCatalog = async () => {
+    setCatalogBusy(true)
+    setCatalogMsg('Fetching partner prices…')
+    try {
+      await api.charcoalPartnerRefresh()
+      const r = await api.charcoalPartnerProducts(true)
+      setProducts(r.products)
+      setCatalogMsg(`✓ Refreshed · ${r.count} products`)
+      setTimeout(() => setCatalogMsg(null), 4000)
+    } catch (err) {
+      setCatalogMsg(`✗ ${err instanceof ApiError ? err.message : String(err)}`)
+    } finally {
+      setCatalogBusy(false)
+    }
+  }
 
   const load = () => {
     const ctl = new AbortController()
@@ -825,6 +866,8 @@ function EnrollmentTab() {
         safety_stock_days: safetyDays,
         shipping_zip: zip.trim() || undefined,
         notes: notes.trim() || undefined,
+        partner_product_id: partnerProductId ?? undefined,
+        margin_pct: marginPct,
       })
       // Clear form + reload
       setMac(''); setUserKey(''); setZip(''); setNotes('')
@@ -878,12 +921,155 @@ function EnrollmentTab() {
   return (
     <>
       {/* Enrollment form */}
+      {/* Program-wide financial summary — aggregate the forecasts of
+          every active subscription so the whole JIT opportunity can
+          be modeled at a glance. */}
+      {(() => {
+        const active = (list?.subscriptions || []).filter(s => s.status === 'active')
+        let annualRevenue = 0
+        let annualMargin = 0
+        let annualPayout = 0
+        let annualShipments = 0
+        for (const s of active) {
+          const f = (s.last_forecast || {}) as Record<string, unknown>
+          const fin = (f.financial || null) as Record<string, unknown> | null
+          if (!fin) continue
+          annualRevenue += (fin.annual_revenue_usd as number) || 0
+          annualMargin += (fin.annual_margin_usd as number) || 0
+          annualPayout += (fin.annual_partner_payout_usd as number) || 0
+          annualShipments += (fin.shipments_per_year as number) || 0
+        }
+        const modeledCount = active.filter(s => {
+          const f = (s.last_forecast || {}) as Record<string, unknown>
+          return (f.financial as unknown) != null
+        }).length
+        return (
+          <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
+            <div className="venom-panel-head">
+              <div>
+                <strong>Program P&amp;L snapshot</strong>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                  Annualized projection across {modeledCount} active subscription{modeledCount === 1 ? '' : 's'} with a linked partner product. Scales linearly with enrollment cadence at current per-user burn rates.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'rgba(0,0,0,0.2)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Active subs modeled
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{modeledCount}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  of {active.length} active · {annualShipments.toFixed(1)} ships/yr total
+                </div>
+              </div>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderLeft: '3px solid var(--orange)', borderRadius: 8, background: 'rgba(255,178,87,0.06)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Annual revenue
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1, color: 'var(--orange)' }}>
+                  ${annualRevenue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>customer billings</div>
+              </div>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderLeft: '3px solid var(--green)', borderRadius: 8, background: 'rgba(57,208,143,0.06)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Annual margin
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1, color: 'var(--green)' }}>
+                  ${annualMargin.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>Spider Grills keeps</div>
+              </div>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderLeft: '3px solid var(--blue)', borderRadius: 8, background: 'rgba(110,168,255,0.06)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Annual payout
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1, color: 'var(--blue)' }}>
+                  ${annualPayout.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>flowed to partners</div>
+              </div>
+            </div>
+            {active.length > modeledCount ? (
+              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted)' }}>
+                <strong style={{ color: 'var(--orange)' }}>Note:</strong> {active.length - modeledCount} active subscription{active.length - modeledCount === 1 ? ' is' : 's are'} not linked to a partner product yet — those don't contribute to this P&amp;L projection. Edit them to pick an SKU from the catalog above.
+              </div>
+            ) : null}
+          </section>
+        )
+      })()}
+
+      {/* Partner catalog strip — current Jealous Devil (and future
+          Royal Oak / Kingsford) prices. Drives the enrollment form's
+          product picker + the financial modeling card below. */}
+      <section className="card" style={{ borderLeft: '3px solid #ec4899' }}>
+        <div className="venom-panel-head" style={{ alignItems: 'center' }}>
+          <div>
+            <strong>Partner charcoal catalog</strong>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              Scraped live from each partner's storefront (daily at 06:30 ET + on demand). Retail = what the customer pays = what Spider Grills bills. Spider Grills' cut is configurable below.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {catalogMsg ? <span style={{ fontSize: 11, color: 'var(--muted)' }}>{catalogMsg}</span> : null}
+            <button className="range-button" onClick={refreshCatalog} disabled={catalogBusy}>
+              {catalogBusy ? 'Refreshing…' : 'Refresh prices now'}
+            </button>
+          </div>
+        </div>
+        {products.length === 0 ? (
+          <div className="state-message">
+            No partner products loaded yet. Click "Refresh prices now" to pull the initial catalog.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
+            {products.map(p => (
+              <div
+                key={p.id}
+                style={{
+                  padding: 10,
+                  border: `1px solid ${partnerProductId === p.id ? 'var(--orange)' : 'var(--border)'}`,
+                  borderRadius: 8,
+                  background: partnerProductId === p.id ? 'rgba(255,178,87,0.08)' : 'rgba(0,0,0,0.2)',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setPartnerProductId(p.id)}
+              >
+                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  {p.partner.replace(/_/g, ' ')}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2, lineHeight: 1.3 }}>{p.title}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {p.bag_size_lb ? `${p.bag_size_lb} lb` : 'size unknown'} · {p.fuel_type || '—'}
+                  </span>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--orange)' }}>
+                    ${p.retail_price_usd.toFixed(2)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                  {p.available ? '✓ in stock' : '⚠ sold out'}
+                  {p.last_fetched_at ? ` · ${new Date(p.last_fetched_at).toLocaleDateString()}` : ''}
+                  {p.source_url ? ' · ' : ''}
+                  {p.source_url ? (
+                    <a href={p.source_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue)' }}>
+                      view
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="card" style={{ borderLeft: '3px solid var(--green)' }}>
         <div className="venom-panel-head">
           <div>
             <strong>Enroll a device in Charcoal JIT</strong>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-              Sign-up is idempotent — re-running with the same MAC updates the existing subscription rather than creating a duplicate. Nothing ships automatically yet; this populates the queue the future scheduler will read.
+              Click a partner product above first — fuel type + bag size auto-fill from the catalog, price flows through to the financial model. Sign-up is idempotent; nothing ships automatically.
             </div>
           </div>
         </div>
@@ -908,6 +1094,21 @@ function EnrollmentTab() {
             />
           </div>
           <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Partner product</label>
+            <select
+              value={partnerProductId ?? ''}
+              onChange={e => setPartnerProductId(e.target.value ? Number(e.target.value) : null)}
+              className="deci-input" style={{ width: '100%', fontSize: 12 }}
+            >
+              <option value="">— none (manual bag size) —</option>
+              {products.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.title} · ${p.retail_price_usd.toFixed(2)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Fuel preference</label>
             <select value={fuel} onChange={e => setFuel(e.target.value as 'lump' | 'briquette')} className="deci-input" style={{ width: '100%', fontSize: 12 }}>
               <option value="lump">Lump hardwood</option>
@@ -916,11 +1117,13 @@ function EnrollmentTab() {
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Bag size (lb)</label>
-            <select value={bagLb} onChange={e => setBagLb(Number(e.target.value))} className="deci-input" style={{ width: '100%', fontSize: 12 }}>
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={40}>40</option>
-            </select>
+            <input
+              type="number" min={5} max={100} value={bagLb}
+              onChange={e => setBagLb(Number(e.target.value) || 20)}
+              className="deci-input"
+              style={{ width: '100%', fontSize: 12 }}
+              title={partnerProductId != null ? 'Set from partner product; edit to override' : undefined}
+            />
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Lead time (days)</label>
@@ -929,6 +1132,22 @@ function EnrollmentTab() {
           <div>
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Safety stock (days)</label>
             <input type="number" min={0} max={30} value={safetyDays} onChange={e => setSafetyDays(Number(e.target.value) || 7)} className="deci-input" style={{ width: '100%', fontSize: 12 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Spider Grills margin %</label>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="range" min={0} max={40} step={0.5} value={marginPct}
+                onChange={e => setMarginPct(Number(e.target.value))}
+                style={{ flex: 1 }}
+              />
+              <input
+                type="number" min={0} max={100} step={0.5} value={marginPct}
+                onChange={e => setMarginPct(Number(e.target.value) || 0)}
+                className="deci-input" style={{ width: 60, fontSize: 12 }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>%</span>
+            </div>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--muted)' }}>Shipping ZIP</label>
@@ -954,6 +1173,40 @@ function EnrollmentTab() {
             </button>
           </div>
         </form>
+        {/* Per-shipment price preview when a partner product is selected */}
+        {partnerProductId != null ? (() => {
+          const p = products.find(x => x.id === partnerProductId)
+          if (!p) return null
+          const retail = p.retail_price_usd
+          const margin = retail * marginPct / 100
+          const payout = retail - margin
+          return (
+            <div style={{
+              marginTop: 12, padding: '10px 12px',
+              background: 'rgba(245, 158, 11, 0.06)',
+              borderLeft: '3px solid var(--orange)', borderRadius: 6,
+              display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10,
+              fontSize: 12,
+            }}>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>Customer pays</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>${retail.toFixed(2)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>Spider Grills keeps</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--green)' }}>${margin.toFixed(2)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>Paid to {p.partner.replace(/_/g, ' ')}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--blue)' }}>${payout.toFixed(2)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>Margin rate</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{marginPct.toFixed(1)}%</div>
+              </div>
+            </div>
+          )
+        })() : null}
         {error ? <div style={{ marginTop: 10, color: 'var(--red)', fontSize: 12 }}>{error}</div> : null}
       </section>
 
@@ -1000,12 +1253,11 @@ function EnrollmentTab() {
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                   <th style={{ padding: '6px 8px' }}>MAC / user</th>
-                  <th>Fuel</th>
-                  <th>Bag</th>
-                  <th>Lead / safety</th>
-                  <th>ZIP</th>
+                  <th>Product · price</th>
+                  <th>Margin</th>
                   <th>Burn rate</th>
                   <th>Next ship</th>
+                  <th>Annual margin</th>
                   <th>Status</th>
                   <th></th>
                 </tr>
@@ -1019,6 +1271,16 @@ function EnrollmentTab() {
                   const daysUntil = nextShip
                     ? Math.max(0, Math.round((nextShip.getTime() - Date.now()) / 86400000))
                     : null
+                  const product = sub.partner_product_id != null
+                    ? products.find(x => x.id === sub.partner_product_id)
+                    : null
+                  const financial = (fc.financial || null) as Record<string, unknown> | null
+                  const annualMargin = financial && typeof financial.annual_margin_usd === 'number'
+                    ? (financial.annual_margin_usd as number)
+                    : null
+                  const perShip = financial && typeof financial.per_ship_margin_usd === 'number'
+                    ? (financial.per_ship_margin_usd as number)
+                    : null
                   return (
                     <tr key={sub.id} style={{
                       borderTop: '1px solid var(--border)',
@@ -1029,13 +1291,28 @@ function EnrollmentTab() {
                         {sub.user_key ? <div style={{ fontSize: 10, color: 'var(--muted)' }}>{sub.user_key}</div> : null}
                       </td>
                       <td>
-                        <span className={`badge ${sub.fuel_preference === 'lump' ? 'badge-warn' : 'badge-neutral'}`}>
-                          {sub.fuel_preference}
-                        </span>
+                        {product ? (
+                          <>
+                            <div style={{ fontSize: 12, fontWeight: 600 }}>{product.title.slice(0, 40)}{product.title.length > 40 ? '…' : ''}</div>
+                            <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                              {product.bag_size_lb} lb · ${product.retail_price_usd.toFixed(2)} · {sub.fuel_preference}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <span className={`badge ${sub.fuel_preference === 'lump' ? 'badge-warn' : 'badge-neutral'}`}>
+                              {sub.fuel_preference}
+                            </span>
+                            <div style={{ fontSize: 10, color: 'var(--muted)' }}>{sub.bag_size_lb} lb · no partner SKU</div>
+                          </>
+                        )}
                       </td>
-                      <td>{sub.bag_size_lb} lb</td>
-                      <td>{sub.lead_time_days}d / {sub.safety_stock_days}d</td>
-                      <td>{sub.shipping_zip || '—'}</td>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{sub.margin_pct.toFixed(1)}%</div>
+                        {perShip != null ? (
+                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>${perShip.toFixed(2)}/ship</div>
+                        ) : null}
+                      </td>
                       <td>
                         {burnRate != null ? (
                           <>
@@ -1059,6 +1336,20 @@ function EnrollmentTab() {
                             <div style={{ fontSize: 10, color: daysUntil != null && daysUntil <= 3 ? 'var(--orange)' : 'var(--muted)' }}>
                               {daysUntil != null ? `in ${daysUntil}d` : '—'}
                             </div>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--muted)' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        {annualMargin != null ? (
+                          <>
+                            <div style={{ fontWeight: 600, color: 'var(--green)' }}>${annualMargin.toFixed(0)}</div>
+                            {typeof financial?.shipments_per_year === 'number' ? (
+                              <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                                {(financial.shipments_per_year as number).toFixed(1)} ships/yr
+                              </div>
+                            ) : null}
                           </>
                         ) : (
                           <span style={{ fontSize: 10, color: 'var(--muted)' }}>—</span>

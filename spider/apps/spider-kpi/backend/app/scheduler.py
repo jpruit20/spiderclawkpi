@@ -325,6 +325,25 @@ def run_weekly_gauge_selection_job() -> None:
         db.close()
 
 
+def run_partner_catalog_refresh_job() -> None:
+    """Daily 10:30 UTC / 06:30 ET: refresh every registered partner's
+    product catalog (retail prices, stock status, new SKUs). Runs
+    before the JIT forecast job so the financial math uses today's
+    prices, not yesterday's."""
+    db = SessionLocal()
+    try:
+        from app.services.partner_catalog import refresh_all_partners
+        result = refresh_all_partners(db)
+        import logging as _log
+        _log.getLogger(__name__).info("partner catalog refresh: %s", result)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("partner catalog refresh failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_charcoal_jit_forecast_job() -> None:
     """Daily 11:00 UTC / 07:00 ET: re-forecast every non-cancelled
     Charcoal JIT subscription. Also auto-fills shipping_zip from
@@ -400,5 +419,8 @@ def build_scheduler() -> BackgroundScheduler:
     # Daily charcoal JIT forecast pass at 11:00 UTC / 07:00 ET — after
     # the overnight sync cycle so trailing-burn windows include the
     # latest sessions. Dry-run only until Joseph flips shipment triggers.
+    # Partner catalog refresh at 10:30 UTC / 06:30 ET — runs just
+    # before the JIT forecast so financial math uses today's prices.
+    scheduler.add_job(run_partner_catalog_refresh_job, "cron", hour=10, minute=30, id="partner-catalog-refresh-daily", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

@@ -25,7 +25,7 @@ from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
-from app.models import CharcoalJITSubscription, TelemetrySession
+from app.models import CharcoalJITSubscription, PartnerProduct, TelemetrySession
 from app.services.product_taxonomy import (
     FAMILY_HUNTSMAN,
     FAMILY_WEBER_KETTLE,
@@ -335,6 +335,10 @@ class JITSubscribeIn(BaseModel):
     shipping_lat: Optional[float] = None
     shipping_lon: Optional[float] = None
     notes: Optional[str] = None
+    partner_product_id: Optional[int] = Field(
+        None, description="FK to partner_products — when set, retail price + bag size flow from the partner catalog.",
+    )
+    margin_pct: float = Field(10.0, ge=0, le=100, description="Spider Grills' cut on each shipment.")
 
 
 class JITPatchIn(BaseModel):
@@ -347,6 +351,24 @@ class JITPatchIn(BaseModel):
     shipping_lon: Optional[float] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    partner_product_id: Optional[int] = None
+    margin_pct: Optional[float] = Field(None, ge=0, le=100)
+
+
+def _serialize_product(p: PartnerProduct) -> dict[str, Any]:
+    return {
+        "id": p.id,
+        "partner": p.partner,
+        "handle": p.handle,
+        "title": p.title,
+        "fuel_type": p.fuel_type,
+        "bag_size_lb": p.bag_size_lb,
+        "retail_price_usd": p.retail_price_usd,
+        "currency": p.currency,
+        "source_url": p.source_url,
+        "available": p.available,
+        "last_fetched_at": p.last_fetched_at.isoformat() if p.last_fetched_at else None,
+    }
 
 
 def _serialize_sub(row: CharcoalJITSubscription) -> dict[str, Any]:
@@ -365,6 +387,8 @@ def _serialize_sub(row: CharcoalJITSubscription) -> dict[str, Any]:
         "status": row.status,
         "enrolled_by": row.enrolled_by,
         "notes": row.notes,
+        "partner_product_id": row.partner_product_id,
+        "margin_pct": row.margin_pct,
         "last_forecast": row.last_forecast_json or {},
         "last_shipped_at": row.last_shipped_at.isoformat() if row.last_shipped_at else None,
         "next_ship_after": row.next_ship_after.isoformat() if row.next_ship_after else None,
@@ -420,7 +444,16 @@ def jit_subscribe(
             existing.shipping_lon = payload.shipping_lon
         if payload.notes is not None:
             existing.notes = payload.notes
+        if payload.partner_product_id is not None:
+            existing.partner_product_id = payload.partner_product_id
+        existing.margin_pct = float(payload.margin_pct)
         existing.status = "active"
+        # Re-forecast so the updated product/margin is reflected
+        try:
+            from app.services.charcoal_jit import forecast_subscription
+            forecast_subscription(db, existing)
+        except Exception:
+            logger.exception("re-forecast on update failed")
         db.commit()
         return {"ok": True, "action": "updated", "subscription": _serialize_sub(existing)}
 
@@ -453,6 +486,8 @@ def jit_subscribe(
         shipping_lat=ship_lat,
         shipping_lon=ship_lon,
         notes=payload.notes,
+        partner_product_id=payload.partner_product_id,
+        margin_pct=float(payload.margin_pct),
         status="active",
         enrolled_by="dashboard",
     )
@@ -523,6 +558,19 @@ def jit_patch(
         if payload.status not in VALID_STATUSES:
             raise HTTPException(status_code=400, detail=f"status must be one of {VALID_STATUSES}")
         row.status = payload.status
+    if payload.partner_product_id is not None: row.partner_product_id = payload.partner_product_id
+    if payload.margin_pct is not None: row.margin_pct = float(payload.margin_pct)
+    # Re-forecast when anything pricing-related changed so the UI
+    # reflects the new financial model immediately.
+    if any(v is not None for v in (
+        payload.partner_product_id, payload.margin_pct, payload.bag_size_lb,
+        payload.lead_time_days, payload.safety_stock_days, payload.fuel_preference,
+    )):
+        try:
+            from app.services.charcoal_jit import forecast_subscription
+            forecast_subscription(db, row)
+        except Exception:
+            logger.exception("re-forecast on patch failed")
     db.commit()
     db.refresh(row)
     return {"ok": True, "subscription": _serialize_sub(row)}
@@ -553,6 +601,42 @@ def jit_forecast_all(db: Session = Depends(db_session)) -> dict[str, Any]:
     tab so Joseph doesn't have to wait 24h to see predictions update."""
     from app.services.charcoal_jit import run_daily_forecast_pass
     return run_daily_forecast_pass(db)
+
+
+# ── Partner product catalog ──────────────────────────────────────────
+
+
+@router.get("/partners/products")
+def partners_list_products(
+    partner: Optional[str] = None,
+    available_only: bool = True,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """List upstream partner products that the JIT program can
+    fulfill against. Populates the enrollment form's product dropdown
+    and backs the financial modeling tab.
+    """
+    stmt = select(PartnerProduct).order_by(
+        PartnerProduct.partner.asc(), PartnerProduct.bag_size_lb.desc().nullslast(),
+    )
+    if partner:
+        stmt = stmt.where(PartnerProduct.partner == partner)
+    if available_only:
+        stmt = stmt.where(PartnerProduct.available.is_(True))
+    rows = db.execute(stmt).scalars().all()
+    return {
+        "products": [_serialize_product(p) for p in rows],
+        "count": len(rows),
+    }
+
+
+@router.post("/partners/refresh")
+def partners_refresh(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Manually refresh every partner's catalog. Same work the daily
+    scheduler runs — useful when Joseph wants to see today's prices
+    without waiting for the cron."""
+    from app.services.partner_catalog import refresh_all_partners
+    return refresh_all_partners(db)
 
 
 @router.delete("/jit/subscriptions/{subscription_id}")

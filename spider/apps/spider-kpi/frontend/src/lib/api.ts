@@ -295,6 +295,8 @@ export const api = {
     safety_stock_days: number
     shipping_zip?: string
     notes?: string
+    partner_product_id?: number
+    margin_pct?: number
   }) =>
     request<{ ok: boolean; action: 'created' | 'updated'; subscription: CharcoalJITSubscription }>(
       '/api/charcoal/jit/subscribe',
@@ -308,6 +310,8 @@ export const api = {
     shipping_zip: string
     status: 'active' | 'paused' | 'cancelled'
     notes: string
+    partner_product_id: number | null
+    margin_pct: number
   }>) =>
     request<{ ok: boolean; subscription: CharcoalJITSubscription }>(
       `/api/charcoal/jit/subscriptions/${id}`,
@@ -326,6 +330,16 @@ export const api = {
   charcoalJITForecastAll: () =>
     request<{ computed_at: string; considered: number; forecasted_ok: number; skipped_no_device_id: number; no_sessions: number; zero_burn: number; shipping_address_backfilled: number }>(
       '/api/charcoal/jit/forecast-all',
+      { method: 'POST', body: {}, timeoutMs: 120000 },
+    ),
+  charcoalPartnerProducts: (availableOnly = true, signal?: AbortSignal) =>
+    request<CharcoalPartnerProductsResponse>(
+      `/api/charcoal/partners/products?available_only=${availableOnly}`,
+      { signal },
+    ),
+  charcoalPartnerRefresh: () =>
+    request<{ computed_at: string; partners_refreshed: number; results: unknown[] }>(
+      '/api/charcoal/partners/refresh',
       { method: 'POST', body: {}, timeoutMs: 120000 },
     ),
   shopifySyncUnfulfilled: () =>
@@ -1384,6 +1398,40 @@ export interface CharcoalFleetAggregateResponse {
   }>
 }
 
+export interface CharcoalPartnerProduct {
+  id: number
+  partner: string
+  handle: string
+  title: string
+  fuel_type: 'lump' | 'briquette' | 'other' | null
+  bag_size_lb: number | null
+  retail_price_usd: number
+  currency: string
+  source_url: string | null
+  available: boolean
+  last_fetched_at: string | null
+}
+
+export interface CharcoalPartnerProductsResponse {
+  products: CharcoalPartnerProduct[]
+  count: number
+}
+
+export interface CharcoalJITFinancial {
+  partner: string
+  partner_product_title: string
+  bag_size_lb: number
+  retail_price_usd: number
+  margin_pct: number
+  per_ship_revenue_usd: number
+  per_ship_margin_usd: number
+  per_ship_partner_payout_usd: number
+  shipments_per_year: number
+  annual_revenue_usd: number
+  annual_margin_usd: number
+  annual_partner_payout_usd: number
+}
+
 export interface CharcoalJITSubscription {
   id: number
   device_id: string | null
@@ -1399,6 +1447,8 @@ export interface CharcoalJITSubscription {
   status: 'active' | 'paused' | 'cancelled'
   enrolled_by: string | null
   notes: string | null
+  partner_product_id: number | null
+  margin_pct: number
   last_forecast: Record<string, unknown>
   last_shipped_at: string | null
   next_ship_after: string | null
