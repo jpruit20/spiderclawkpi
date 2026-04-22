@@ -89,44 +89,52 @@ def _build_device_burn_pool(
                 return hit[1]
 
     cutoff = now - timedelta(days=lookback_days)
-    rows = db.execute(
-        select(
-            TelemetrySession.device_id,
-            TelemetrySession.grill_type,
-            TelemetrySession.firmware_version,
-            TelemetrySession.session_start,
-            TelemetrySession.session_duration_seconds,
-            TelemetrySession.target_temp,
-            TelemetrySession.actual_temp_time_series,
-        )
-        .where(TelemetrySession.device_id.is_not(None))
-        .where(TelemetrySession.device_id.notlike("mac:%"))
-        .where(TelemetrySession.session_start >= cutoff)
-        .where(TelemetrySession.session_duration_seconds >= 300)
-    ).all()
+
+    # Heavy aggregation happens in Postgres, NOT Python. The old path
+    # streamed every JSONB actual_temp_time_series (potentially
+    # hundreds of samples × 17K+ sessions = ~17 MB of JSON) over the
+    # wire and decoded it in Python — which pinned 1.5 GB of RSS and
+    # pushed the 4 GB droplet into swap. Doing the average inside PG
+    # keeps the response small and cheap to transport.
+    #
+    # We still fall back to target_temp per-session when the actual
+    # temp series is empty or every sample is out-of-range.
+    rows = db.execute(text("""
+        SELECT
+            ts.device_id,
+            ts.grill_type,
+            ts.firmware_version,
+            ts.session_start,
+            ts.session_duration_seconds,
+            ts.target_temp,
+            CASE
+                WHEN jsonb_typeof(ts.actual_temp_time_series) = 'array' THEN (
+                    SELECT AVG((elem->>'v')::float)
+                    FROM jsonb_array_elements(ts.actual_temp_time_series) elem
+                    WHERE jsonb_typeof(elem) = 'object'
+                      AND (elem ? 'v')
+                      AND (elem->>'v') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                      AND (elem->>'v')::float > 0
+                      AND (elem->>'v')::float < 1000
+                )
+                ELSE NULL
+            END AS avg_actual_temp
+        FROM telemetry_sessions ts
+        WHERE ts.device_id IS NOT NULL
+          AND ts.device_id NOT LIKE 'mac:%'
+          AND ts.session_start >= :cutoff
+          AND ts.session_duration_seconds >= 300
+    """), {"cutoff": cutoff}).all()
 
     huntsman_ids = build_huntsman_device_ids(db)
 
-    # device_id → (lump_lb_sum, briq_lb_sum, session_count, latest_meta)
+    # device_id → (lump_sum, briq_sum, count, latest_meta). Python
+    # only ever sees per-session scalars now, not raw JSONB arrays.
     per_device: dict[str, dict[str, Any]] = {}
     for r in rows:
-        dev, grill, fw, start, dur_s, tgt, series = r
+        dev, grill, fw, start, dur_s, tgt, avg_actual = r
         if not dur_s or not start:
             continue
-        avg_actual = None
-        if isinstance(series, list) and series:
-            vsum = 0.0
-            vct = 0
-            for s in series:
-                try:
-                    v = float(s.get("v"))
-                except (AttributeError, TypeError, ValueError):
-                    continue
-                if 0 < v < 1000:
-                    vsum += v
-                    vct += 1
-            if vct:
-                avg_actual = vsum / vct
         avg_temp = avg_actual if avg_actual is not None else tgt
         if avg_temp is None:
             continue
