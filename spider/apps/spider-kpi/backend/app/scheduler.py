@@ -325,6 +325,31 @@ def run_weekly_gauge_selection_job() -> None:
         db.close()
 
 
+def run_charcoal_jit_forecast_job() -> None:
+    """Daily 11:00 UTC / 07:00 ET: re-forecast every non-cancelled
+    Charcoal JIT subscription. Also auto-fills shipping_zip from
+    Shopify orders when the subscription has a user_key (email) but
+    no zip yet, and re-keys synthetic mac:xxx device_ids once real
+    telemetry arrives.
+
+    Dry-run only. Writes last_forecast_json + next_ship_after on each
+    row. No Shopify draft orders created — that trigger stays manual
+    until the predictions are trusted.
+    """
+    db = SessionLocal()
+    try:
+        from app.services.charcoal_jit import run_daily_forecast_pass
+        result = run_daily_forecast_pass(db)
+        import logging as _log
+        _log.getLogger(__name__).info("charcoal_jit forecast pass: %s", result)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("charcoal_jit forecast pass failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_ai_self_grade_job() -> None:
     """Weekly Sunday 14:00 UTC / 10:00 ET: Opus grades the last 7d of
     AI-generated artifacts against the team's feedback reactions and
@@ -372,4 +397,8 @@ def build_scheduler() -> BackgroundScheduler:
     # build_if_missing before then so the first request on a fresh
     # deploy is slower but correct.
     scheduler.add_job(run_aggregate_cache_rebuild_job, "interval", minutes=15, id="aggregate-cache-rebuild", replace_existing=True, max_instances=1, coalesce=True)
+    # Daily charcoal JIT forecast pass at 11:00 UTC / 07:00 ET — after
+    # the overnight sync cycle so trailing-burn windows include the
+    # latest sessions. Dry-run only until Joseph flips shipment triggers.
+    scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
     return scheduler

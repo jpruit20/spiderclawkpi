@@ -318,6 +318,16 @@ export const api = {
       `/api/charcoal/jit/subscriptions/${id}`,
       { method: 'DELETE' },
     ),
+  charcoalJITForecastOne: (id: number) =>
+    request<{ ok: boolean; forecast: Record<string, unknown>; subscription: CharcoalJITSubscription }>(
+      `/api/charcoal/jit/subscriptions/${id}/forecast`,
+      { method: 'POST', body: {} },
+    ),
+  charcoalJITForecastAll: () =>
+    request<{ computed_at: string; considered: number; forecasted_ok: number; skipped_no_device_id: number; no_sessions: number; zero_burn: number; shipping_address_backfilled: number }>(
+      '/api/charcoal/jit/forecast-all',
+      { method: 'POST', body: {}, timeoutMs: 120000 },
+    ),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',

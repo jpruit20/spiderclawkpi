@@ -234,6 +234,24 @@ def _first_fulfilled_at(order: dict[str, Any]) -> Optional[str]:
     return earliest
 
 
+def _normalized_shipping(order: dict[str, Any]) -> dict[str, Any]:
+    """Compact shipping-address dict for downstream consumers (charcoal
+    JIT needs zip; future weather-adjusted burn-rate needs lat/lon).
+    Shopify returns ``shipping_address`` as a nested object with 15+
+    fields; we keep the subset we actually use."""
+    addr = order.get("shipping_address") or {}
+    if not isinstance(addr, dict):
+        return {}
+    return {
+        "zip": addr.get("zip"),
+        "city": addr.get("city"),
+        "province_code": addr.get("province_code"),
+        "country_code": addr.get("country_code"),
+        "latitude": addr.get("latitude"),
+        "longitude": addr.get("longitude"),
+    }
+
+
 def _normalized_tags(order: dict[str, Any]) -> list[str]:
     """Shopify returns tags as a comma-separated string. Normalize to a
     lowercase list so downstream can filter/segment predictably."""
@@ -257,6 +275,8 @@ def _normalized_payload_from_order(order: dict[str, Any], financials: dict[str, 
         "fulfillment_status": order.get("fulfillment_status"),
         "first_fulfilled_at": _first_fulfilled_at(order),
         "tags": _normalized_tags(order),
+        "shipping_address": _normalized_shipping(order),
+        "customer_email": order.get("email") or ((order.get("customer") or {}).get("email")),
         "cancelled_at": order.get("cancelled_at"),
         "recognized_revenue": financials["recognized_revenue"],
         "refunds": financials["refunds"],
@@ -457,8 +477,9 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         # timestamps so we can reconstruct aging buckets over time.
         _ORDER_FIELDS = (
             "id,created_at,updated_at,total_price,current_total_price,"
-            "total_discounts,financial_status,cancelled_at,customer.id,"
-            "fulfillment_status,tags,fulfillments,line_items"
+            "total_discounts,financial_status,cancelled_at,customer,"
+            "fulfillment_status,tags,fulfillments,line_items,"
+            "shipping_address,email"
         )
         params = {
             "status": "any",
@@ -641,8 +662,9 @@ def sync_unfulfilled_orders(db: Session) -> dict[str, Any]:
         endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders.json"
         _ORDER_FIELDS = (
             "id,created_at,updated_at,total_price,current_total_price,"
-            "total_discounts,financial_status,cancelled_at,customer.id,"
-            "fulfillment_status,tags,fulfillments,line_items"
+            "total_discounts,financial_status,cancelled_at,customer,"
+            "fulfillment_status,tags,fulfillments,line_items,"
+            "shipping_address,email"
         )
         all_orders: list[dict[str, Any]] = []
         seen_ids: set[Any] = set()

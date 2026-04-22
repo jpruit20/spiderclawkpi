@@ -424,6 +424,23 @@ def jit_subscribe(
         db.commit()
         return {"ok": True, "action": "updated", "subscription": _serialize_sub(existing)}
 
+    # Auto-fill shipping address from most recent Shopify order if the
+    # user supplied a user_key (expected to be email) but no zip.
+    ship_zip = payload.shipping_zip
+    ship_lat = payload.shipping_lat
+    ship_lon = payload.shipping_lon
+    if not ship_zip and payload.user_key:
+        from app.services.charcoal_jit import lookup_shipping_address
+        addr = lookup_shipping_address(db, user_key=payload.user_key)
+        if addr:
+            if addr.get("zip"): ship_zip = str(addr["zip"])
+            if addr.get("latitude") is not None:
+                try: ship_lat = float(addr["latitude"])
+                except (TypeError, ValueError): pass
+            if addr.get("longitude") is not None:
+                try: ship_lon = float(addr["longitude"])
+                except (TypeError, ValueError): pass
+
     row = CharcoalJITSubscription(
         device_id=primary_device_id,
         mac_normalized=mac,
@@ -432,9 +449,9 @@ def jit_subscribe(
         bag_size_lb=payload.bag_size_lb,
         lead_time_days=payload.lead_time_days,
         safety_stock_days=payload.safety_stock_days,
-        shipping_zip=payload.shipping_zip,
-        shipping_lat=payload.shipping_lat,
-        shipping_lon=payload.shipping_lon,
+        shipping_zip=ship_zip,
+        shipping_lat=ship_lat,
+        shipping_lon=ship_lon,
         notes=payload.notes,
         status="active",
         enrolled_by="dashboard",
@@ -442,6 +459,17 @@ def jit_subscribe(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    # Compute an initial forecast so the row doesn't show empty.
+    try:
+        from app.services.charcoal_jit import forecast_subscription
+        forecast_subscription(db, row)
+        db.commit()
+        db.refresh(row)
+    except Exception:
+        logger.exception("initial forecast on enrollment failed; subscription created regardless")
+        db.rollback()
+
     return {"ok": True, "action": "created", "subscription": _serialize_sub(row)}
 
 
@@ -498,6 +526,33 @@ def jit_patch(
     db.commit()
     db.refresh(row)
     return {"ok": True, "subscription": _serialize_sub(row)}
+
+
+@router.post("/jit/subscriptions/{subscription_id}/forecast")
+def jit_forecast_now(
+    subscription_id: int,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Manually re-compute the forecast for one subscription. Same math
+    the scheduler runs daily — useful when Joseph wants to see the
+    impact of a parameter change immediately without waiting."""
+    from app.services.charcoal_jit import forecast_subscription
+    row = db.get(CharcoalJITSubscription, subscription_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    result = forecast_subscription(db, row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "forecast": result, "subscription": _serialize_sub(row)}
+
+
+@router.post("/jit/forecast-all")
+def jit_forecast_all(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Run the forecast pass across every non-cancelled subscription
+    on demand. Backs a "Run forecast now" button on the enrollment
+    tab so Joseph doesn't have to wait 24h to see predictions update."""
+    from app.services.charcoal_jit import run_daily_forecast_pass
+    return run_daily_forecast_pass(db)
 
 
 @router.delete("/jit/subscriptions/{subscription_id}")

@@ -845,6 +845,36 @@ function EnrollmentTab() {
     }
   }
 
+  const [forecastBusy, setForecastBusy] = useState(false)
+  const [lastForecastRun, setLastForecastRun] = useState<string | null>(null)
+
+  const forecastOne = async (id: number) => {
+    try {
+      await api.charcoalJITForecastOne(id)
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    }
+  }
+
+  const forecastAll = async () => {
+    if (!confirm('Re-run forecast for every non-cancelled subscription?')) return
+    setForecastBusy(true)
+    try {
+      const r = await api.charcoalJITForecastAll()
+      setLastForecastRun(
+        `Ran at ${new Date(r.computed_at).toLocaleTimeString()} · ${r.forecasted_ok} ok · ` +
+        `${r.no_sessions} no-sessions · ${r.skipped_no_device_id} skipped · ` +
+        `${r.shipping_address_backfilled} zips backfilled`
+      )
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    } finally {
+      setForecastBusy(false)
+    }
+  }
+
   return (
     <>
       {/* Enrollment form */}
@@ -939,12 +969,23 @@ function EnrollmentTab() {
               </div>
             ) : null}
           </div>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)} className="deci-input" style={{ fontSize: 12 }}>
-            <option value="">All statuses</option>
-            <option value="active">Active only</option>
-            <option value="paused">Paused only</option>
-            <option value="cancelled">Cancelled only</option>
-          </select>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {lastForecastRun ? <span style={{ fontSize: 10, color: 'var(--muted)' }}>{lastForecastRun}</span> : null}
+            <button
+              className="range-button"
+              onClick={forecastAll}
+              disabled={forecastBusy}
+              title="Re-run the forecast model across every active subscription. Safe — no Shopify orders fire."
+            >
+              {forecastBusy ? 'Forecasting…' : 'Run forecast now'}
+            </button>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)} className="deci-input" style={{ fontSize: 12 }}>
+              <option value="">All statuses</option>
+              <option value="active">Active only</option>
+              <option value="paused">Paused only</option>
+              <option value="cancelled">Cancelled only</option>
+            </select>
+          </div>
         </div>
 
         {!list ? (
@@ -963,67 +1004,107 @@ function EnrollmentTab() {
                   <th>Bag</th>
                   <th>Lead / safety</th>
                   <th>ZIP</th>
+                  <th>Burn rate</th>
+                  <th>Next ship</th>
                   <th>Status</th>
-                  <th>Enrolled</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {list.subscriptions.map(sub => (
-                  <tr key={sub.id} style={{
-                    borderTop: '1px solid var(--border)',
-                    opacity: sub.status === 'cancelled' ? 0.55 : 1,
-                  }}>
-                    <td style={{ padding: '6px 8px' }}>
-                      <div style={{ fontFamily: 'ui-monospace, monospace' }}>{sub.mac || '—'}</div>
-                      {sub.user_key ? <div style={{ fontSize: 10, color: 'var(--muted)' }}>{sub.user_key}</div> : null}
-                    </td>
-                    <td>
-                      <span className={`badge ${sub.fuel_preference === 'lump' ? 'badge-warn' : 'badge-neutral'}`}>
-                        {sub.fuel_preference}
-                      </span>
-                    </td>
-                    <td>{sub.bag_size_lb} lb</td>
-                    <td>{sub.lead_time_days}d / {sub.safety_stock_days}d</td>
-                    <td>{sub.shipping_zip || '—'}</td>
-                    <td>
-                      <span className={`badge ${sub.status === 'active' ? 'badge-good' : sub.status === 'paused' ? 'badge-warn' : 'badge-muted'}`}>
-                        {sub.status}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: 10, color: 'var(--muted)' }}>
-                      {sub.created_at ? sub.created_at.slice(0, 10) : '—'}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: 4 }}>
-                        {sub.status === 'active' ? (
-                          <button
-                            className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
-                            onClick={() => patch(sub.id, { status: 'paused' })}
-                          >Pause</button>
-                        ) : sub.status === 'paused' ? (
-                          <button
-                            className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
-                            onClick={() => patch(sub.id, { status: 'active' })}
-                          >Resume</button>
-                        ) : null}
-                        {sub.status !== 'cancelled' ? (
-                          <button
-                            className="range-button" style={{ fontSize: 10, padding: '2px 8px', color: 'var(--red)' }}
-                            onClick={() => {
-                              if (confirm(`Cancel JIT for MAC ${sub.mac}?`)) patch(sub.id, { status: 'cancelled' })
-                            }}
-                          >Cancel</button>
+                {list.subscriptions.map(sub => {
+                  const fc = (sub.last_forecast || {}) as Record<string, unknown>
+                  const burnRate = typeof fc.lb_per_week === 'number' ? (fc.lb_per_week as number) : null
+                  const fcStatus = (fc.status as string) || null
+                  const nextShip = sub.next_ship_after ? new Date(sub.next_ship_after) : null
+                  const daysUntil = nextShip
+                    ? Math.max(0, Math.round((nextShip.getTime() - Date.now()) / 86400000))
+                    : null
+                  return (
+                    <tr key={sub.id} style={{
+                      borderTop: '1px solid var(--border)',
+                      opacity: sub.status === 'cancelled' ? 0.55 : 1,
+                    }}>
+                      <td style={{ padding: '6px 8px' }}>
+                        <div style={{ fontFamily: 'ui-monospace, monospace' }}>{sub.mac || '—'}</div>
+                        {sub.user_key ? <div style={{ fontSize: 10, color: 'var(--muted)' }}>{sub.user_key}</div> : null}
+                      </td>
+                      <td>
+                        <span className={`badge ${sub.fuel_preference === 'lump' ? 'badge-warn' : 'badge-neutral'}`}>
+                          {sub.fuel_preference}
+                        </span>
+                      </td>
+                      <td>{sub.bag_size_lb} lb</td>
+                      <td>{sub.lead_time_days}d / {sub.safety_stock_days}d</td>
+                      <td>{sub.shipping_zip || '—'}</td>
+                      <td>
+                        {burnRate != null ? (
+                          <>
+                            <div style={{ fontWeight: 600 }}>{burnRate.toFixed(2)} lb/wk</div>
+                            {typeof fc.cooks_in_window === 'number' ? (
+                              <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                                n={fc.cooks_in_window as number} cooks
+                              </div>
+                            ) : null}
+                          </>
+                        ) : fcStatus ? (
+                          <span style={{ fontSize: 10, color: 'var(--muted)' }}>{fcStatus.replace(/_/g, ' ')}</span>
                         ) : (
+                          <span style={{ fontSize: 10, color: 'var(--muted)' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        {nextShip ? (
+                          <>
+                            <div style={{ fontWeight: 600 }}>{nextShip.toISOString().slice(0, 10)}</div>
+                            <div style={{ fontSize: 10, color: daysUntil != null && daysUntil <= 3 ? 'var(--orange)' : 'var(--muted)' }}>
+                              {daysUntil != null ? `in ${daysUntil}d` : '—'}
+                            </div>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--muted)' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${sub.status === 'active' ? 'badge-good' : sub.status === 'paused' ? 'badge-warn' : 'badge-muted'}`}>
+                          {sub.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: 4 }}>
                           <button
                             className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
-                            onClick={() => patch(sub.id, { status: 'active' })}
-                          >Reactivate</button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                            onClick={() => forecastOne(sub.id)}
+                            title="Re-run this subscription's forecast"
+                          >Forecast</button>
+                          {sub.status === 'active' ? (
+                            <button
+                              className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                              onClick={() => patch(sub.id, { status: 'paused' })}
+                            >Pause</button>
+                          ) : sub.status === 'paused' ? (
+                            <button
+                              className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                              onClick={() => patch(sub.id, { status: 'active' })}
+                            >Resume</button>
+                          ) : null}
+                          {sub.status !== 'cancelled' ? (
+                            <button
+                              className="range-button" style={{ fontSize: 10, padding: '2px 8px', color: 'var(--red)' }}
+                              onClick={() => {
+                                if (confirm(`Cancel JIT for MAC ${sub.mac}?`)) patch(sub.id, { status: 'cancelled' })
+                              }}
+                            >Cancel</button>
+                          ) : (
+                            <button
+                              className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                              onClick={() => patch(sub.id, { status: 'active' })}
+                            >Reactivate</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
