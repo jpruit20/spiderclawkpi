@@ -667,6 +667,84 @@ def partners_refresh(db: Session = Depends(db_session)) -> dict[str, Any]:
     return refresh_all_partners(db)
 
 
+# ── Cohort economic modeling ─────────────────────────────────────────
+#
+# Pre-beta feasibility tool. No side effects; read-only.
+
+
+class CohortModelInput(BaseModel):
+    """Slider-driven inputs for the internal JIT economics sandbox.
+
+    Every field has a sane default so the UI can fire off a baseline
+    projection on page load without any user interaction.
+    """
+    product_families: Optional[list[str]] = Field(
+        default=None,
+        description="Restrict cohort to these families. None = no family filter.",
+    )
+    min_cooks_in_window: int = Field(
+        default=0, ge=0, le=100,
+        description="Require at least this many qualifying sessions in the lookback window.",
+    )
+    lookback_days: int = Field(
+        default=90, ge=7, le=365,
+        description="Days of telemetry used to derive per-device burn rate.",
+    )
+    signup_pct: float = Field(
+        default=15.0, ge=0.0, le=100.0,
+        description="Percentage of the eligible fleet we assume opts into JIT.",
+    )
+    partner_product_id: int = Field(
+        ..., description="Primary SKU the cohort subscribes to.",
+    )
+    margin_pct: float = Field(
+        default=10.0, ge=0.0, le=100.0,
+        description="Spider Grills' cut of retail. Partner gets the remainder.",
+    )
+    monthly_churn_pct: float = Field(
+        default=0.0, ge=0.0, le=50.0,
+        description="Monthly churn rate applied geometrically over the horizon.",
+    )
+    horizon_months: int = Field(
+        default=12, ge=1, le=60,
+        description="Projection window in months.",
+    )
+
+
+@router.post("/modeling/cohort")
+def modeling_cohort(
+    payload: CohortModelInput,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Project JIT economics for a slice of the active fleet.
+
+    Inputs describe *which* devices (product family, activity floor),
+    *who signs up* (signup_pct), *what they subscribe to* (SKU), and
+    *how we price it* (margin_pct, churn, horizon). Output carries
+    cohort stats, a per-subscriber monthly contribution, and a full
+    month-by-month cumulative curve.
+
+    Shipping is handled by Jealous Devil's supply chain end-to-end —
+    the model never adds it to Spider Grills' cost side.
+    """
+    from app.services.charcoal_jit import compute_cohort_model
+
+    result = compute_cohort_model(
+        db,
+        product_families=payload.product_families,
+        min_cooks_in_window=payload.min_cooks_in_window,
+        lookback_days=payload.lookback_days,
+        signup_pct=payload.signup_pct,
+        partner_product_id=payload.partner_product_id,
+        margin_pct=payload.margin_pct,
+        monthly_churn_pct=payload.monthly_churn_pct,
+        horizon_months=payload.horizon_months,
+    )
+    if not result.get("ok", False):
+        raise HTTPException(status_code=400, detail=result.get("error", "cohort model failed"))
+    return result
+
+
 @router.delete("/jit/subscriptions/{subscription_id}")
 def jit_cancel(
     subscription_id: int,

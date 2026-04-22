@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import CharcoalJITSubscription, PartnerProduct, ShopifyOrderEvent, TelemetrySession
+from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,313 @@ def forecast_subscription(
     sub.last_forecast_json = payload
     sub.next_ship_after = next_ship_after
     return payload
+
+
+# ── Cohort economic modeling (pre-beta feasibility tool) ─────────────
+#
+# Purpose: let Joseph pick a subset of the active fleet, assume an
+# opt-in rate + SKU + margin, and see projected monthly GMV, Spider
+# Grills margin, JD payout, shipments, and pounds. This is purely
+# internal modeling — we haven't gone live with JIT yet and want to
+# pressure-test the unit economics before enrollment opens.
+#
+# Burn rate per device is derived from the same thermal model the
+# per-subscription forecaster uses, so the numbers are continuous with
+# live JIT math once we flip it on.
+#
+# Shipping is explicitly excluded from the margin math: Jealous Devil
+# ships directly from their supply chain and eats the shipping cost.
+# We never touch the charcoal physically. If that assumption ever
+# changes, the one place to add it is ``_compute_cohort_totals``.
+
+
+def _lb_per_month_for_device(fuel_rows: list[tuple[float, float, datetime]], fuel_pref: str, window_days: int) -> float:
+    """Translate the per-session fuel tuples into monthly pounds for
+    the cohort modeler. Normalized to 30-day months so signups get
+    clean per-month projections regardless of lookback window length."""
+    if not fuel_rows or window_days <= 0:
+        return 0.0
+    total = sum((r[0] if fuel_pref == "lump" else r[1]) for r in fuel_rows)
+    return total * (30.0 / float(window_days))
+
+
+def _percentile(sorted_vals: list[float], q: float) -> float:
+    """Linear-interpolated percentile helper. ``q`` in [0, 1].
+    Returns 0.0 on empty input rather than raising — callers expect a
+    stable shape even when the cohort is empty."""
+    if not sorted_vals:
+        return 0.0
+    n = len(sorted_vals)
+    if n == 1:
+        return sorted_vals[0]
+    idx = q * (n - 1)
+    lo = int(idx)
+    hi = min(lo + 1, n - 1)
+    frac = idx - lo
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac
+
+
+def compute_cohort_model(
+    db: Session,
+    *,
+    product_families: Optional[list[str]] = None,
+    min_cooks_in_window: int = 0,
+    lookback_days: int = 90,
+    signup_pct: float = 15.0,
+    partner_product_id: Optional[int] = None,
+    margin_pct: float = 10.0,
+    monthly_churn_pct: float = 0.0,
+    horizon_months: int = 12,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Core cohort modeler.
+
+    Selects every active device (session activity within
+    ``lookback_days``) that matches ``product_families`` and has at
+    least ``min_cooks_in_window`` qualifying cook sessions. For each
+    device, runs the thermal model on real session data to get a
+    monthly burn estimate. Applies ``signup_pct`` to count projected
+    subscribers, ``monthly_churn_pct`` to decay them across the
+    horizon, and the SKU's retail price × ``margin_pct`` to get GMV /
+    Spider Grills margin / JD payout.
+
+    No side effects — this is a pure read-only projection. The UI can
+    hit it on every slider change.
+    """
+    now = now or datetime.now(timezone.utc)
+    lookback_days = max(7, min(int(lookback_days), 365))
+    horizon_months = max(1, min(int(horizon_months), 60))
+    signup_pct = max(0.0, min(float(signup_pct), 100.0))
+    monthly_churn_pct = max(0.0, min(float(monthly_churn_pct), 50.0))
+    margin_pct = max(0.0, min(float(margin_pct), 100.0))
+
+    cutoff = now - timedelta(days=lookback_days)
+    families_set = (
+        {f.strip() for f in product_families if f and f.strip()}
+        if product_families
+        else None
+    )
+
+    # Pull every session in the window once, grouped by device. We
+    # need the raw sessions (not aggregates) because the thermal model
+    # wants duration × avg_temp per session.
+    rows = db.execute(
+        select(
+            TelemetrySession.device_id,
+            TelemetrySession.grill_type,
+            TelemetrySession.firmware_version,
+            TelemetrySession.session_start,
+            TelemetrySession.session_duration_seconds,
+            TelemetrySession.target_temp,
+            TelemetrySession.actual_temp_time_series,
+        )
+        .where(TelemetrySession.device_id.is_not(None))
+        .where(TelemetrySession.device_id.notlike("mac:%"))
+        .where(TelemetrySession.session_start >= cutoff)
+        .where(TelemetrySession.session_duration_seconds >= 300)
+    ).all()
+
+    huntsman_ids = build_huntsman_device_ids(db)
+
+    # device_id → list[(lump_lb, briq_lb, start)] plus latest meta
+    per_device_sessions: dict[str, list[tuple[float, float, datetime]]] = {}
+    per_device_meta: dict[str, tuple[Optional[str], Optional[str], datetime]] = {}
+    for r in rows:
+        dev, grill, fw, start, dur_s, tgt, series = r
+        avg_actual = None
+        if isinstance(series, list) and series:
+            vals: list[float] = []
+            for s in series:
+                try:
+                    v = float(s.get("v"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if 0 < v < 1000:
+                    vals.append(v)
+            if vals:
+                avg_actual = sum(vals) / len(vals)
+        avg_temp = avg_actual if avg_actual is not None else tgt
+        if avg_temp is None:
+            continue
+        lump, briq = session_fuel_lb(dur_s / 3600.0, float(avg_temp))
+        per_device_sessions.setdefault(dev, []).append((lump, briq, start))
+        # Latest meta wins — iteration order isn't deterministic so we
+        # just keep the latest session_start we've seen.
+        prev = per_device_meta.get(dev)
+        if prev is None or start > prev[2]:
+            per_device_meta[dev] = (grill, fw, start)
+
+    # Resolve the SKU + its fuel preference
+    sku = db.get(PartnerProduct, partner_product_id) if partner_product_id else None
+    if sku is None:
+        # Empty cohort shape so the UI can render without exploding
+        return {
+            "ok": False,
+            "error": "partner_product_id missing or not found",
+            "computed_at": now.isoformat(),
+        }
+    bag_size_lb = int(sku.bag_size_lb or 20)
+    if bag_size_lb <= 0:
+        return {
+            "ok": False,
+            "error": f"SKU {sku.id} has no bag_size_lb on file — set one before modeling",
+            "computed_at": now.isoformat(),
+        }
+    fuel_pref = sku.fuel_type or "lump"
+
+    # Classify each device, apply cohort filter, compute monthly lb
+    eligible: list[dict[str, Any]] = []
+    for dev, sessions in per_device_sessions.items():
+        grill, fw, _last = per_device_meta[dev]
+        family = classify_product(
+            grill, fw,
+            device_id=dev,
+            huntsman_device_ids=huntsman_ids,
+        )
+        if families_set is not None and family not in families_set:
+            continue
+        if len(sessions) < min_cooks_in_window:
+            continue
+        lb_per_month = _lb_per_month_for_device(sessions, fuel_pref, lookback_days)
+        if lb_per_month <= 0:
+            continue
+        eligible.append({
+            "device_id": dev,
+            "product_family": family,
+            "sessions_in_window": len(sessions),
+            "lb_per_month": lb_per_month,
+        })
+
+    # Cohort stats
+    lb_series = sorted(d["lb_per_month"] for d in eligible)
+    families_breakdown: dict[str, int] = {}
+    for d in eligible:
+        families_breakdown[d["product_family"]] = families_breakdown.get(d["product_family"], 0) + 1
+
+    mean_lb_per_month = (sum(lb_series) / len(lb_series)) if lb_series else 0.0
+    cohort_stats = {
+        "eligible_devices": len(eligible),
+        "mean_lb_per_month_per_device": round(mean_lb_per_month, 3),
+        "median_lb_per_month_per_device": round(_percentile(lb_series, 0.5), 3),
+        "p25_lb_per_month_per_device": round(_percentile(lb_series, 0.25), 3),
+        "p75_lb_per_month_per_device": round(_percentile(lb_series, 0.75), 3),
+        "p90_lb_per_month_per_device": round(_percentile(lb_series, 0.9), 3),
+        "families_breakdown": families_breakdown,
+        "lookback_days": lookback_days,
+    }
+
+    # Projected signups + monthly / horizon projections with churn
+    retail = float(sku.retail_price_usd or 0.0)
+    margin_rate = margin_pct / 100.0
+    churn_rate = monthly_churn_pct / 100.0
+
+    initial_signups = len(eligible) * (signup_pct / 100.0)
+    per_sub_monthly_lb = mean_lb_per_month
+    per_sub_monthly_bags = (per_sub_monthly_lb / bag_size_lb) if bag_size_lb else 0.0
+    per_sub_monthly_gmv = per_sub_monthly_bags * retail
+    per_sub_monthly_margin = per_sub_monthly_gmv * margin_rate
+    per_sub_monthly_jd_payout = per_sub_monthly_gmv - per_sub_monthly_margin
+
+    month1_subs = initial_signups
+    month1_lb = month1_subs * per_sub_monthly_lb
+    month1_bags = month1_subs * per_sub_monthly_bags
+    month1_gmv = month1_subs * per_sub_monthly_gmv
+    month1_margin = month1_subs * per_sub_monthly_margin
+    month1_jd_payout = month1_subs * per_sub_monthly_jd_payout
+
+    curve: list[dict[str, Any]] = []
+    cum_gmv = 0.0
+    cum_margin = 0.0
+    cum_jd = 0.0
+    cum_lb = 0.0
+    cum_bags = 0.0
+    for m in range(1, horizon_months + 1):
+        # Survivors at the start of this month under monthly churn.
+        surviving = initial_signups * ((1.0 - churn_rate) ** (m - 1)) if churn_rate > 0 else initial_signups
+        month_lb = surviving * per_sub_monthly_lb
+        month_bags = surviving * per_sub_monthly_bags
+        month_gmv = surviving * per_sub_monthly_gmv
+        month_margin = surviving * per_sub_monthly_margin
+        month_jd = surviving * per_sub_monthly_jd_payout
+        cum_lb += month_lb
+        cum_bags += month_bags
+        cum_gmv += month_gmv
+        cum_margin += month_margin
+        cum_jd += month_jd
+        curve.append({
+            "month": m,
+            "surviving_subscribers": round(surviving, 1),
+            "lb": round(month_lb, 1),
+            "bags": round(month_bags, 2),
+            "gmv_usd": round(month_gmv, 2),
+            "sg_margin_usd": round(month_margin, 2),
+            "jd_payout_usd": round(month_jd, 2),
+            "cumulative_gmv_usd": round(cum_gmv, 2),
+            "cumulative_sg_margin_usd": round(cum_margin, 2),
+            "cumulative_jd_payout_usd": round(cum_jd, 2),
+        })
+
+    ltv_per_sub = (cum_gmv / initial_signups) * margin_rate if initial_signups > 0 else 0.0
+
+    return {
+        "ok": True,
+        "computed_at": now.isoformat(),
+        "inputs": {
+            "product_families": sorted(families_set) if families_set else None,
+            "min_cooks_in_window": min_cooks_in_window,
+            "lookback_days": lookback_days,
+            "signup_pct": round(signup_pct, 2),
+            "partner_product_id": sku.id,
+            "margin_pct": round(margin_pct, 2),
+            "monthly_churn_pct": round(monthly_churn_pct, 2),
+            "horizon_months": horizon_months,
+        },
+        "sku": {
+            "id": sku.id,
+            "partner": sku.partner,
+            "title": sku.title,
+            "fuel_type": fuel_pref,
+            "category": sku.category,
+            "bag_size_lb": bag_size_lb,
+            "retail_price_usd": round(retail, 2),
+            "available": sku.available,
+        },
+        "cohort": cohort_stats,
+        "projected_initial_signups": round(initial_signups, 1),
+        "per_subscriber_monthly": {
+            "lb": round(per_sub_monthly_lb, 3),
+            "bags": round(per_sub_monthly_bags, 3),
+            "gmv_usd": round(per_sub_monthly_gmv, 2),
+            "sg_margin_usd": round(per_sub_monthly_margin, 2),
+            "jd_payout_usd": round(per_sub_monthly_jd_payout, 2),
+        },
+        "month_1": {
+            "subscribers": round(month1_subs, 1),
+            "lb": round(month1_lb, 1),
+            "bags": round(month1_bags, 2),
+            "gmv_usd": round(month1_gmv, 2),
+            "sg_margin_usd": round(month1_margin, 2),
+            "jd_payout_usd": round(month1_jd_payout, 2),
+        },
+        "horizon_totals": {
+            "months": horizon_months,
+            "lb": round(cum_lb, 1),
+            "bags": round(cum_bags, 2),
+            "gmv_usd": round(cum_gmv, 2),
+            "sg_margin_usd": round(cum_margin, 2),
+            "jd_payout_usd": round(cum_jd, 2),
+            "ltv_per_initial_subscriber_usd": round(ltv_per_sub, 2),
+        },
+        "monthly_curve": curve,
+        "assumptions": {
+            "shipping": "Jealous Devil absorbs shipping cost — excluded from Spider Grills margin",
+            "burn_rate_source": "TelemetrySession × thermal model (lib/charcoalModel.ts Python twin)",
+            "month_normalization_days": 30,
+            "payment_processing_pct": 0,
+            "refunds_pct": 0,
+            "min_session_seconds": 300,
+        },
+    }
 
 
 # ── Scheduler tick ───────────────────────────────────────────────────
