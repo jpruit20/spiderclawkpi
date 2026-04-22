@@ -8,6 +8,11 @@ import { ApiError, api } from '../lib/api'
 import type {
   CharcoalCohortModelInput, CharcoalCohortModelResponse,
   CharcoalDeviceSessionsResponse, CharcoalFleetAggregateResponse, CharcoalFleetFilters,
+  CharcoalJITInvitationBatchDetailResponse,
+  CharcoalJITInvitationBatchResponse,
+  CharcoalJITInvitationBatchSummary,
+  CharcoalJITInvitationPreviewResponse,
+  CharcoalJITInvitationSelectionInput,
   CharcoalJITListResponse, CharcoalJITSubscription,
   CharcoalPartnerProduct, CharcoalPartnerProductsResponse,
 } from '../lib/api'
@@ -27,7 +32,7 @@ import {
   type FuelTypePrediction,
 } from '../lib/charcoalModel'
 
-type Tab = 'device' | 'fleet' | 'jit' | 'enrollment' | 'modeling'
+type Tab = 'device' | 'fleet' | 'jit' | 'enrollment' | 'modeling' | 'rollout'
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
   { key: 'device', label: 'Per device', desc: 'MAC lookup → burn history' },
@@ -35,6 +40,7 @@ const TABS: Array<{ key: Tab; label: string; desc: string }> = [
   { key: 'jit', label: 'JIT program', desc: 'Auto-ship forecast' },
   { key: 'enrollment', label: 'Program enrollment', desc: 'Subscribe a device to auto-ship' },
   { key: 'modeling', label: 'Economic modeling', desc: 'Cohort × signup × SKU → projected GMV / margin / LTV' },
+  { key: 'rollout', label: 'Beta rollout', desc: 'Invite the top-N cohort to the private JIT beta' },
 ]
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1906,6 +1912,609 @@ function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
 
 
 /* ═══════════════════════════════════════════════════════════════════
+   BETA ROLLOUT TAB — invitation batches (M1)
+   ═══════════════════════════════════════════════════════════════════ */
+
+const BETA_FAMILY_OPTIONS = ['Weber Kettle', 'Huntsman', 'Unknown'] as const
+const BETA_LOOKBACK_OPTIONS = [30, 60, 90, 180] as const
+const BETA_PERCENTILE_OPTIONS = [0, 50, 75, 90] as const
+const BETA_PERCENTILE_LABELS: Record<number, string> = {
+  0: 'All eligible',
+  50: 'Top 50%',
+  75: 'Top 25%',
+  90: 'Top 10%',
+}
+
+function BetaRolloutTab() {
+  // Product picker (defaults to first available)
+  const [products, setProducts] = useState<CharcoalPartnerProduct[]>([])
+  const [productsError, setProductsError] = useState<string | null>(null)
+  const [productId, setProductId] = useState<number | null>(null)
+
+  // Cohort-selection config — same shape the modeler uses, but the
+  // defaults lean toward the 50-invite top-25% M1 plan Joseph scoped.
+  const [families, setFamilies] = useState<string[]>([...BETA_FAMILY_OPTIONS])
+  const [minCooks, setMinCooks] = useState(1)
+  const [lookback, setLookback] = useState<number>(90)
+  const [percentileFloor, setPercentileFloor] = useState<number>(75)
+  const [maxInvitations, setMaxInvitations] = useState(50)
+  const [marginPct, setMarginPct] = useState(10)
+  const [expiryDays, setExpiryDays] = useState(14)
+  const [notes, setNotes] = useState('')
+
+  // Preview + batch history state
+  const [preview, setPreview] = useState<CharcoalJITInvitationPreviewResponse | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+
+  const [batches, setBatches] = useState<CharcoalJITInvitationBatchSummary[]>([])
+  const [batchesLoading, setBatchesLoading] = useState(false)
+  const [batchesError, setBatchesError] = useState<string | null>(null)
+
+  const [openBatch, setOpenBatch] = useState<CharcoalJITInvitationBatchDetailResponse | null>(null)
+  const [openBatchLoading, setOpenBatchLoading] = useState(false)
+
+  // Confirm-send dialog state
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [lastBatch, setLastBatch] = useState<CharcoalJITInvitationBatchResponse | null>(null)
+
+  // Products (keep all — admin may want to send against out-of-stock
+  // SKUs in a test scenario).
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.charcoalPartnerProducts(false, ctl.signal)
+      .then(r => {
+        setProducts(r.products)
+        const first = r.products.find(p => p.available) || r.products[0]
+        if (first) setProductId(first.id)
+      })
+      .catch(e => {
+        if (e?.name !== 'AbortError') setProductsError(String(e?.message || e))
+      })
+    return () => ctl.abort()
+  }, [])
+
+  const loadBatches = () => {
+    setBatchesLoading(true)
+    setBatchesError(null)
+    api.charcoalInvitationsListBatches()
+      .then(r => setBatches(r.batches))
+      .catch(e => setBatchesError(String(e?.message || e)))
+      .finally(() => setBatchesLoading(false))
+  }
+  useEffect(loadBatches, [])
+
+  const selectionPayload = useMemo<CharcoalJITInvitationSelectionInput | null>(() => {
+    if (productId == null) return null
+    return {
+      partner_product_id: productId,
+      product_families: families.length === BETA_FAMILY_OPTIONS.length ? null : families,
+      min_cooks_in_window: minCooks,
+      lookback_days: lookback,
+      target_percentile_floor: percentileFloor,
+      max_invitations: maxInvitations,
+      margin_pct: marginPct,
+    }
+  }, [productId, families, minCooks, lookback, percentileFloor, maxInvitations, marginPct])
+
+  const doPreview = () => {
+    if (selectionPayload == null) return
+    setPreviewLoading(true)
+    setPreviewError(null)
+    setPreview(null)
+    api.charcoalInvitationsPreview(selectionPayload)
+      .then(r => setPreview(r))
+      .catch(e => setPreviewError(String(e?.message || e)))
+      .finally(() => setPreviewLoading(false))
+  }
+
+  const openConfirm = () => {
+    setConfirmText('')
+    setSendError(null)
+    setConfirmOpen(true)
+  }
+
+  const doSend = async () => {
+    if (selectionPayload == null) return
+    if (confirmText !== 'SEND') {
+      setSendError('Type SEND to confirm.')
+      return
+    }
+    setSending(true)
+    setSendError(null)
+    try {
+      const r = await api.charcoalInvitationsSendBatch({
+        ...selectionPayload,
+        expiry_days: expiryDays,
+        notes: notes.trim() || null,
+        confirm: 'SEND',
+      })
+      setLastBatch(r)
+      if (r.ok) {
+        setConfirmOpen(false)
+        setConfirmText('')
+        setPreview(null)
+        loadBatches()
+      } else {
+        setSendError(r.error || 'send failed')
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setSendError(msg)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const toggleFamily = (f: string) => {
+    setFamilies(prev =>
+      prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f],
+    )
+  }
+
+  const openBatchDetail = (batchId: string) => {
+    setOpenBatch(null)
+    setOpenBatchLoading(true)
+    api.charcoalInvitationsGetBatch(batchId)
+      .then(r => setOpenBatch(r))
+      .catch(e => setBatchesError(String(e?.message || e)))
+      .finally(() => setOpenBatchLoading(false))
+  }
+
+  const revoke = async (invitationId: number) => {
+    const reason = window.prompt('Reason for revoking this invitation?') || undefined
+    try {
+      await api.charcoalInvitationsRevoke(invitationId, reason)
+      // Refresh open batch + batches list.
+      if (openBatch) openBatchDetail(openBatch.batch_id)
+      loadBatches()
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      window.alert(`Revoke failed: ${msg}`)
+    }
+  }
+
+  const selectedProduct = products.find(p => p.id === productId) || null
+
+  return (
+    <>
+      <section className="card" style={{ borderLeft: '3px solid var(--orange)' }}>
+        <div className="card-title" style={{ marginBottom: 4 }}>Beta rollout — invitation batches</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+          Send a private-beta invitation to the top-N devices by burn rate. Already-invited and already-subscribed devices are automatically excluded. M1 target: 50 invitations against the top 25% of the Jealous Devil-eligible cohort.
+        </div>
+      </section>
+
+      {/* Cohort selection controls */}
+      <section className="card">
+        <div className="card-title">1 · Pick the cohort</div>
+
+        {productsError ? (
+          <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>
+            Product catalog error: {productsError}
+          </div>
+        ) : null}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginTop: 12 }}>
+          {/* Product */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Partner SKU
+            </div>
+            <select
+              className="range-button"
+              value={productId ?? ''}
+              onChange={e => setProductId(Number(e.target.value) || null)}
+              style={{ width: '100%', padding: '6px 8px' }}
+            >
+              {products.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.partner} · {p.title}
+                  {p.bag_size_lb ? ` · ${p.bag_size_lb}lb` : ''}
+                  {p.available ? '' : ' (out of stock)'}
+                </option>
+              ))}
+            </select>
+            {selectedProduct ? (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                {selectedProduct.fuel_type ?? 'unknown fuel'} · ${selectedProduct.retail_price_usd.toFixed(2)} retail
+              </div>
+            ) : null}
+          </div>
+
+          {/* Product families */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Product families
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {BETA_FAMILY_OPTIONS.map(f => (
+                <button
+                  key={f}
+                  type="button"
+                  className={`range-button${families.includes(f) ? ' active' : ''}`}
+                  onClick={() => toggleFamily(f)}
+                  style={{ fontSize: 11 }}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Lookback */}
+          <SegSelect
+            label="Lookback window"
+            value={lookback}
+            options={BETA_LOOKBACK_OPTIONS}
+            suffix="d"
+            onChange={setLookback}
+            help="Trailing window for burn-rate calc. Cached server-side."
+          />
+
+          {/* Percentile floor */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Targeting
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {BETA_PERCENTILE_OPTIONS.map(o => (
+                <button
+                  key={o}
+                  type="button"
+                  className={`range-button${o === percentileFloor ? ' active' : ''}`}
+                  onClick={() => setPercentileFloor(o)}
+                  style={{ fontSize: 11 }}
+                >
+                  {BETA_PERCENTILE_LABELS[o]}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>
+              Top-25% (percentile floor 75) is the M1 default — highest signal-to-noise.
+            </div>
+          </div>
+
+          {/* Sliders for numeric knobs */}
+          <Slider
+            label="Min cooks in window"
+            value={minCooks}
+            min={0}
+            max={20}
+            step={1}
+            onChange={setMinCooks}
+            help="Drop devices below this session count. 1 = active in the window."
+          />
+          <Slider
+            label="Max invitations"
+            value={maxInvitations}
+            min={1}
+            max={200}
+            step={1}
+            onChange={setMaxInvitations}
+            help="Hard cap on invitations created in this batch."
+          />
+          <Slider
+            label="Margin %"
+            value={marginPct}
+            min={0}
+            max={50}
+            step={1}
+            suffix="%"
+            onChange={setMarginPct}
+            help="Spider Grills' cut — stamped onto each invitation."
+          />
+          <Slider
+            label="Expires in"
+            value={expiryDays}
+            min={1}
+            max={60}
+            step={1}
+            suffix="d"
+            onChange={setExpiryDays}
+            help="Invitation lifetime. 14 days is the M1 default."
+          />
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+            Batch notes (internal)
+          </div>
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={2}
+            placeholder="e.g. 'M1 — first 50 power users, JD 35lb lump'"
+            style={{ width: '100%', padding: 6, fontSize: 12 }}
+          />
+        </div>
+
+        <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="range-button"
+            onClick={doPreview}
+            disabled={previewLoading || selectionPayload == null}
+          >
+            {previewLoading ? 'Previewing…' : 'Preview batch'}
+          </button>
+          <button
+            type="button"
+            className="range-button"
+            onClick={openConfirm}
+            disabled={preview == null || preview.summary.selected === 0}
+            style={{
+              backgroundColor: preview && preview.summary.selected > 0 ? 'var(--orange)' : undefined,
+              color: preview && preview.summary.selected > 0 ? 'white' : undefined,
+            }}
+            title={preview ? 'Send invitations — requires typed SEND confirmation' : 'Run a preview first'}
+          >
+            Send {preview ? `${preview.summary.selected} invitations` : 'batch'}
+          </button>
+        </div>
+
+        {previewError ? (
+          <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>
+            Preview error: {previewError}
+          </div>
+        ) : null}
+      </section>
+
+      {/* Preview result */}
+      {preview ? <BetaPreview preview={preview} /> : null}
+
+      {/* Confirm-send modal */}
+      {confirmOpen && preview ? (
+        <section
+          className="card"
+          style={{ borderLeft: '3px solid var(--red)', position: 'sticky', top: 12, zIndex: 10 }}
+        >
+          <div className="card-title" style={{ marginBottom: 4 }}>Confirm send</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+            You are about to create <b>{preview.summary.selected}</b> invitations against <b>{preview.summary.sku.partner} · {preview.summary.sku.title}</b>. Each invitation expires in <b>{expiryDays} days</b>. Type <code>SEND</code> to confirm.
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={e => setConfirmText(e.target.value)}
+              placeholder="Type SEND"
+              style={{ padding: '6px 8px', fontSize: 13, width: 140 }}
+              autoFocus
+            />
+            <button
+              type="button"
+              className="range-button"
+              onClick={doSend}
+              disabled={sending || confirmText !== 'SEND'}
+              style={{
+                backgroundColor: confirmText === 'SEND' ? 'var(--red)' : undefined,
+                color: confirmText === 'SEND' ? 'white' : undefined,
+              }}
+            >
+              {sending ? 'Sending…' : 'Confirm send'}
+            </button>
+            <button
+              type="button"
+              className="range-button"
+              onClick={() => setConfirmOpen(false)}
+              disabled={sending}
+            >
+              Cancel
+            </button>
+          </div>
+          {sendError ? (
+            <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{sendError}</div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* Last send confirmation */}
+      {lastBatch && lastBatch.ok && lastBatch.batch_id ? (
+        <section className="card" style={{ borderLeft: '3px solid var(--green)' }}>
+          <div className="card-title" style={{ marginBottom: 4 }}>Batch sent ✓</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Batch <code>{lastBatch.batch_id}</code> created with <b>{lastBatch.invitations?.length ?? 0}</b> invitations. They expire on {lastBatch.summary?.expires_at ? new Date(lastBatch.summary.expires_at).toLocaleString() : '—'}.
+          </div>
+        </section>
+      ) : null}
+
+      {/* Batch history */}
+      <section className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div className="card-title">2 · Batch history</div>
+          <button type="button" className="range-button" onClick={loadBatches} disabled={batchesLoading} style={{ fontSize: 11 }}>
+            {batchesLoading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+        {batchesError ? (
+          <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{batchesError}</div>
+        ) : null}
+        {batches.length === 0 && !batchesLoading ? (
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>No batches yet.</div>
+        ) : (
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                  <th style={{ padding: '4px 6px' }}>Batch</th>
+                  <th style={{ padding: '4px 6px' }}>Sent</th>
+                  <th style={{ padding: '4px 6px' }}>Expires</th>
+                  <th style={{ padding: '4px 6px' }}>By</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Total</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Pending</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Accepted</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Declined</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Expired</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Revoked</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Accept %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batches.map(b => (
+                  <tr
+                    key={b.batch_id}
+                    style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}
+                    onClick={() => openBatchDetail(b.batch_id)}
+                  >
+                    <td style={{ padding: '4px 6px' }}><code>{b.batch_id.slice(0, 8)}</code></td>
+                    <td style={{ padding: '4px 6px' }}>{b.first_invite_at ? new Date(b.first_invite_at).toLocaleString() : '—'}</td>
+                    <td style={{ padding: '4px 6px' }}>{b.expires_at ? new Date(b.expires_at).toLocaleDateString() : '—'}</td>
+                    <td style={{ padding: '4px 6px' }}>{b.invited_by ?? '—'}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right' }}>{b.counts.total}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right' }}>{b.counts.pending}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--green)' }}>{b.counts.accepted}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right' }}>{b.counts.declined}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--muted)' }}>{b.counts.expired}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--muted)' }}>{b.counts.revoked}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right' }}>{b.acceptance_pct.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Batch detail drawer */}
+      {openBatchLoading ? (
+        <section className="card"><div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading batch…</div></section>
+      ) : openBatch && openBatch.ok ? (
+        <BetaBatchDetail batch={openBatch} onClose={() => setOpenBatch(null)} onRevoke={revoke} />
+      ) : null}
+    </>
+  )
+}
+
+function BetaPreview({ preview }: { preview: CharcoalJITInvitationPreviewResponse }) {
+  const { summary, candidates } = preview
+  return (
+    <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
+      <div className="card-title" style={{ marginBottom: 4 }}>
+        Preview — {summary.selected} invitation{summary.selected === 1 ? '' : 's'} would be created
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 10 }}>
+        <Tile label="Addressable fleet" value={fmtInt(summary.addressable_devices)} sub="after family + min-cook filters" />
+        <Tile label="Threshold (lb/mo)" value={summary.threshold_lb_per_month.toFixed(1)} sub={`percentile floor ${summary.percentile_floor}`} />
+        <Tile label="Ranked after filters" value={fmtInt(summary.ranked_after_filters)} sub={`${summary.reserved_excluded} already invited/subscribed excluded`} />
+        <Tile label="Selected" value={fmtInt(summary.selected)} sub={`max ${summary.max_invitations}`} state="good" />
+      </div>
+      <div style={{ overflowX: 'auto', marginTop: 12 }}>
+        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+              <th style={{ padding: '4px 6px' }}>#</th>
+              <th style={{ padding: '4px 6px' }}>Device</th>
+              <th style={{ padding: '4px 6px' }}>MAC</th>
+              <th style={{ padding: '4px 6px' }}>Family</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>Sessions</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>lb / mo</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>Percentile</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.map((c, i) => (
+              <tr key={c.device_id ?? i} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '4px 6px', color: 'var(--muted)' }}>{i + 1}</td>
+                <td style={{ padding: '4px 6px' }}><code>{c.device_id ? c.device_id.slice(0, 12) : '—'}</code></td>
+                <td style={{ padding: '4px 6px' }}>{c.mac_normalized ?? '—'}</td>
+                <td style={{ padding: '4px 6px' }}>{c.product_family}</td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>{c.sessions_in_window}</td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>{c.lb_per_month.toFixed(2)}</td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>{c.percentile_at_invite.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function BetaBatchDetail({
+  batch, onClose, onRevoke,
+}: {
+  batch: CharcoalJITInvitationBatchDetailResponse
+  onClose: () => void
+  onRevoke: (invitationId: number) => void
+}) {
+  return (
+    <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div className="card-title" style={{ marginBottom: 4 }}>
+          Batch {batch.batch_id.slice(0, 8)} — {batch.counts.total} invitations
+        </div>
+        <button type="button" className="range-button" onClick={onClose} style={{ fontSize: 11 }}>Close</button>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+        By {batch.invited_by ?? '—'} ·
+        {' '}<b style={{ color: 'var(--green)' }}>{batch.counts.accepted}</b> accepted ·
+        {' '}{batch.counts.pending} pending ·
+        {' '}{batch.counts.declined} declined ·
+        {' '}{batch.counts.expired} expired ·
+        {' '}{batch.counts.revoked} revoked
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+              <th style={{ padding: '4px 6px' }}>Device</th>
+              <th style={{ padding: '4px 6px' }}>MAC</th>
+              <th style={{ padding: '4px 6px' }}>Status</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>Percentile</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>lb / mo</th>
+              <th style={{ padding: '4px 6px' }}>Token</th>
+              <th style={{ padding: '4px 6px', textAlign: 'right' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {batch.invitations.map(inv => (
+              <tr key={inv.id} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '4px 6px' }}><code>{inv.device_id ? inv.device_id.slice(0, 12) : '—'}</code></td>
+                <td style={{ padding: '4px 6px' }}>{inv.mac_normalized ?? '—'}</td>
+                <td style={{ padding: '4px 6px' }}>
+                  <span style={{
+                    padding: '1px 6px', borderRadius: 4, fontSize: 11,
+                    backgroundColor:
+                      inv.status === 'accepted' ? 'rgba(0, 180, 0, 0.15)' :
+                      inv.status === 'pending' ? 'rgba(255, 150, 0, 0.15)' :
+                      inv.status === 'declined' ? 'rgba(200, 0, 0, 0.15)' :
+                      'rgba(128, 128, 128, 0.15)',
+                  }}>{inv.status}</span>
+                </td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+                  {inv.percentile_at_invite != null ? inv.percentile_at_invite.toFixed(1) : '—'}
+                </td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+                  {inv.addressable_lb_per_month != null ? inv.addressable_lb_per_month.toFixed(1) : '—'}
+                </td>
+                <td style={{ padding: '4px 6px' }}><code>{inv.invitation_token.slice(0, 8)}…</code></td>
+                <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+                  {inv.status === 'pending' ? (
+                    <button
+                      type="button"
+                      className="range-button"
+                      onClick={() => onRevoke(inv.id)}
+                      style={{ fontSize: 11 }}
+                    >
+                      Revoke
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
    PAGE SHELL
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -1947,16 +2556,17 @@ export function CharcoalUsage() {
       </section>
 
       {/* AssumptionsPanel gates the four telemetry-driven tabs.
-          Modeling has its own server-side assumptions and UI, so
-          hide the shared assumptions panel when that tab is up to
+          Modeling + Beta rollout have their own server-side selection
+          UI, so hide the shared assumptions panel on those tabs to
           avoid confusing Joseph with two sets of knobs. */}
-      {tab !== 'modeling' ? <AssumptionsPanel params={params} setParams={setParams} /> : null}
+      {tab !== 'modeling' && tab !== 'rollout' ? <AssumptionsPanel params={params} setParams={setParams} /> : null}
 
       {tab === 'device' ? <DeviceTab params={params} /> : null}
       {tab === 'fleet' ? <FleetTab params={params} /> : null}
       {tab === 'jit' ? <JITTab params={params} /> : null}
       {tab === 'enrollment' ? <EnrollmentTab /> : null}
       {tab === 'modeling' ? <ModelingTab /> : null}
+      {tab === 'rollout' ? <BetaRolloutTab /> : null}
     </div>
   )
 }

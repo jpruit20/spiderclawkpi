@@ -369,6 +369,24 @@ def run_charcoal_jit_forecast_job() -> None:
         db.close()
 
 
+def run_charcoal_jit_invitations_expire_job() -> None:
+    """Daily: flip any past-expiry pending invitations to ``expired`` so
+    the status column stays truthful. Idempotent — cheap after the
+    first pass each day."""
+    db = SessionLocal()
+    try:
+        from app.services.charcoal_jit_invitations import expire_stale_invitations
+        result = expire_stale_invitations(db)
+        import logging as _log
+        _log.getLogger(__name__).info("charcoal_jit invitation expiry: %s", result)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("charcoal_jit invitation expiry failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_cohort_burn_pool_warmer_job() -> None:
     """Every 4 min: pre-build the per-device burn pool used by the
     charcoal modeling endpoint for both lookback windows (90d + 180d).
@@ -459,6 +477,10 @@ def build_scheduler() -> BackgroundScheduler:
     # before the JIT forecast so financial math uses today's prices.
     scheduler.add_job(run_partner_catalog_refresh_job, "cron", hour=10, minute=30, id="partner-catalog-refresh-daily", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
+    # Expire stale beta-invitation rows daily at 11:05 UTC — runs right
+    # after the forecast pass so the Beta rollout tab always renders
+    # today's true status without manual refresh.
+    scheduler.add_job(run_charcoal_jit_invitations_expire_job, "cron", hour=11, minute=5, id="charcoal-jit-invitations-expire-daily", replace_existing=True, max_instances=1, coalesce=True)
     # Keep the cohort-modeling burn pool hot. Without this, the first
     # user to hit /api/charcoal/modeling/cohort after a cache miss pays
     # ~60–120 s of JSONB decode and the page 502s at nginx's timeout.

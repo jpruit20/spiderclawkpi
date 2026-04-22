@@ -347,6 +347,42 @@ export const api = {
       '/api/charcoal/modeling/cohort',
       { method: 'POST', body: payload, signal, timeoutMs: 60000 },
     ),
+  // ── Beta rollout: invitation engine ─────────────────────────────
+  charcoalInvitationsPreview: (
+    payload: CharcoalJITInvitationSelectionInput,
+    signal?: AbortSignal,
+  ) =>
+    request<CharcoalJITInvitationPreviewResponse>(
+      '/api/charcoal/jit/invitations/preview',
+      { method: 'POST', body: payload, signal, timeoutMs: 60000 },
+    ),
+  charcoalInvitationsSendBatch: (
+    payload: CharcoalJITInvitationBatchInput,
+  ) =>
+    request<CharcoalJITInvitationBatchResponse>(
+      '/api/charcoal/jit/invitations/batches',
+      { method: 'POST', body: payload, timeoutMs: 60000 },
+    ),
+  charcoalInvitationsListBatches: (signal?: AbortSignal) =>
+    request<CharcoalJITInvitationBatchListResponse>(
+      '/api/charcoal/jit/invitations/batches',
+      { signal },
+    ),
+  charcoalInvitationsGetBatch: (batchId: string, signal?: AbortSignal) =>
+    request<CharcoalJITInvitationBatchDetailResponse>(
+      `/api/charcoal/jit/invitations/batches/${encodeURIComponent(batchId)}`,
+      { signal },
+    ),
+  charcoalInvitationsRevoke: (id: number, reason?: string) =>
+    request<{ ok: boolean; invitation: CharcoalJITInvitation }>(
+      `/api/charcoal/jit/invitations/${id}/revoke`,
+      { method: 'POST', body: { reason: reason ?? null } },
+    ),
+  charcoalInvitationsExpireStale: () =>
+    request<{ ok: boolean; expired: number; computed_at: string }>(
+      '/api/charcoal/jit/invitations/expire-stale',
+      { method: 'POST', body: {} },
+    ),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',
@@ -1572,6 +1608,146 @@ export interface CharcoalJITListResponse {
   count: number
   by_status: Record<string, number>
   by_fuel: Record<string, number>
+}
+
+// ── Beta rollout: invitation engine ─────────────────────────────────
+
+export type CharcoalJITInvitationStatus =
+  'pending' | 'accepted' | 'declined' | 'expired' | 'revoked'
+
+export interface CharcoalJITInvitation {
+  id: number
+  batch_id: string
+  invitation_token: string
+  device_id: string | null
+  mac_normalized: string | null
+  user_key: string | null
+  partner_product_id: number | null
+  bag_size_lb: number
+  fuel_preference: 'lump' | 'briquette'
+  margin_pct: number
+  addressable_lb_per_month: number | null
+  percentile_at_invite: number | null
+  sessions_in_window_at_invite: number | null
+  product_family_at_invite: string | null
+  cohort_params: Record<string, unknown>
+  status: CharcoalJITInvitationStatus
+  invited_at: string | null
+  expires_at: string | null
+  accepted_at: string | null
+  declined_at: string | null
+  revoked_at: string | null
+  invited_by: string | null
+  notes: string | null
+  subscription_id: number | null
+}
+
+export interface CharcoalJITInvitationCandidate {
+  device_id: string | null
+  mac_normalized: string | null
+  product_family: string
+  sessions_in_window: number
+  lb_per_month: number
+  percentile_at_invite: number
+}
+
+export interface CharcoalJITInvitationSummary {
+  addressable_devices: number
+  threshold_lb_per_month: number
+  percentile_floor: number
+  mean_lb_per_month: number
+  reserved_excluded: number
+  ranked_after_filters: number
+  max_invitations: number
+  selected: number
+  product_families_filter: string[] | null
+  min_cooks_in_window: number
+  lookback_days: number
+  sku: {
+    id: number
+    partner: string
+    title: string
+    fuel_type: string
+    bag_size_lb: number
+    retail_price_usd: number
+  }
+  expires_at?: string
+  expiry_days?: number
+}
+
+export interface CharcoalJITInvitationSelectionInput {
+  partner_product_id: number
+  product_families?: string[] | null
+  min_cooks_in_window?: number
+  lookback_days?: number
+  target_percentile_floor?: number
+  max_invitations?: number
+  margin_pct?: number
+}
+
+export interface CharcoalJITInvitationBatchInput extends CharcoalJITInvitationSelectionInput {
+  expiry_days?: number
+  invited_by?: string | null
+  notes?: string | null
+  /** Must equal 'SEND' on the backend — client-typed confirmation. */
+  confirm: 'SEND'
+}
+
+export interface CharcoalJITInvitationPreviewResponse {
+  ok: true
+  preview: true
+  computed_at: string
+  summary: CharcoalJITInvitationSummary
+  candidates: CharcoalJITInvitationCandidate[]
+}
+
+export interface CharcoalJITInvitationBatchResponse {
+  ok: boolean
+  preview: false
+  batch_id?: string
+  computed_at?: string
+  summary?: CharcoalJITInvitationSummary
+  invitations?: CharcoalJITInvitation[]
+  candidates?: CharcoalJITInvitationCandidate[]
+  error?: string
+}
+
+export interface CharcoalJITInvitationBatchSummary {
+  batch_id: string
+  first_invite_at: string | null
+  last_invite_at: string | null
+  expires_at: string | null
+  invited_by: string | null
+  counts: {
+    pending: number
+    accepted: number
+    declined: number
+    expired: number
+    revoked: number
+    total: number
+  }
+  acceptance_pct: number
+}
+
+export interface CharcoalJITInvitationBatchListResponse {
+  batches: CharcoalJITInvitationBatchSummary[]
+  count: number
+}
+
+export interface CharcoalJITInvitationBatchDetailResponse {
+  ok: boolean
+  batch_id: string
+  invited_by: string | null
+  cohort_params: Record<string, unknown>
+  counts: {
+    pending: number
+    accepted: number
+    declined: number
+    expired: number
+    revoked: number
+    total: number
+  }
+  invitations: CharcoalJITInvitation[]
 }
 
 export interface CharcoalFleetFilters {

@@ -1711,6 +1711,72 @@ class CharcoalJITSubscription(TimestampMixin, Base):
     next_ship_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class CharcoalJITInvitation(TimestampMixin, Base):
+    """A single beta invitation to one device.
+
+    Invitations are batched: the admin picks cohort params (family,
+    min_cooks, lookback, percentile floor) + a max invite count, and the
+    batch builder selects the top-N devices, snapshots their burn rate
+    and percentile, and writes one row here per device with a shared
+    ``batch_id``. The app-side resolves ``invitation_token`` at opt-in
+    time and promotes the row to ``accepted`` with a linked
+    ``subscription_id``.
+
+    Status values:
+      * ``pending``  — sent, neither accepted nor declined yet
+      * ``accepted`` — user opted in; ``subscription_id`` set
+      * ``declined`` — user actively said no
+      * ``expired``  — hit ``expires_at`` without action
+      * ``revoked``  — admin pulled back the invite (bad targeting, etc.)
+    """
+    __tablename__ = "charcoal_jit_invitations"
+    __table_args__ = (
+        Index("ix_charcoal_jit_invitations_device_id", "device_id"),
+        Index("ix_charcoal_jit_invitations_mac", "mac_normalized"),
+        Index("ix_charcoal_jit_invitations_status", "status"),
+        Index("ix_charcoal_jit_invitations_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    invitation_token: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()),
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(String(128))
+    mac_normalized: Mapped[Optional[str]] = mapped_column(String(12))
+    user_key: Mapped[Optional[str]] = mapped_column(String(128))
+
+    # SKU + shipping params snapshotted at invite time.
+    partner_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("partner_products.id", ondelete="SET NULL"),
+    )
+    bag_size_lb: Mapped[int] = mapped_column(Integer, nullable=False)
+    fuel_preference: Mapped[str] = mapped_column(String(16), nullable=False)
+    margin_pct: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
+
+    # Burn-rate / cohort snapshot — recorded once, never updated.
+    addressable_lb_per_month: Mapped[Optional[float]] = mapped_column(Float)
+    percentile_at_invite: Mapped[Optional[float]] = mapped_column(Float)
+    sessions_in_window_at_invite: Mapped[Optional[int]] = mapped_column(Integer)
+    product_family_at_invite: Mapped[Optional[str]] = mapped_column(String(64))
+    cohort_params_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    invited_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    declined_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    invited_by: Mapped[Optional[str]] = mapped_column(String(128))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    subscription_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("charcoal_jit_subscriptions.id", ondelete="SET NULL"),
+    )
+
+
 class AiNarrative(TimestampMixin, Base):
     """Persistent store for on-demand Opus narratives — the "write 3-5
     actionable observations and cache the result" pattern.

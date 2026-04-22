@@ -770,3 +770,264 @@ def jit_cancel(
     row.status = "cancelled"
     db.commit()
     return {"ok": True, "subscription": _serialize_sub(row)}
+
+
+# ── JIT beta rollout: invitations ────────────────────────────────────
+#
+# Admin surface for building + sending invitation batches. The write
+# path is heavily guarded: POST /batches requires a typed confirmation
+# and respects already-invited / already-subscribed exclusion.
+
+
+class InvitationSelectionIn(BaseModel):
+    """Shared shape for both preview (dry-run) and batch creation."""
+    partner_product_id: int = Field(..., description="Pinned SKU the cohort gets invited to.")
+    product_families: Optional[list[str]] = Field(
+        default=None,
+        description="Restrict cohort to these families (Weber Kettle / Huntsman / etc). None = no filter.",
+    )
+    min_cooks_in_window: int = Field(
+        default=1, ge=0, le=100,
+        description="Require at least this many qualifying cooks in the lookback window.",
+    )
+    lookback_days: int = Field(
+        default=90, ge=7, le=365,
+        description="Trailing-window length for burn-rate calculation.",
+    )
+    target_percentile_floor: float = Field(
+        default=75.0, ge=0.0, le=95.0,
+        description="Burn-rate percentile floor. 75 = top 25% of the fleet.",
+    )
+    max_invitations: int = Field(
+        default=50, ge=1, le=500,
+        description="Cap on invitations created. M1 default is 50.",
+    )
+    margin_pct: float = Field(
+        default=10.0, ge=0.0, le=100.0,
+        description="Spider Grills' cut, stamped onto each invitation.",
+    )
+
+
+class InvitationBatchIn(InvitationSelectionIn):
+    """Batch-send body. Requires explicit confirmation token to avoid
+    accidental sends from a click-through."""
+    expiry_days: int = Field(
+        default=14, ge=1, le=90,
+        description="Invitation lifetime before it auto-expires.",
+    )
+    notes: Optional[str] = Field(default=None, description="Internal batch notes.")
+    invited_by: Optional[str] = Field(
+        default=None,
+        description="Admin email / handle for audit. Dashboard fills this in automatically.",
+    )
+    confirm: str = Field(
+        ...,
+        description="Must equal 'SEND' — client-side typed confirmation to prevent misclicks.",
+    )
+
+
+@router.post("/jit/invitations/preview")
+def jit_invitations_preview(
+    payload: InvitationSelectionIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Dry-run the cohort selection without writing anything. Returns
+    the ranked candidate list + summary stats the UI renders inside
+    the 'Preview batch' dialog."""
+    from app.services.charcoal_jit_invitations import preview_invitation_batch
+    try:
+        return preview_invitation_batch(
+            db,
+            partner_product_id=payload.partner_product_id,
+            product_families=payload.product_families,
+            min_cooks_in_window=payload.min_cooks_in_window,
+            lookback_days=payload.lookback_days,
+            target_percentile_floor=payload.target_percentile_floor,
+            max_invitations=payload.max_invitations,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/jit/invitations/batches")
+def jit_invitations_send_batch(
+    payload: InvitationBatchIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Create a new invitation batch — writes one row per selected device.
+
+    Safety rails:
+      * ``confirm`` field must equal ``"SEND"`` (client types it in a
+        dialog before the button is enabled).
+      * Already-invited (pending/accepted) and already-subscribed
+        (active) devices are silently excluded — the batch only goes
+        to fresh devices.
+    """
+    if payload.confirm != "SEND":
+        raise HTTPException(status_code=400, detail="confirm field must equal 'SEND'")
+
+    from app.services.charcoal_jit_invitations import create_invitation_batch
+    try:
+        result = create_invitation_batch(
+            db,
+            partner_product_id=payload.partner_product_id,
+            product_families=payload.product_families,
+            min_cooks_in_window=payload.min_cooks_in_window,
+            lookback_days=payload.lookback_days,
+            target_percentile_floor=payload.target_percentile_floor,
+            max_invitations=payload.max_invitations,
+            margin_pct=payload.margin_pct,
+            expiry_days=payload.expiry_days,
+            invited_by=payload.invited_by,
+            notes=payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not result.get("ok"):
+        # Not a server error — just nothing to send (empty cohort).
+        # Return 200 with ok=False so the UI can show the reason.
+        return result
+    return result
+
+
+@router.get("/jit/invitations/batches")
+def jit_invitations_list_batches(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """All batches, newest first, with aggregate status counts."""
+    from app.services.charcoal_jit_invitations import list_batches
+    return list_batches(db)
+
+
+@router.get("/jit/invitations/batches/{batch_id}")
+def jit_invitations_get_batch(
+    batch_id: str,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Full detail for one batch — every invitation row with current
+    status. Powers the batch-detail drawer on the Beta rollout tab."""
+    from app.services.charcoal_jit_invitations import get_batch
+    result = get_batch(db, batch_id=batch_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "batch not found"))
+    return result
+
+
+class InvitationRevokeIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=256)
+    revoked_by: Optional[str] = Field(default=None, max_length=128)
+
+
+@router.post("/jit/invitations/{invitation_id}/revoke")
+def jit_invitations_revoke(
+    invitation_id: int,
+    payload: InvitationRevokeIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Pull back a pending invitation. Frees the device to be re-invited
+    in a future batch. Cannot revoke accepted/declined/expired invites."""
+    from app.services.charcoal_jit_invitations import revoke_invitation
+    result = revoke_invitation(
+        db,
+        invitation_id=invitation_id,
+        revoked_by=payload.revoked_by,
+        reason=payload.reason,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "revoke failed"))
+    return result
+
+
+@router.post("/jit/invitations/expire-stale")
+def jit_invitations_expire_stale(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Mark past-expiry pending invites as expired. Safe to invoke from
+    the UI or a scheduler. Idempotent."""
+    from app.services.charcoal_jit_invitations import expire_stale_invitations
+    return expire_stale_invitations(db)
+
+
+# ── App-side invitation surface ──────────────────────────────────────
+#
+# These three endpoints are what Agustin's app hits when a user taps
+# the invite screen. They need the dashboard-session auth like the rest
+# of this router — the Spider Grills app proxies the token through its
+# own app-auth layer and lands on the dashboard API with the session
+# cookie.
+
+
+@router.get("/jit/invitations/by-token/{token}")
+def jit_invitations_by_token(
+    token: str,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Resolve an invitation by its URL token. Used by the app-side
+    opt-in screen to render ('You've been invited to the charcoal
+    auto-ship beta') before the user accepts or declines."""
+    from app.services.charcoal_jit_invitations import (
+        resolve_by_token, serialize_invitation,
+    )
+    row = resolve_by_token(db, token=token)
+    if row is None:
+        raise HTTPException(status_code=404, detail="invitation not found")
+    out = serialize_invitation(row)
+    # Omit internal fields when serving via this path (notes are
+    # operator-only; invited_by reveals admin email).
+    out.pop("notes", None)
+    out.pop("invited_by", None)
+    # Attach SKU detail so the app can render price + bag size without
+    # a second round-trip.
+    if row.partner_product_id:
+        sku = db.get(PartnerProduct, row.partner_product_id)
+        if sku is not None:
+            out["sku"] = _serialize_product(sku)
+    return {"ok": True, "invitation": out}
+
+
+class InvitationAcceptIn(BaseModel):
+    user_key: str = Field(..., max_length=128)
+    shipping_zip: Optional[str] = Field(default=None, max_length=16)
+    shipping_lat: Optional[float] = None
+    shipping_lon: Optional[float] = None
+    lead_time_days: int = Field(default=5, ge=1, le=30)
+    safety_stock_days: int = Field(default=7, ge=0, le=30)
+
+
+@router.post("/jit/invitations/by-token/{token}/accept")
+def jit_invitations_accept(
+    token: str,
+    payload: InvitationAcceptIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """User tapped Opt In on the app. Promotes the invitation and
+    creates the matching CharcoalJITSubscription in one transaction."""
+    from app.services.charcoal_jit_invitations import accept_invitation
+    result = accept_invitation(
+        db,
+        token=token,
+        user_key=payload.user_key,
+        shipping_zip=payload.shipping_zip,
+        shipping_lat=payload.shipping_lat,
+        shipping_lon=payload.shipping_lon,
+        lead_time_days=payload.lead_time_days,
+        safety_stock_days=payload.safety_stock_days,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "accept failed"))
+    return result
+
+
+class InvitationDeclineIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=256)
+
+
+@router.post("/jit/invitations/by-token/{token}/decline")
+def jit_invitations_decline(
+    token: str,
+    payload: InvitationDeclineIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """User declined the invite from the app."""
+    from app.services.charcoal_jit_invitations import decline_invitation
+    result = decline_invitation(db, token=token, reason=payload.reason)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "decline failed"))
+    return result
