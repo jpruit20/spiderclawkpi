@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -949,7 +949,7 @@ def alpha_cohort_analytics(db: Session = Depends(db_session)) -> dict[str, Any]:
     # We look at last 180 days of sessions to make the comparison
     # meaningful — enough history for alpha to cover 01.01.90 onward,
     # while keeping the fleet-baseline current.
-    window_start = datetime.now(timezone.utc) - __import__("datetime").timedelta(days=180)
+    window_start = datetime.now(timezone.utc) - timedelta(days=180)
 
     # Fetch everything in one query + group in Python (segmentation by
     # alpha membership is a set-contains check, awkward to do in SQL).
