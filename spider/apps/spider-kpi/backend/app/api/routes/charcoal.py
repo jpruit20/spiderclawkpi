@@ -1,0 +1,308 @@
+"""Charcoal usage analytics — data source for the per-device / fleet /
+JIT sub-page under Product Engineering.
+
+The thermal model itself lives in the frontend (TypeScript,
+``lib/charcoalModel.ts``) so its parameters can be tuned in the browser
+without a backend round-trip. This module's job is to serve the
+*cook-session records* the model runs over:
+
+  * per-device history (MAC → session list)
+  * fleet-wide aggregation by date range + cohort filters
+
+No storage added — everything is derived from ``TelemetrySession`` and
+``TelemetryStreamEvent`` using the existing MAC-resolution path
+(``firmware.normalize_mac`` + ``_device_ids_for_mac``).
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select, text
+from sqlalchemy.orm import Session
+
+from app.api.deps import db_session, require_dashboard_session
+from app.models import TelemetrySession
+from app.services.product_taxonomy import (
+    FAMILY_HUNTSMAN,
+    FAMILY_WEBER_KETTLE,
+    classify_product,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/api/charcoal",
+    tags=["charcoal"],
+    dependencies=[Depends(require_dashboard_session)],
+)
+
+
+# Lower bound on cook duration before we count it as a "real" cook.
+# Short events (< ~5 min) are typically a test-fire or a command glitch
+# — including them inflates session counts and depresses the avg-temp
+# computation because many such events never left ambient.
+MIN_SESSION_SECONDS = 5 * 60
+
+
+def _avg_from_series(series: Any) -> Optional[float]:
+    """TelemetrySession.actual_temp_time_series is a JSONB list of
+    ``{t, v}`` samples. Return the arithmetic mean of ``v`` values,
+    or None if the series is empty / unparseable."""
+    if not series or not isinstance(series, list):
+        return None
+    vals: list[float] = []
+    for s in series:
+        try:
+            v = float(s.get("v"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if v > 0 and v < 1000:  # filter probe-not-connected spikes
+            vals.append(v)
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+def _summarize_session(s: TelemetrySession) -> dict[str, Any]:
+    """Compact per-session payload the charcoal model consumes."""
+    avg_actual = _avg_from_series(s.actual_temp_time_series)
+    hours = (s.session_duration_seconds or 0) / 3600.0
+    return {
+        "session_id": s.session_id,
+        "source_event_id": s.source_event_id,
+        "device_id": s.device_id,
+        "session_start": s.session_start.isoformat() if s.session_start else None,
+        "session_end": s.session_end.isoformat() if s.session_end else None,
+        "duration_hours": round(hours, 3),
+        "target_temp_f": s.target_temp,
+        "avg_actual_temp_f": round(avg_actual, 1) if avg_actual is not None else None,
+        "grill_type": s.grill_type,
+        "firmware_version": s.firmware_version,
+        "cook_success": bool(s.cook_success),
+        "product_family": classify_product(s.grill_type, s.firmware_version),
+    }
+
+
+@router.get("/device/{mac}/sessions")
+def device_sessions(
+    mac: str,
+    days: int = 730,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """All cook sessions for a single device, newest first.
+
+    ``mac`` accepts any common format (colons, dashes, no separators).
+    Sessions below MIN_SESSION_SECONDS are filtered out. The caller
+    (frontend charcoal model) computes fuel consumption per session.
+    """
+    from app.api.routes.firmware import _device_ids_for_mac, normalize_mac
+
+    normalized = normalize_mac(mac)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="invalid MAC")
+
+    device_ids = _device_ids_for_mac(db, normalized)
+    if not device_ids:
+        return {
+            "mac": normalized,
+            "device_id_count": 0,
+            "sessions": [],
+            "note": "No telemetry_stream_events for this MAC — device may be offline or never provisioned.",
+        }
+
+    days = max(1, min(days, 365 * 3))
+    window_start = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = db.execute(
+        select(TelemetrySession)
+        .where(TelemetrySession.device_id.in_(device_ids))
+        .where(TelemetrySession.session_start >= window_start)
+        .where(TelemetrySession.session_duration_seconds >= MIN_SESSION_SECONDS)
+        .order_by(TelemetrySession.session_start.desc())
+    ).scalars().all()
+
+    return {
+        "mac": normalized,
+        "device_id_count": len(device_ids),
+        "window_days": days,
+        "sessions": [_summarize_session(s) for s in rows],
+    }
+
+
+@router.get("/fleet/aggregate")
+def fleet_aggregate(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    grill_type: Optional[str] = None,
+    firmware_version: Optional[str] = None,
+    product_family: Optional[str] = None,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Fleet-wide charcoal-relevant aggregation.
+
+    Returns totals + one row per device with cook hours + avg temp so
+    the frontend can (a) render per-device burn-rate distribution and
+    (b) run the thermal model against each device's average cook
+    profile.
+
+    Filters:
+      * ``start`` / ``end`` — ISO date strings; default last 180 days.
+      * ``grill_type`` / ``firmware_version`` — exact match.
+      * ``product_family`` — applies the classifier (Weber Kettle /
+        Huntsman / Giant Huntsman / Unknown).
+
+    A full session dump would be huge — this endpoint aggregates in
+    SQL and ships only per-device row counts + summaries.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        end_dt = datetime.fromisoformat(end) if end else now
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid `end` date")
+    try:
+        start_dt = datetime.fromisoformat(start) if start else (end_dt - timedelta(days=180))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid `start` date")
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="`start` must be before `end`")
+
+    # We want avg actual temp, total hours, and last firmware seen per
+    # device. Two queries: first a grouped aggregate on TelemetrySession
+    # (cheap — sessions are small), then a lookup for latest fw per
+    # device via DISTINCT ON.
+    where_clauses = [
+        "device_id IS NOT NULL",
+        "device_id NOT LIKE 'mac:%%'",
+        "session_start >= :start_dt",
+        "session_start < :end_dt",
+        "session_duration_seconds >= :min_seconds",
+    ]
+    params: dict[str, Any] = {
+        "start_dt": start_dt,
+        "end_dt": end_dt,
+        "min_seconds": MIN_SESSION_SECONDS,
+    }
+    if grill_type:
+        where_clauses.append("grill_type = :grill_type")
+        params["grill_type"] = grill_type
+    if firmware_version:
+        where_clauses.append("firmware_version = :firmware_version")
+        params["firmware_version"] = firmware_version
+
+    where_sql = " AND ".join(where_clauses)
+    per_device_rows = db.execute(text(f"""
+        SELECT
+            device_id,
+            count(*) AS sessions,
+            sum(session_duration_seconds)::float / 3600.0 AS cook_hours,
+            avg(target_temp) AS avg_target_temp,
+            -- Average actual-temp requires pulling the time-series.
+            -- We compute a proxy here from the DB-level fields we have
+            -- and let the frontend refine per-session where needed.
+            avg(CASE WHEN target_temp IS NOT NULL THEN target_temp ELSE 0 END) AS avg_temp_proxy,
+            max(session_start) AS last_session_at,
+            min(session_start) AS first_session_at
+        FROM telemetry_sessions
+        WHERE {where_sql}
+        GROUP BY device_id
+        ORDER BY cook_hours DESC
+    """), params).all()
+
+    # Latest firmware / grill_type per device in the window.
+    latest_meta = {r[0]: (r[1], r[2]) for r in db.execute(text(f"""
+        SELECT DISTINCT ON (device_id)
+            device_id, grill_type, firmware_version
+        FROM telemetry_sessions
+        WHERE {where_sql}
+        ORDER BY device_id, session_start DESC
+    """), params).all()}
+
+    per_device: list[dict[str, Any]] = []
+    for r in per_device_rows:
+        device_id, sessions, cook_hours, avg_target, avg_temp_proxy, last_seen, first_seen = r
+        meta_grill, meta_fw = latest_meta.get(device_id, (None, None))
+        family = classify_product(meta_grill, meta_fw)
+        if product_family and family != product_family:
+            continue
+        per_device.append({
+            "device_id": device_id,
+            "sessions": int(sessions or 0),
+            "cook_hours": round(float(cook_hours or 0.0), 2),
+            "avg_target_temp_f": round(float(avg_target), 1) if avg_target is not None else None,
+            "avg_cook_temp_f": round(float(avg_temp_proxy), 1) if avg_temp_proxy else None,
+            "grill_type": meta_grill,
+            "firmware_version": meta_fw,
+            "product_family": family,
+            "first_session_at": first_seen.isoformat() if first_seen else None,
+            "last_session_at": last_seen.isoformat() if last_seen else None,
+        })
+
+    # Fleet totals (post-filter).
+    total_cook_hours = sum(d["cook_hours"] for d in per_device)
+    total_sessions = sum(d["sessions"] for d in per_device)
+
+    # Family rollup for quick readout
+    by_family: dict[str, dict[str, Any]] = {}
+    for d in per_device:
+        fam = d["product_family"]
+        b = by_family.setdefault(fam, {"devices": 0, "sessions": 0, "cook_hours": 0.0})
+        b["devices"] += 1
+        b["sessions"] += d["sessions"]
+        b["cook_hours"] += d["cook_hours"]
+    by_family_out = [
+        {"product_family": fam, **vals, "cook_hours": round(vals["cook_hours"], 1)}
+        for fam, vals in sorted(by_family.items(), key=lambda kv: -kv[1]["cook_hours"])
+    ]
+
+    return {
+        "window": {
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "days": (end_dt - start_dt).days,
+        },
+        "filters": {
+            "grill_type": grill_type,
+            "firmware_version": firmware_version,
+            "product_family": product_family,
+        },
+        "fleet_totals": {
+            "unique_devices": len(per_device),
+            "total_sessions": total_sessions,
+            "total_cook_hours": round(total_cook_hours, 1),
+        },
+        "by_family": by_family_out,
+        "per_device": per_device,
+    }
+
+
+@router.get("/fleet/distinct-filters")
+def fleet_distinct_filters(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Populate the Fleet tab's filter dropdowns — distinct grill_types
+    and firmware_versions seen in the last 24 months."""
+    window_start = datetime.now(timezone.utc) - timedelta(days=730)
+    grills = db.execute(
+        select(TelemetrySession.grill_type, func.count(func.distinct(TelemetrySession.device_id)))
+        .where(TelemetrySession.session_start >= window_start)
+        .where(TelemetrySession.grill_type.is_not(None))
+        .group_by(TelemetrySession.grill_type)
+        .order_by(func.count(func.distinct(TelemetrySession.device_id)).desc())
+    ).all()
+    firmwares = db.execute(
+        select(TelemetrySession.firmware_version, func.count(func.distinct(TelemetrySession.device_id)))
+        .where(TelemetrySession.session_start >= window_start)
+        .where(TelemetrySession.firmware_version.is_not(None))
+        .group_by(TelemetrySession.firmware_version)
+        .order_by(func.count(func.distinct(TelemetrySession.device_id)).desc())
+    ).all()
+    return {
+        "grill_types": [{"value": g or "Unknown", "devices": int(n)} for g, n in grills],
+        "firmware_versions": [{"value": f, "devices": int(n)} for f, n in firmwares],
+        "product_families": [FAMILY_WEBER_KETTLE, FAMILY_HUNTSMAN, "Giant Huntsman", "Unknown"],
+    }

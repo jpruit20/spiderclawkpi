@@ -32,6 +32,7 @@ const TelemetryAnalysisPage = lazy(() => import('./pages/TelemetryAnalysisPage')
 const LoreLedger = lazy(() => import('./pages/LoreLedger').then((m) => ({ default: m.LoreLedger })))
 const EcrTracker = lazy(() => import('./pages/EcrTracker').then((m) => ({ default: m.EcrTracker })))
 const FirmwareHub = lazy(() => import('./pages/FirmwareHub').then((m) => ({ default: m.FirmwareHub })))
+const CharcoalUsage = lazy(() => import('./pages/CharcoalUsage').then((m) => ({ default: m.CharcoalUsage })))
 
 function withBoundary(label: string, node: React.ReactNode) {
   return (
@@ -53,6 +54,7 @@ export function App() {
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
         <Route path="/division/product-engineering" element={withBoundary('Product / Engineering Division', <ProductEngineeringDivision />)} />
         <Route path="/division/product-engineering/firmware" element={withBoundary('Firmware Hub', <FirmwareHub />)} />
+        <Route path="/division/product-engineering/charcoal" element={withBoundary('Charcoal JIT', <CharcoalUsage />)} />
         <Route path="/division/operations" element={withBoundary('Operations Division', <OperationsDivision />)} />
         <Route path="/division/production-manufacturing" element={withBoundary('Production / Manufacturing Division', <ProductionManufacturingDivision />)} />
         <Route path="/division/product-enginering" element={<Navigate to="/division/product-engineering" replace />} />

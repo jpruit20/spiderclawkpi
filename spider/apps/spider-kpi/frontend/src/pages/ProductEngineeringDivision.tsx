@@ -768,6 +768,7 @@ export function ProductEngineeringDivision() {
                     <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
                   ))}
                   <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
+                  <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
                 </div>
                 <div style={{ position: 'relative' }}>
                   <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>

@@ -260,6 +260,28 @@ export const api = {
     request<FleetSizeResponse>('/api/fleet/size', { signal }),
   fleetLifetime: (signal?: AbortSignal) =>
     request<FleetLifetimeResponse>('/api/fleet/lifetime', { signal }),
+  charcoalDeviceSessions: (mac: string, days = 730, signal?: AbortSignal) =>
+    request<CharcoalDeviceSessionsResponse>(
+      `/api/charcoal/device/${encodeURIComponent(mac)}/sessions?days=${days}`,
+      { signal },
+    ),
+  charcoalFleetAggregate: (params: {
+    start?: string; end?: string;
+    grill_type?: string; firmware_version?: string; product_family?: string;
+  }, signal?: AbortSignal) => {
+    const qs = new URLSearchParams()
+    if (params.start) qs.set('start', params.start)
+    if (params.end) qs.set('end', params.end)
+    if (params.grill_type) qs.set('grill_type', params.grill_type)
+    if (params.firmware_version) qs.set('firmware_version', params.firmware_version)
+    if (params.product_family) qs.set('product_family', params.product_family)
+    return request<CharcoalFleetAggregateResponse>(
+      `/api/charcoal/fleet/aggregate${qs.toString() ? `?${qs}` : ''}`,
+      { signal },
+    )
+  },
+  charcoalFleetFilters: (signal?: AbortSignal) =>
+    request<CharcoalFleetFilters>('/api/charcoal/fleet/distinct-filters', { signal }),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',
@@ -1266,6 +1288,60 @@ export interface OrderAgingOldestOrder {
 export interface OrderAgingTrendSeries {
   label: string
   counts: number[]
+}
+
+export interface CharcoalDeviceSessionsResponse {
+  mac: string
+  device_id_count: number
+  window_days?: number
+  sessions: Array<{
+    session_id: string | null
+    source_event_id: string
+    device_id: string | null
+    session_start: string | null
+    session_end: string | null
+    duration_hours: number
+    target_temp_f: number | null
+    avg_actual_temp_f: number | null
+    grill_type: string | null
+    firmware_version: string | null
+    cook_success: boolean
+    product_family: string
+  }>
+  note?: string
+}
+
+export interface CharcoalFleetAggregateResponse {
+  window: { start: string; end: string; days: number }
+  filters: {
+    grill_type: string | null
+    firmware_version: string | null
+    product_family: string | null
+  }
+  fleet_totals: {
+    unique_devices: number
+    total_sessions: number
+    total_cook_hours: number
+  }
+  by_family: Array<{ product_family: string; devices: number; sessions: number; cook_hours: number }>
+  per_device: Array<{
+    device_id: string
+    sessions: number
+    cook_hours: number
+    avg_target_temp_f: number | null
+    avg_cook_temp_f: number | null
+    grill_type: string | null
+    firmware_version: string | null
+    product_family: string
+    first_session_at: string | null
+    last_session_at: string | null
+  }>
+}
+
+export interface CharcoalFleetFilters {
+  grill_types: Array<{ value: string; devices: number }>
+  firmware_versions: Array<{ value: string; devices: number }>
+  product_families: string[]
 }
 
 export interface FleetFamilyBreakdown {
