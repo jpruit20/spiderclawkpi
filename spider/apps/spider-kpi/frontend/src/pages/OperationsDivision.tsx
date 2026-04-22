@@ -5,6 +5,7 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { DivisionHero } from '../components/DivisionHero'
+import { OrderAgingCard } from '../components/OrderAgingCard'
 import { Link } from 'react-router-dom'
 
 const KETTLE_CART_BANNER_EXPIRES_AT = Date.parse('2026-04-22T03:00:00Z')
@@ -93,6 +94,10 @@ export function OperationsDivision() {
           { label: 'Late-ship reasons', value: '—', state: 'neutral' },
         ]}
       />
+      {/* Order aging — Conor's 2026-04-21 ask. Lives here as a real ops
+          KPI while the broader BC/ERP integration is still pending.
+          Also rendered compact on the CX page for WISMO correlation. */}
+      <OrderAgingCard variant="full" trendDays={14} />
       <BlockedDivisionPage
         title="Operations"
         owner="Conor"

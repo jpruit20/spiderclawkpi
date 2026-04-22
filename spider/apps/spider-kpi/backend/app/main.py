@@ -34,6 +34,7 @@ from app.core.config import get_settings
 from app.ingestion.connectors.ga4 import ga4_debug_self_check
 from app.scheduler import build_scheduler
 from app.webhooks.shopify import router as shopify_webhook_router
+from app.api.routes.shopify import router as shopify_router
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ app.include_router(marketing_router)
 app.include_router(slack_router)
 app.include_router(slack_webhook_router)
 app.include_router(shopify_webhook_router)
+app.include_router(shopify_router)
 app.include_router(beta_router)
 app.include_router(beta_public_router)
 

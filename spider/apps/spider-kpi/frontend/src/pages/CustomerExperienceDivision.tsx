@@ -12,6 +12,7 @@ import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { CXCutoverBanner } from '../components/CXCutoverBanner'
 import { DivisionHero } from '../components/DivisionHero'
+import { OrderAgingCard } from '../components/OrderAgingCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
@@ -729,6 +730,15 @@ export function CustomerExperienceDivision() {
               Compressed by default (just KPI strip); the full trend
               chart + recent tickets list expand on click. */}
           <WismoKpiCard days={30} />
+
+          {/* Order aging (Shopify) — FYI context for WISMO. When 3-7d
+              or 7d+ counts rise, WISMO volume tends to follow. The
+              full aging view lives on the Operations page; this is
+              the one-glance version. */}
+          <OrderAgingCard
+            variant="compact"
+            subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
+          />
 
           {/* Performance Metrics as a visual tile grid. Each tile is a
               car-gauge: big number, state color, 7-day trend arrow.

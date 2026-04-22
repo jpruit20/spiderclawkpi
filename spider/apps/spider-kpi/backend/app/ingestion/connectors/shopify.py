@@ -220,6 +220,31 @@ def _latest_order_state(db: Session, order_id: str) -> ShopifyOrderEvent | None:
     ).scalars().first()
 
 
+def _first_fulfilled_at(order: dict[str, Any]) -> Optional[str]:
+    """Earliest `fulfillments[i].created_at` ISO string on the order,
+    or None if the order has no fulfillment record yet. Lets downstream
+    queries reconstruct "was this order fulfilled as of date D?" for
+    historical aging trend charts."""
+    fulfillments = order.get("fulfillments") or []
+    earliest: Optional[str] = None
+    for f in fulfillments:
+        ts = f.get("created_at") or f.get("processed_at")
+        if ts and (earliest is None or str(ts) < earliest):
+            earliest = str(ts)
+    return earliest
+
+
+def _normalized_tags(order: dict[str, Any]) -> list[str]:
+    """Shopify returns tags as a comma-separated string. Normalize to a
+    lowercase list so downstream can filter/segment predictably."""
+    raw = order.get("tags")
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip().lower() for t in raw if str(t).strip()]
+    return [t.strip().lower() for t in str(raw).split(",") if t.strip()]
+
+
 def _normalized_payload_from_order(order: dict[str, Any], financials: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": order.get("id"),
@@ -229,6 +254,9 @@ def _normalized_payload_from_order(order: dict[str, Any], financials: dict[str, 
         "total_price": order.get("total_price"),
         "current_total_price": order.get("current_total_price"),
         "financial_status": order.get("financial_status"),
+        "fulfillment_status": order.get("fulfillment_status"),
+        "first_fulfilled_at": _first_fulfilled_at(order),
+        "tags": _normalized_tags(order),
         "cancelled_at": order.get("cancelled_at"),
         "recognized_revenue": financials["recognized_revenue"],
         "refunds": financials["refunds"],
@@ -422,12 +450,22 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             created_at_min = business_window_start.astimezone(timezone.utc).isoformat()
         else:
             created_at_min = window_start_utc.isoformat()
+        # Fields we pull. `fulfillment_status`, `tags`, and `fulfillments`
+        # were added 2026-04-21 for the order-aging endpoint (Ops + CX).
+        # `fulfillment_status` drives the is-currently-unfulfilled filter;
+        # `fulfillments[].created_at` gives us historical fulfilled-at
+        # timestamps so we can reconstruct aging buckets over time.
+        _ORDER_FIELDS = (
+            "id,created_at,updated_at,total_price,current_total_price,"
+            "total_discounts,financial_status,cancelled_at,customer.id,"
+            "fulfillment_status,tags,fulfillments"
+        )
         params = {
             "status": "any",
             "limit": "250",
             "order": "created_at asc",
             "created_at_min": created_at_min,
-            "fields": "id,created_at,updated_at,total_price,current_total_price,total_discounts,financial_status,cancelled_at,customer.id",
+            "fields": _ORDER_FIELDS,
         }
 
         all_orders: list[dict[str, Any]] = []
@@ -456,7 +494,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
             "limit": "250",
             "order": "updated_at asc",
             "updated_at_min": updated_at_min,
-            "fields": "id,created_at,updated_at,total_price,current_total_price,total_discounts,financial_status,cancelled_at,customer.id",
+            "fields": _ORDER_FIELDS,
         }
         next_url = endpoint
         next_params = updated_params
@@ -555,4 +593,123 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         finish_sync_run(db, run, status="failed", error_message=str(exc))
         db.commit()
         logger.exception("shopify sync failed")
+        return {"ok": False, "message": str(exc), "records_processed": 0, **stats, "duration_ms": duration_ms}
+
+
+# ── Unfulfilled-order one-shot refresh ────────────────────────────────
+#
+# The regular `sync_shopify_orders` poll is driven by `created_at_min`
+# and `updated_at_min`, which means an order that was placed weeks ago
+# and hasn't been touched since won't get its raw_payload refreshed.
+# That's a problem for the order-aging endpoint, which needs the
+# current `fulfillment_status` of every still-open order.
+#
+# This helper pulls all orders with `fulfillment_status=unfulfilled`
+# and `fulfillment_status=partial`, regardless of create/update time,
+# and upserts them. Safe to call on any cadence — Shopify's unfulfilled
+# queue is small (hundreds, not thousands).
+
+
+def sync_unfulfilled_orders(db: Session) -> dict[str, Any]:
+    """Fetch every order currently in fulfillment_status=unfulfilled
+    or =partial and upsert its raw_payload + normalized_payload. Used
+    to seed the order-aging endpoint and keep the open queue fresh.
+    """
+    configured, _status = _configured_status()
+    if not configured:
+        return {"ok": False, "message": "Shopify not configured", "records_processed": 0}
+
+    started = time.monotonic()
+    run = start_sync_run(db, "shopify", "poll_unfulfilled", {})
+    db.commit()
+
+    stats = {
+        "records_fetched": 0,
+        "records_inserted": 0,
+        "records_updated": 0,
+    }
+
+    try:
+        session = build_session()
+        shop_domain = _normalize_shop_domain(settings.shopify_store_url)
+        endpoint = f"https://{shop_domain}/admin/api/{API_VERSION}/orders.json"
+        _ORDER_FIELDS = (
+            "id,created_at,updated_at,total_price,current_total_price,"
+            "total_discounts,financial_status,cancelled_at,customer.id,"
+            "fulfillment_status,tags,fulfillments"
+        )
+        all_orders: list[dict[str, Any]] = []
+        seen_ids: set[Any] = set()
+
+        for fs in ("unfulfilled", "partial"):
+            next_url: str | None = endpoint
+            next_params: Optional[dict[str, str]] = {
+                "status": "open",  # not cancelled, not archived
+                "fulfillment_status": fs,
+                "limit": "250",
+                "order": "created_at asc",
+                "fields": _ORDER_FIELDS,
+            }
+            while next_url:
+                response = _request_json(session, next_url, params=next_params)
+                payload = response.json()
+                batch = payload.get("orders", [])
+                stats["records_fetched"] += len(batch)
+                for order in batch:
+                    order_id = order.get("id")
+                    if order_id in seen_ids:
+                        continue
+                    seen_ids.add(order_id)
+                    all_orders.append(order)
+                next_url = _extract_next_link(response.headers.get("Link"))
+                next_params = None
+
+        touched_dates: set[datetime.date] = set()
+        for order in all_orders:
+            created_at = order.get("created_at")
+            if not created_at:
+                continue
+            order_dt = _parse_datetime(str(created_at))
+            business_date = _business_date_from_dt(order_dt)
+            touched_dates.add(business_date)
+
+            order_id = str(order.get("id"))
+            event_record = _latest_event(db, "poll.order_snapshot", order_id)
+            updated_at = _parse_datetime(str(order.get("updated_at") or order.get("created_at")))
+            financials = _extract_financials(order)
+            normalized_payload = _normalized_payload_from_order(order, financials)
+            if event_record is None:
+                db.add(
+                    ShopifyOrderEvent(
+                        event_type="poll.order_snapshot",
+                        order_id=order_id,
+                        event_timestamp=updated_at,
+                        business_date=business_date,
+                        raw_payload=order,
+                        normalized_payload=normalized_payload,
+                    )
+                )
+                stats["records_inserted"] += 1
+            else:
+                event_record.event_timestamp = updated_at
+                event_record.business_date = business_date
+                event_record.raw_payload = order
+                event_record.normalized_payload = normalized_payload
+                stats["records_updated"] += 1
+
+        db.commit()
+        duration_ms = int((time.monotonic() - started) * 1000)
+        run.metadata_json = {**run.metadata_json, **stats, "duration_ms": duration_ms}
+        finish_sync_run(db, run, status="success", records_processed=len(all_orders))
+        db.commit()
+        logger.info("shopify unfulfilled sync complete", extra={"stats": stats, "duration_ms": duration_ms})
+        return {"ok": True, "records_processed": len(all_orders), **stats, "duration_ms": duration_ms}
+    except Exception as exc:
+        db.rollback()
+        run = db.merge(run)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        run.metadata_json = {**(run.metadata_json or {}), **stats, "duration_ms": duration_ms}
+        finish_sync_run(db, run, status="failed", error_message=str(exc))
+        db.commit()
+        logger.exception("shopify unfulfilled sync failed")
         return {"ok": False, "message": str(exc), "records_processed": 0, **stats, "duration_ms": duration_ms}

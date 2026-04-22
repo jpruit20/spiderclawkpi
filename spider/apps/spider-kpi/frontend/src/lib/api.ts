@@ -254,6 +254,13 @@ export const api = {
   issues: (signal?: AbortSignal) => request<IssueRadarResponse>('/api/issues', { signal }),
   clusterDetail: (theme: string, signal?: AbortSignal) => request<ClusterTicketDetail>(`/api/issues/clusters/${encodeURIComponent(theme)}/detail`, { signal }),
   cxSnapshot: (signal?: AbortSignal) => request<CXSnapshotResponse>('/api/cx/snapshot', { signal }),
+  shopifyOrderAging: (trendDays = 14, signal?: AbortSignal) =>
+    request<OrderAgingResponse>(`/api/shopify/order-aging?trend_days=${trendDays}`, { signal }),
+  shopifySyncUnfulfilled: () =>
+    request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
+      '/api/shopify/sync-unfulfilled',
+      { method: 'POST', body: {}, timeoutMs: 180000 },
+    ),
   weeklyGauges: (signal?: AbortSignal) =>
     request<WeeklyGaugeResponse>('/api/command-center/weekly-gauges', { signal }),
   regenerateWeeklyGauges: () =>
@@ -1231,6 +1238,50 @@ export interface AlphaInsightObservation {
   recommendation: string
   severity: 'improving' | 'regressing' | 'investigate' | 'info'
   firmware_versions_cited: string[]
+}
+
+export interface OrderAgingBucket {
+  label: string
+  low_days: number
+  high_days: number | null
+  count: number
+  oldest_order_days: number
+  total_value_usd: number
+}
+
+export interface OrderAgingOldestOrder {
+  order_id: string
+  age_days: number
+  bucket: string
+  fulfillment_status: string
+  total_value_usd: number
+  created_at: string | null
+  tags: string[]
+}
+
+export interface OrderAgingTrendSeries {
+  label: string
+  counts: number[]
+}
+
+export interface OrderAgingResponse {
+  current: {
+    generated_at: string
+    newest_snapshot_at: string | null
+    total_unfulfilled: number
+    total_unfulfilled_value_usd: number
+    buckets: OrderAgingBucket[]
+    oldest_orders: OrderAgingOldestOrder[]
+  }
+  trend: {
+    days: string[]
+    series: OrderAgingTrendSeries[]
+  }
+  meta: {
+    method: string
+    snapshot_rows_scanned: number
+    notes: string
+  }
 }
 
 export interface AlphaCohortInsight {
