@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { ApiError, api } from '../lib/api'
 import type {
+  CharcoalCohortModelInput, CharcoalCohortModelResponse,
   CharcoalDeviceSessionsResponse, CharcoalFleetAggregateResponse, CharcoalFleetFilters,
   CharcoalJITListResponse, CharcoalJITSubscription,
   CharcoalPartnerProduct, CharcoalPartnerProductsResponse,
@@ -26,13 +27,14 @@ import {
   type FuelTypePrediction,
 } from '../lib/charcoalModel'
 
-type Tab = 'device' | 'fleet' | 'jit' | 'enrollment'
+type Tab = 'device' | 'fleet' | 'jit' | 'enrollment' | 'modeling'
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
   { key: 'device', label: 'Per device', desc: 'MAC lookup → burn history' },
   { key: 'fleet', label: 'Fleet', desc: 'Date range + cohort filters' },
   { key: 'jit', label: 'JIT program', desc: 'Auto-ship forecast' },
   { key: 'enrollment', label: 'Program enrollment', desc: 'Subscribe a device to auto-ship' },
+  { key: 'modeling', label: 'Economic modeling', desc: 'Cohort × signup × SKU → projected GMV / margin / LTV' },
 ]
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1420,6 +1422,352 @@ function EnrollmentTab() {
 
 
 /* ═══════════════════════════════════════════════════════════════════
+   ECONOMIC MODELING TAB — pre-beta cohort feasibility sandbox
+
+   Backed by POST /api/charcoal/modeling/cohort. Every input is a
+   slider / chip / dropdown; the projection re-renders on every change
+   (debounced through an AbortController so stale requests get
+   cancelled). No side effects server-side, so spamming sliders is
+   safe.
+
+   Assumption: Jealous Devil absorbs shipping. We never factor it
+   into Spider Grills' margin math here.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const FAMILY_OPTIONS = ['Weber Kettle', 'Huntsman', 'Unknown'] as const
+const HORIZON_OPTIONS = [6, 12, 24] as const
+const LOOKBACK_OPTIONS = [30, 60, 90, 180] as const
+const USD = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+
+function ModelingTab() {
+  const [products, setProducts] = useState<CharcoalPartnerProduct[]>([])
+  const [productsError, setProductsError] = useState<string | null>(null)
+  const [productId, setProductId] = useState<number | null>(null)
+
+  // Sliders — every change triggers a re-fetch
+  const [families, setFamilies] = useState<string[]>([...FAMILY_OPTIONS])
+  const [minCooks, setMinCooks] = useState(1)
+  const [lookback, setLookback] = useState(90)
+  const [signupPct, setSignupPct] = useState(15)
+  const [marginPct, setMarginPct] = useState(10)
+  const [churnPct, setChurnPct] = useState(2)
+  const [horizon, setHorizon] = useState(12)
+
+  const [result, setResult] = useState<CharcoalCohortModelResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Initial product fetch. Keep ALL products (not just available) so
+  // the modeler can experiment against sold-out SKUs too — that's the
+  // whole point of a feasibility tool.
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.charcoalPartnerProducts(false, ctl.signal)
+      .then(r => {
+        setProducts(r.products)
+        // Prefer the currently-available lump SKU as the default —
+        // that's what a fresh signup would actually ship.
+        const firstAvailable = r.products.find(p => p.available) || r.products[0]
+        if (firstAvailable) setProductId(firstAvailable.id)
+      })
+      .catch(e => { if (e?.name !== 'AbortError') setProductsError(String(e?.message || e)) })
+    return () => ctl.abort()
+  }, [])
+
+  // Build the input payload. Memoize so effect deps stay stable.
+  const input: CharcoalCohortModelInput | null = useMemo(() => {
+    if (productId == null) return null
+    return {
+      product_families: families.length === FAMILY_OPTIONS.length ? null : families,
+      min_cooks_in_window: minCooks,
+      lookback_days: lookback,
+      signup_pct: signupPct,
+      partner_product_id: productId,
+      margin_pct: marginPct,
+      monthly_churn_pct: churnPct,
+      horizon_months: horizon,
+    }
+  }, [productId, families, minCooks, lookback, signupPct, marginPct, churnPct, horizon])
+
+  // Re-model on every slider change (debounced + abortable).
+  useEffect(() => {
+    if (input == null) return
+    const ctl = new AbortController()
+    const t = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      api.charcoalModelingCohort(input, ctl.signal)
+        .then(r => { setResult(r); setLoading(false) })
+        .catch(e => {
+          if (e?.name !== 'AbortError') {
+            setError(e instanceof ApiError ? e.message : String(e?.message || e))
+            setLoading(false)
+          }
+        })
+    }, 250)
+    return () => { clearTimeout(t); ctl.abort() }
+  }, [input])
+
+  const toggleFamily = (f: string) => {
+    setFamilies(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])
+  }
+
+  const selectedSku = products.find(p => p.id === productId) || null
+
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      {/* Header with context banner */}
+      <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
+        <strong>Economic modeling sandbox</strong>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+          Pre-beta feasibility tool. Pick a slice of the active fleet, assume a signup rate, and see projected
+          GMV, Spider Grills margin, JD payout, and LTV over your horizon. <strong>Assumptions:</strong> Jealous
+          Devil absorbs shipping (we never touch inventory); burn rate derives from TelemetrySession × the same
+          thermal model the live JIT forecaster uses. No side effects — every slider change re-projects.
+        </div>
+      </section>
+
+      {/* Controls */}
+      <section className="card">
+        <div className="venom-panel-head">
+          <strong>Inputs</strong>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+            {loading ? 'Recomputing…' : result ? `Updated ${new Date(result.computed_at).toLocaleTimeString()}` : ''}
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
+          {/* Product family chips */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Product families
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {FAMILY_OPTIONS.map(f => (
+                <button
+                  key={f}
+                  type="button"
+                  className={`range-button${families.includes(f) ? ' active' : ''}`}
+                  onClick={() => toggleFamily(f)}
+                  style={{ fontSize: 11 }}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* SKU picker */}
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Subscribed SKU
+            </div>
+            {productsError ? (
+              <div style={{ color: 'var(--red)', fontSize: 11 }}>Product fetch failed: {productsError}</div>
+            ) : products.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 11 }}>Loading partner catalog…</div>
+            ) : (
+              <select
+                value={productId ?? ''}
+                onChange={e => setProductId(Number(e.target.value))}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--panel-2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6 }}
+              >
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.title} — {p.bag_size_lb ?? '?'}lb · {USD(p.retail_price_usd)}{p.available ? '' : ' (OOS)'}
+                  </option>
+                ))}
+              </select>
+            )}
+            {selectedSku ? (
+              <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                {selectedSku.fuel_type ?? '?'} · {selectedSku.category ?? '?'} · {selectedSku.partner}
+              </div>
+            ) : null}
+          </div>
+
+          <Slider label="Min cooks in window" value={minCooks} min={0} max={20} step={1}
+            onChange={setMinCooks} suffix=" cooks"
+            help="Exclude devices that barely cook — won't use enough charcoal to make JIT worthwhile." />
+
+          <SegSelect label="Lookback window" value={lookback} options={LOOKBACK_OPTIONS}
+            suffix="d" onChange={setLookback}
+            help="How far back to look for burn-rate signal. Longer = smoother, shorter = more current." />
+
+          <Slider label="Signup rate" value={signupPct} min={0} max={100} step={1}
+            onChange={setSignupPct} suffix="%"
+            help="Assumed % of the eligible cohort that opts into JIT auto-ship." />
+
+          <Slider label="SG margin" value={marginPct} min={0} max={40} step={0.5}
+            onChange={setMarginPct} suffix="%"
+            help="Spider Grills' cut of retail. Partner (JD) gets the rest." />
+
+          <Slider label="Monthly churn" value={churnPct} min={0} max={15} step={0.5}
+            onChange={setChurnPct} suffix="%"
+            help="Geometric decay applied to the subscriber base each month." />
+
+          <SegSelect label="Horizon" value={horizon} options={HORIZON_OPTIONS}
+            suffix=" mo" onChange={setHorizon}
+            help="Projection window." />
+        </div>
+      </section>
+
+      {error ? (
+        <section className="card" style={{ color: 'var(--red)' }}>
+          Modeling error: {error}
+        </section>
+      ) : null}
+
+      {/* Output */}
+      {result ? <ModelingResult result={result} /> : loading ? (
+        <section className="card"><div className="state-message">Projecting…</div></section>
+      ) : null}
+    </div>
+  )
+}
+
+function Slider({ label, value, min, max, step, onChange, suffix, help }: {
+  label: string; value: number; min: number; max: number; step: number
+  onChange: (v: number) => void; suffix?: string; help?: string
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{value}{suffix}</span>
+      </div>
+      <input
+        type="range"
+        min={min} max={max} step={step}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        style={{ width: '100%' }}
+      />
+      {help ? <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{help}</div> : null}
+    </div>
+  )
+}
+
+function SegSelect<T extends number>({ label, value, options, suffix, onChange, help }: {
+  label: string; value: T; options: readonly T[]; suffix?: string
+  onChange: (v: T) => void; help?: string
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{label}</div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {options.map(o => (
+          <button
+            key={o}
+            type="button"
+            className={`range-button${o === value ? ' active' : ''}`}
+            onClick={() => onChange(o)}
+            style={{ fontSize: 11 }}
+          >
+            {o}{suffix}
+          </button>
+        ))}
+      </div>
+      {help ? <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{help}</div> : null}
+    </div>
+  )
+}
+
+function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
+  const { cohort, sku, horizon_totals, month_1, per_subscriber_monthly, projected_initial_signups, monthly_curve } = result
+  const families = Object.entries(cohort.families_breakdown).sort((a, b) => b[1] - a[1])
+
+  return (
+    <>
+      {/* Top-line KPIs */}
+      <section className="card">
+        <div className="venom-panel-head">
+          <strong>Projection</strong>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+            SKU: {sku.title} · {sku.bag_size_lb}lb · {USD(sku.retail_price_usd)}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+          <Tile label="Eligible devices" value={fmtInt(cohort.eligible_devices)} />
+          <Tile label="Initial signups" value={fmtInt(Math.round(projected_initial_signups))}
+            sub={`${result.inputs.signup_pct}% of cohort`} state="info" />
+          <Tile label={`GMV · ${horizon_totals.months}mo`} value={USD(horizon_totals.gmv_usd)}
+            sub={`Month 1: ${USD(month_1.gmv_usd)}`} />
+          <Tile label={`SG margin · ${horizon_totals.months}mo`}
+            value={USD(horizon_totals.sg_margin_usd)}
+            sub={`Month 1: ${USD(month_1.sg_margin_usd)}`}
+            state={horizon_totals.sg_margin_usd > 0 ? 'good' : 'warn'} />
+          <Tile label="LTV / initial sub"
+            value={USD(horizon_totals.ltv_per_initial_subscriber_usd)}
+            sub={`Over ${horizon_totals.months}mo @ ${result.inputs.monthly_churn_pct}% churn`}
+            state="info" />
+          <Tile label={`JD payout · ${horizon_totals.months}mo`}
+            value={USD(horizon_totals.jd_payout_usd)}
+            sub={`${fmtInt(Math.round(horizon_totals.bags))} bags`} />
+        </div>
+      </section>
+
+      {/* Per-sub economics + cohort stats */}
+      <section className="card">
+        <div className="venom-panel-head"><strong>Per-subscriber monthly</strong></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 14 }}>
+          <Tile label="Burn rate"
+            value={`${per_subscriber_monthly.lb.toFixed(1)} lb/mo`}
+            sub={`${per_subscriber_monthly.bags.toFixed(2)} bags/mo`} />
+          <Tile label="Monthly GMV / sub" value={USD(per_subscriber_monthly.gmv_usd)} />
+          <Tile label="Monthly SG margin / sub"
+            value={USD(per_subscriber_monthly.sg_margin_usd)} />
+          <Tile label="Monthly JD payout / sub"
+            value={USD(per_subscriber_monthly.jd_payout_usd)} />
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+          Cohort burn-rate distribution (lb/month per device)
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: 8, marginBottom: 12 }}>
+          <Tile label="p25" value={`${cohort.p25_lb_per_month_per_device.toFixed(1)}`} />
+          <Tile label="Median" value={`${cohort.median_lb_per_month_per_device.toFixed(1)}`} />
+          <Tile label="Mean" value={`${cohort.mean_lb_per_month_per_device.toFixed(1)}`} state="info" />
+          <Tile label="p75" value={`${cohort.p75_lb_per_month_per_device.toFixed(1)}`} />
+          <Tile label="p90" value={`${cohort.p90_lb_per_month_per_device.toFixed(1)}`} />
+        </div>
+        {families.length > 0 ? (
+          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+            Family mix: {families.map(([f, n]) => `${f} ${fmtInt(n)}`).join(' · ')}
+          </div>
+        ) : null}
+      </section>
+
+      {/* Cumulative curve */}
+      <section className="card">
+        <div className="venom-panel-head"><strong>Monthly curve</strong></div>
+        <div style={{ width: '100%', height: 280 }}>
+          <ResponsiveContainer>
+            <ComposedChart data={monthly_curve} margin={{ left: 10, right: 20, top: 10, bottom: 0 }}>
+              <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+              <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+              <YAxis yAxisId="left" tick={{ fill: 'var(--muted)', fontSize: 11 }}
+                tickFormatter={v => `$${Math.round(v / 1000)}k`} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+              <Tooltip formatter={(v: number, name: string) =>
+                name === 'surviving_subscribers'
+                  ? [fmtInt(Math.round(v)), 'Surviving subs']
+                  : [USD(v), name.replace(/_/g, ' ')]} />
+              <Legend />
+              <Bar yAxisId="left" dataKey="sg_margin_usd" fill="var(--green)" name="SG margin (monthly)" />
+              <Line yAxisId="left" dataKey="cumulative_sg_margin_usd" stroke="var(--blue)"
+                strokeWidth={2} dot={false} name="SG margin (cumulative)" />
+              <Line yAxisId="right" dataKey="surviving_subscribers" stroke="var(--orange)"
+                strokeDasharray="4 4" dot={false} name="Surviving subs" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+    </>
+  )
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
    PAGE SHELL
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -1460,12 +1808,17 @@ export function CharcoalUsage() {
         </div>
       </section>
 
-      <AssumptionsPanel params={params} setParams={setParams} />
+      {/* AssumptionsPanel gates the four telemetry-driven tabs.
+          Modeling has its own server-side assumptions and UI, so
+          hide the shared assumptions panel when that tab is up to
+          avoid confusing Joseph with two sets of knobs. */}
+      {tab !== 'modeling' ? <AssumptionsPanel params={params} setParams={setParams} /> : null}
 
       {tab === 'device' ? <DeviceTab params={params} /> : null}
       {tab === 'fleet' ? <FleetTab params={params} /> : null}
       {tab === 'jit' ? <JITTab params={params} /> : null}
       {tab === 'enrollment' ? <EnrollmentTab /> : null}
+      {tab === 'modeling' ? <ModelingTab /> : null}
     </div>
   )
 }

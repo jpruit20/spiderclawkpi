@@ -342,6 +342,11 @@ export const api = {
       '/api/charcoal/partners/refresh',
       { method: 'POST', body: {}, timeoutMs: 120000 },
     ),
+  charcoalModelingCohort: (payload: CharcoalCohortModelInput, signal?: AbortSignal) =>
+    request<CharcoalCohortModelResponse>(
+      '/api/charcoal/modeling/cohort',
+      { method: 'POST', body: payload, signal, timeoutMs: 60000 },
+    ),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',
@@ -1404,12 +1409,101 @@ export interface CharcoalPartnerProduct {
   handle: string
   title: string
   fuel_type: 'lump' | 'briquette' | 'other' | null
+  // Narrower modeling bucket. 'lump_charcoal' | 'briquette' | 'other'.
+  // Older rows may carry null until the next scraper pass fills them.
+  category: 'lump_charcoal' | 'briquette' | 'other' | null
   bag_size_lb: number | null
   retail_price_usd: number
   currency: string
   source_url: string | null
   available: boolean
   last_fetched_at: string | null
+}
+
+export interface CharcoalCohortModelInput {
+  product_families?: string[] | null
+  min_cooks_in_window?: number
+  lookback_days?: number
+  signup_pct?: number
+  partner_product_id: number
+  margin_pct?: number
+  monthly_churn_pct?: number
+  horizon_months?: number
+}
+
+export interface CharcoalCohortMonthlyCurveRow {
+  month: number
+  surviving_subscribers: number
+  lb: number
+  bags: number
+  gmv_usd: number
+  sg_margin_usd: number
+  jd_payout_usd: number
+  cumulative_gmv_usd: number
+  cumulative_sg_margin_usd: number
+  cumulative_jd_payout_usd: number
+}
+
+export interface CharcoalCohortModelResponse {
+  ok: boolean
+  computed_at: string
+  inputs: {
+    product_families: string[] | null
+    min_cooks_in_window: number
+    lookback_days: number
+    signup_pct: number
+    partner_product_id: number
+    margin_pct: number
+    monthly_churn_pct: number
+    horizon_months: number
+  }
+  sku: {
+    id: number
+    partner: string
+    title: string
+    fuel_type: string
+    category: string | null
+    bag_size_lb: number
+    retail_price_usd: number
+    available: boolean
+  }
+  cohort: {
+    eligible_devices: number
+    mean_lb_per_month_per_device: number
+    median_lb_per_month_per_device: number
+    p25_lb_per_month_per_device: number
+    p75_lb_per_month_per_device: number
+    p90_lb_per_month_per_device: number
+    families_breakdown: Record<string, number>
+    lookback_days: number
+  }
+  projected_initial_signups: number
+  per_subscriber_monthly: {
+    lb: number
+    bags: number
+    gmv_usd: number
+    sg_margin_usd: number
+    jd_payout_usd: number
+  }
+  month_1: {
+    subscribers: number
+    lb: number
+    bags: number
+    gmv_usd: number
+    sg_margin_usd: number
+    jd_payout_usd: number
+  }
+  horizon_totals: {
+    months: number
+    lb: number
+    bags: number
+    gmv_usd: number
+    sg_margin_usd: number
+    jd_payout_usd: number
+    ltv_per_initial_subscriber_usd: number
+  }
+  monthly_curve: CharcoalCohortMonthlyCurveRow[]
+  assumptions: Record<string, string | number>
 }
 
 export interface CharcoalPartnerProductsResponse {
