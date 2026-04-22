@@ -8,10 +8,13 @@ import { DivisionHero } from '../components/DivisionHero'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { Link } from 'react-router-dom'
 
-const KETTLE_CART_BANNER_EXPIRES_AT = Date.parse('2026-04-22T03:00:00Z')
+// 24h auto-expire. New requester-facing builds should replace this
+// banner with their own short-lived note so the person who asked for
+// the change sees it got done.
+const ORDER_AGING_BANNER_EXPIRES_AT = Date.parse('2026-04-22T22:15:00Z')
 
-function KettleCartRequestBanner() {
-  if (Date.now() > KETTLE_CART_BANNER_EXPIRES_AT) return null
+function OrderAgingRequestBanner() {
+  if (Date.now() > ORDER_AGING_BANNER_EXPIRES_AT) return null
   return (
     <section
       className="card"
@@ -22,22 +25,24 @@ function KettleCartRequestBanner() {
       }}
     >
       <div className="venom-panel-head">
-        <strong>✅ Request approved & deployed — for Conor</strong>
-        <span className="venom-panel-hint">Auto-hides {new Date(KETTLE_CART_BANNER_EXPIRES_AT).toLocaleString()}</span>
+        <strong>✅ Request deployed — for Conor</strong>
+        <span className="venom-panel-hint">Auto-hides {new Date(ORDER_AGING_BANNER_EXPIRES_AT).toLocaleString()}</span>
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-        Your request — <em>"Can you look through customer service tickets and social media posts and
-        comments to figure out how many people have complaints about the 22&quot; Kettle Cart product?"</em> —
-        is live on the{' '}
+        Your ask — <em>"let's pull in order aging data from Shopify"</em> — is live below as the{' '}
+        <strong>Order fulfillment aging</strong> card. It bucketes currently-unfulfilled Shopify orders
+        into 0–1d / 1–3d / 3–7d / 7d+ and renders a stacked trend for the last 14 days. A compact
+        version also sits on the{' '}
         <Link to="/division/customer-experience" style={{ color: 'var(--orange)', textDecoration: 'underline' }}>
           Customer Experience page
         </Link>
-        {' '}as the <strong>Product complaint search</strong> card (defaulted to Kettle Cart).
+        {' '}under WISMO so the team can correlate shipping aging with ticket volume.
       </div>
       <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8, paddingLeft: 20, lineHeight: 1.6 }}>
-        <li><strong>Freshdesk:</strong> full 5-year archive (9,370 tickets) now searchable — subject, description, and conversation bodies. ~150 Kettle Cart mentions already indexed; conversation backfill still completing.</li>
-        <li><strong>Social / reviews / community:</strong> search is wired, but most feeds (Reddit, Facebook, Google Reviews, Shopify product reviews) need credentials before they return data. YouTube + Amazon are live but show 0 Kettle Cart hits so far.</li>
-        <li>Follow-ups in flight: (1) Jeremiah to add "Kettle Cart" to the Freshdesk accessory dropdown; (2) enabling the stubbed social connectors will broaden the signal.</li>
+        <li><strong>Shopify sync</strong> now captures <code>fulfillment_status</code>, <code>tags</code>, and <code>fulfillments</code> — the missing fields that previously made aging impossible.</li>
+        <li><strong>Backfill</strong>: I ran a one-shot <code>sync-unfulfilled</code> on the droplet — 113 currently-unfulfilled orders pulled ($181K open, 72 orders &gt;7d old). You'll see those right away.</li>
+        <li><strong>Owner-only</strong> "Refresh from Shopify" button on the aging card pulls the latest queue on demand; the regular poll keeps it fresh between clicks.</li>
+        <li><strong>Trend reconstruction</strong>: counts per day are rebuilt from per-order snapshot state (created_at, first_fulfilled_at, cancelled_at). Days before we started capturing fulfillment fields are under-counted by design — older orders trickle in on normal poll cadence.</li>
       </ul>
     </section>
   )
@@ -46,7 +51,7 @@ function KettleCartRequestBanner() {
 export function OperationsDivision() {
   return (
     <>
-      <KettleCartRequestBanner />
+      <OrderAgingRequestBanner />
       {/* ── DIVISION HERO — signature: throughput ─────────────────────
           Horizontal flow bar with animated shimmer. Stays in a muted
           "awaiting feed" state until Business Central is live;
