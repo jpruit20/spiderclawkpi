@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
 from app.models import (
+    AiNarrative,
     BetaCohortMember,
     FirmwareIssueTag,
     FirmwareRelease,
@@ -1242,7 +1243,43 @@ def alpha_cohort_error_patterns(
 # ── Alpha cohort · Opus 4.7 narrative insight ────────────────────────
 
 
-_ALPHA_INSIGHT_CACHE: dict[str, Any] = {"generated_at": None, "payload": None}
+ALPHA_NARRATIVE_KIND = "alpha_cohort_insight"
+
+
+def _save_ai_narrative(
+    db: Session, kind: str, payload: dict[str, Any],
+    model: Optional[str] = None, duration_ms: Optional[int] = None,
+    requested_by: Optional[str] = None,
+) -> None:
+    """Upsert an AiNarrative row by kind. One row per narrative kind —
+    the latest regenerate wins. Survives uvicorn restarts because it's
+    DB-backed (previously was a per-process dict)."""
+    existing = db.execute(
+        select(AiNarrative).where(AiNarrative.kind == kind)
+    ).scalars().first()
+    now = datetime.now(timezone.utc)
+    if existing is None:
+        db.add(AiNarrative(
+            kind=kind,
+            model=model,
+            generated_at=now,
+            payload=payload,
+            duration_ms=duration_ms,
+            requested_by=requested_by,
+        ))
+    else:
+        existing.payload = payload
+        existing.model = model
+        existing.generated_at = now
+        existing.duration_ms = duration_ms
+        existing.requested_by = requested_by
+    db.commit()
+
+
+def _load_ai_narrative(db: Session, kind: str) -> Optional[AiNarrative]:
+    return db.execute(
+        select(AiNarrative).where(AiNarrative.kind == kind)
+    ).scalars().first()
 
 
 class AlphaInsightObservation(BaseModel):
@@ -1353,31 +1390,41 @@ def alpha_insight_regenerate(db: Session = Depends(db_session)) -> dict[str, Any
     if bundle is None:
         raise HTTPException(status_code=502, detail="Opus returned no parsed output")
 
+    duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": "claude-opus-4-7",
         "overall_theme": bundle.overall_theme,
         "observations": [o.model_dump() for o in bundle.observations],
-        "duration_ms": int((datetime.now(timezone.utc) - started).total_seconds() * 1000),
+        "duration_ms": duration_ms,
     }
-    _ALPHA_INSIGHT_CACHE["generated_at"] = payload["generated_at"]
-    _ALPHA_INSIGHT_CACHE["payload"] = payload
+    _save_ai_narrative(
+        db, ALPHA_NARRATIVE_KIND, payload,
+        model="claude-opus-4-7", duration_ms=duration_ms,
+        requested_by="dashboard",
+    )
     return payload
 
 
 @router.get("/alpha-cohort/insight")
 def alpha_insight_get(db: Session = Depends(db_session)) -> dict[str, Any]:
-    """Return the latest cached Opus narrative. If nothing cached yet,
-    returns a 404-style empty shell so the UI can prompt for first run."""
-    payload = _ALPHA_INSIGHT_CACHE.get("payload")
-    if not payload:
+    """Return the latest persisted Opus narrative (from ai_narratives).
+    Survives uvicorn restarts. Empty shell returned if nothing cached
+    yet so the UI can prompt for first run."""
+    row = _load_ai_narrative(db, ALPHA_NARRATIVE_KIND)
+    if row is None:
         return {
             "generated_at": None,
             "overall_theme": None,
             "observations": [],
             "cached": False,
         }
-    return {**payload, "cached": True}
+    payload = dict(row.payload or {})
+    payload.setdefault("generated_at", row.generated_at.isoformat() if row.generated_at else None)
+    payload.setdefault("model", row.model)
+    payload.setdefault("duration_ms", row.duration_ms)
+    payload["cached"] = True
+    return payload
 
 
 # ── Gamma waves (production rollout) ─────────────────────────────────

@@ -1613,6 +1613,41 @@ class AISelfGrade(Base):
     usage_json: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
+class AiNarrative(TimestampMixin, Base):
+    """Persistent store for on-demand Opus narratives — the "write 3-5
+    actionable observations and cache the result" pattern.
+
+    One row per `kind` (latest wins). Narratives that Joseph or the
+    team regenerates from the UI land here so they survive uvicorn
+    restarts. Dedicated tables (``AIInsight``, ``AISelfGrade``,
+    ``WeeklyGaugeSelection``) still exist for flows that need richer
+    schemas — this table is for the simpler "overall_theme +
+    observations[]" shape.
+
+    Current kinds:
+      - ``alpha_cohort_insight``: firmware program narrative for the
+        alpha tester cohort (01.01.90 → 01.01.99). Regenerated from
+        the Firmware Hub → Alpha tab.
+
+    Add new kinds freely; no schema change required.
+    """
+    __tablename__ = "ai_narratives"
+    __table_args__ = (
+        UniqueConstraint("kind", name="uq_ai_narratives_kind"),
+        Index("ix_ai_narratives_generated_at", "generated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(80))
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    requested_by: Mapped[Optional[str]] = mapped_column(String(128))
+
+
 class WeeklyGaugeSelection(TimestampMixin, Base):
     """Opus 4.7's weekly pick of the 8 most-important business gauges.
 
