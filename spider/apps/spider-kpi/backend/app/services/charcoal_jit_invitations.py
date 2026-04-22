@@ -610,6 +610,62 @@ def resolve_by_token(db: Session, *, token: str) -> Optional[CharcoalJITInvitati
     ).scalars().first()
 
 
+def normalize_mac(raw: str) -> Optional[str]:
+    """Collapse separators and lowercase a mac. Returns the 12-hex form
+    or ``None`` if the input doesn't resolve to a valid mac. Kept as a
+    module-level helper so the route layer can reuse the exact same
+    normalization the invitation-writer used on creation."""
+    if not raw:
+        return None
+    cleaned = (
+        raw.strip()
+        .replace(":", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .lower()
+    )
+    if len(cleaned) != 12:
+        return None
+    try:
+        int(cleaned, 16)
+    except ValueError:
+        return None
+    return cleaned
+
+
+def lookup_pending_by_mac(
+    db: Session,
+    *,
+    mac: str,
+    now: Optional[datetime] = None,
+) -> Optional[CharcoalJITInvitation]:
+    """Return the live pending invitation for a mac, or ``None``. Used by
+    the app-side polling path (``GET /for-device/{mac}``) so the Spider
+    Grills app can detect a pending invite when a user opens the app or
+    pairs a grill.
+
+    A row counts as "live" when ``status='pending'`` AND either
+    ``expires_at`` is null or still in the future. If multiple rows
+    match (shouldn't happen under the reservation logic but can occur
+    historically), the most recently invited one wins."""
+    resolved = normalize_mac(mac)
+    if resolved is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return db.execute(
+        select(CharcoalJITInvitation)
+        .where(
+            CharcoalJITInvitation.mac_normalized == resolved,
+            CharcoalJITInvitation.status == "pending",
+            (
+                CharcoalJITInvitation.expires_at.is_(None)
+                | (CharcoalJITInvitation.expires_at > now)
+            ),
+        )
+        .order_by(CharcoalJITInvitation.invited_at.desc())
+    ).scalars().first()
+
+
 def accept_invitation(
     db: Session,
     *,

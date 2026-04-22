@@ -954,6 +954,23 @@ def jit_invitations_expire_stale(db: Session = Depends(db_session)) -> dict[str,
 # cookie.
 
 
+def _serialize_invitation_for_app(
+    db: Session, row: "CharcoalJITInvitation"
+) -> dict[str, Any]:
+    """Shared app-side invitation shape — strips admin-only fields and
+    attaches SKU detail. Used by both ``by-token`` and ``for-device``."""
+    from app.services.charcoal_jit_invitations import serialize_invitation
+    out = serialize_invitation(row)
+    # Omit internal fields when serving via app-facing paths.
+    out.pop("notes", None)
+    out.pop("invited_by", None)
+    if row.partner_product_id:
+        sku = db.get(PartnerProduct, row.partner_product_id)
+        if sku is not None:
+            out["sku"] = _serialize_product(sku)
+    return out
+
+
 @router.get("/jit/invitations/by-token/{token}")
 def jit_invitations_by_token(
     token: str,
@@ -962,24 +979,48 @@ def jit_invitations_by_token(
     """Resolve an invitation by its URL token. Used by the app-side
     opt-in screen to render ('You've been invited to the charcoal
     auto-ship beta') before the user accepts or declines."""
-    from app.services.charcoal_jit_invitations import (
-        resolve_by_token, serialize_invitation,
-    )
+    from app.services.charcoal_jit_invitations import resolve_by_token
     row = resolve_by_token(db, token=token)
     if row is None:
         raise HTTPException(status_code=404, detail="invitation not found")
-    out = serialize_invitation(row)
-    # Omit internal fields when serving via this path (notes are
-    # operator-only; invited_by reveals admin email).
-    out.pop("notes", None)
-    out.pop("invited_by", None)
-    # Attach SKU detail so the app can render price + bag size without
-    # a second round-trip.
-    if row.partner_product_id:
-        sku = db.get(PartnerProduct, row.partner_product_id)
-        if sku is not None:
-            out["sku"] = _serialize_product(sku)
-    return {"ok": True, "invitation": out}
+    return {"ok": True, "invitation": _serialize_invitation_for_app(db, row)}
+
+
+@router.get("/jit/invitations/for-device/{mac}")
+def jit_invitations_for_device(
+    mac: str,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Return the live pending invitation for a device, keyed on mac.
+
+    The Spider Grills app polls this on launch and on each grill
+    pairing. Returns ``{ok, pending: true, invitation}`` when a pending
+    invite exists whose ``expires_at`` hasn't elapsed; otherwise
+    ``{ok, pending: false}``. Malformed macs return a 400 so the app
+    surfaces a client-side bug instead of silently seeing no invites.
+
+    Deliberately not a 404 on miss: polling is the steady state, and a
+    "no pending invite" response is the happy path — the client
+    shouldn't have to distinguish that from a real error."""
+    from app.services.charcoal_jit_invitations import (
+        lookup_pending_by_mac, normalize_mac,
+    )
+    if normalize_mac(mac) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "malformed mac — expected 12 hex chars "
+                "(colons/dashes optional)"
+            ),
+        )
+    row = lookup_pending_by_mac(db, mac=mac)
+    if row is None:
+        return {"ok": True, "pending": False}
+    return {
+        "ok": True,
+        "pending": True,
+        "invitation": _serialize_invitation_for_app(db, row),
+    }
 
 
 class InvitationAcceptIn(BaseModel):
