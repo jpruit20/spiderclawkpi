@@ -27,8 +27,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session, require_dashboard_session
 from app.models import CharcoalJITSubscription, PartnerProduct, TelemetrySession
 from app.services.product_taxonomy import (
+    ACTIVE_FAMILIES,
     FAMILY_HUNTSMAN,
     FAMILY_WEBER_KETTLE,
+    build_huntsman_device_ids,
     classify_product,
 )
 
@@ -67,8 +69,17 @@ def _avg_from_series(series: Any) -> Optional[float]:
     return sum(vals) / len(vals)
 
 
-def _summarize_session(s: TelemetrySession) -> dict[str, Any]:
-    """Compact per-session payload the charcoal model consumes."""
+def _summarize_session(
+    s: TelemetrySession,
+    *,
+    huntsman_device_ids: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    """Compact per-session payload the charcoal model consumes.
+
+    When ``huntsman_device_ids`` is passed, the classifier uses the
+    device's full firmware history so a JOEHY unit that OTA'd past
+    01.01.33 still shows as Huntsman (not Weber Kettle).
+    """
     avg_actual = _avg_from_series(s.actual_temp_time_series)
     hours = (s.session_duration_seconds or 0) / 3600.0
     return {
@@ -83,7 +94,12 @@ def _summarize_session(s: TelemetrySession) -> dict[str, Any]:
         "grill_type": s.grill_type,
         "firmware_version": s.firmware_version,
         "cook_success": bool(s.cook_success),
-        "product_family": classify_product(s.grill_type, s.firmware_version),
+        "product_family": classify_product(
+            s.grill_type,
+            s.firmware_version,
+            device_id=s.device_id,
+            huntsman_device_ids=huntsman_device_ids,
+        ),
     }
 
 
@@ -125,11 +141,12 @@ def device_sessions(
         .order_by(TelemetrySession.session_start.desc())
     ).scalars().all()
 
+    huntsman_ids = build_huntsman_device_ids(db)
     return {
         "mac": normalized,
         "device_id_count": len(device_ids),
         "window_days": days,
-        "sessions": [_summarize_session(s) for s in rows],
+        "sessions": [_summarize_session(s, huntsman_device_ids=huntsman_ids) for s in rows],
     }
 
 
@@ -225,11 +242,16 @@ def fleet_aggregate(
         ORDER BY device_id, session_start DESC
     """), params).all()}
 
+    huntsman_ids = build_huntsman_device_ids(db)
     per_device: list[dict[str, Any]] = []
     for r in per_device_rows:
         device_id, sessions, cook_hours, avg_target, avg_temp_proxy, last_seen, first_seen = r
         meta_grill, meta_fw = latest_meta.get(device_id, (None, None))
-        family = classify_product(meta_grill, meta_fw)
+        family = classify_product(
+            meta_grill, meta_fw,
+            device_id=device_id,
+            huntsman_device_ids=huntsman_ids,
+        )
         if product_family and family != product_family:
             continue
         per_device.append({
@@ -305,7 +327,12 @@ def fleet_distinct_filters(db: Session = Depends(db_session)) -> dict[str, Any]:
     return {
         "grill_types": [{"value": g or "Unknown", "devices": int(n)} for g, n in grills],
         "firmware_versions": [{"value": f, "devices": int(n)} for f, n in firmwares],
-        "product_families": [FAMILY_WEBER_KETTLE, FAMILY_HUNTSMAN, "Giant Huntsman", "Unknown"],
+        # ACTIVE_FAMILIES honours CONSOLIDATE_GIANT_HUNTSMAN — while
+        # that flag is on, Giant Huntsman won't be in the dropdown
+        # because it's folded into Huntsman. Flip the flag in
+        # product_taxonomy.py once Agustín's app integration gives us
+        # a differentiable signal.
+        "product_families": list(ACTIVE_FAMILIES),
     }
 
 

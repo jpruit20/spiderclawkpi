@@ -32,11 +32,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session, require_dashboard_session
 from app.services.product_taxonomy import (
     ALL_FAMILIES,
-    FAMILY_GIANT_HUNTSMAN,
-    FAMILY_HUNTSMAN,
-    FAMILY_UNKNOWN,
-    FAMILY_WEBER_KETTLE,
+    build_huntsman_device_ids,
     classify_product,
+    classify_shopify_line_item,
 )
 
 
@@ -68,12 +66,25 @@ def _cache_put(key: str, payload: dict[str, Any]) -> None:
 
 def _bucket_by_family(
     rows: list[tuple[str, Optional[str], Optional[str]]],
+    *,
+    huntsman_device_ids: Optional[set[str]] = None,
 ) -> dict[str, int]:
     """rows is [(device_id, grill_type, firmware_version), ...] — one
-    per device, latest-observed. Returns {family: count}."""
+    per device, latest-observed. Returns {family: count}.
+
+    When ``huntsman_device_ids`` is supplied (the recommended path),
+    classification uses per-device firmware history so JOEHY units that
+    OTA'd past 01.01.33 still bucket into Huntsman rather than being
+    misread as Weber Kettle from their current firmware alone.
+    """
     counts: dict[str, int] = {f: 0 for f in ALL_FAMILIES}
-    for _device_id, grill_type, firmware in rows:
-        family = classify_product(grill_type, firmware)
+    for device_id, grill_type, firmware in rows:
+        family = classify_product(
+            grill_type,
+            firmware,
+            device_id=device_id,
+            huntsman_device_ids=huntsman_device_ids,
+        )
         counts[family] = counts.get(family, 0) + 1
     return counts
 
@@ -122,7 +133,8 @@ def fleet_size(db: Session = Depends(db_session)) -> dict[str, Any]:
         return cached
     since = datetime.now(timezone.utc) - timedelta(days=365 * 2)
     rows = _distinct_device_latest(db, since=since)
-    by_family = _bucket_by_family(rows)
+    huntsman_ids = build_huntsman_device_ids(db)
+    by_family = _bucket_by_family(rows, huntsman_device_ids=huntsman_ids)
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window_days": 730,
@@ -165,7 +177,8 @@ def fleet_lifetime(db: Session = Depends(db_session)) -> dict[str, Any]:
     if cached is not None:
         return cached
     rows_all_time = _distinct_device_latest(db, since=None)
-    aws_by_family = _bucket_by_family(rows_all_time)
+    huntsman_ids = build_huntsman_device_ids(db)
+    aws_by_family = _bucket_by_family(rows_all_time, huntsman_device_ids=huntsman_ids)
 
     # Shopify line_items — extended on the connector 2026-04-21, so most
     # historic snapshots don't yet have them. Count what we have and
@@ -186,16 +199,11 @@ def fleet_lifetime(db: Session = Depends(db_session)) -> dict[str, Any]:
     shopify_by_family: dict[str, int] = {f: 0 for f in ALL_FAMILIES}
     shopify_total = 0
     for title, qty in shopify_row:
-        title = title or ""
-        if "giant" in title and "huntsman" in title:
-            fam = FAMILY_GIANT_HUNTSMAN
-        elif "huntsman" in title:
-            fam = FAMILY_HUNTSMAN
-        elif "venom" in title or "kettle" in title or "weber" in title:
-            fam = FAMILY_WEBER_KETTLE
-        else:
-            fam = FAMILY_UNKNOWN
-        shopify_by_family[fam] += qty
+        # Shared classifier — honours CONSOLIDATE_GIANT_HUNTSMAN so this
+        # lines up with the AWS-telemetry counter rather than forking
+        # into its own bucketing.
+        fam = classify_shopify_line_item(title or "")
+        shopify_by_family[fam] = shopify_by_family.get(fam, 0) + qty
         shopify_total += qty
 
     orders_with_line_items = db.execute(text("""

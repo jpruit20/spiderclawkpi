@@ -664,7 +664,7 @@ def overview_metrics(
     firmware_version: str | None = Query(default=None),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    from app.services.product_taxonomy import classify_product
+    from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
 
     # Cache-first on the default 7-day view (the one the Product
     # Engineering page hits on every load). Custom windows or firmware
@@ -756,12 +756,35 @@ def overview_metrics(
         _metrics_cache_put(start_dt, end_dt, firmware_version, combined_rows)
 
     firmware_counts: dict[str | None, int] = {}
-    product_counts: dict[str, int] = {}
     for grill_type_val, fw_val, n in combined_rows:
         n_int = int(n or 0)
         firmware_counts[fw_val] = firmware_counts.get(fw_val, 0) + n_int
-        family = classify_product(grill_type_val, fw_val)
-        product_counts[family] = product_counts.get(family, 0) + n_int
+
+    # Product distribution needs a CANONICAL classification per device
+    # (a device can only be Huntsman OR Weber Kettle, never both), and
+    # the history-aware classifier needs per-device identity — the
+    # grouped query above lost that. One extra cheap DISTINCT ON query
+    # gives us latest (grill_type, firmware) per device, which we then
+    # run through the huntsman-aware classifier.
+    per_device_rows = db.execute(text("""
+        SELECT DISTINCT ON (device_id)
+            device_id, grill_type, firmware_version
+        FROM telemetry_stream_events
+        WHERE sample_timestamp >= :start_dt
+          AND sample_timestamp < :end_dt
+          AND device_id IS NOT NULL
+          AND device_id NOT LIKE 'mac:%%'
+        ORDER BY device_id, sample_timestamp DESC
+    """), {"start_dt": start_dt, "end_dt": end_dt}).all()
+    huntsman_ids = build_huntsman_device_ids(db)
+    product_counts: dict[str, int] = {}
+    for device_id, grill_type_val, fw_val in per_device_rows:
+        family = classify_product(
+            grill_type_val, fw_val,
+            device_id=device_id,
+            huntsman_device_ids=huntsman_ids,
+        )
+        product_counts[family] = product_counts.get(family, 0) + 1
 
     dist_total = sum(firmware_counts.values())
     firmware_distribution = [
@@ -884,7 +907,7 @@ def fleet_control_health(
     sort: str = Query("gap_abs", pattern="^(gap_abs|gap|target|intensity|firmware|sample_ts|state|cook_elapsed|product)$"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     state: Optional[str] = Query(None),
-    product: Optional[str] = Query(None, description="Filter by product family: 'Weber Kettle', 'Huntsman', 'Giant Huntsman', 'Unknown'"),
+    product: Optional[str] = Query(None, description="Filter by product family: 'Weber Kettle', 'Huntsman', 'Unknown' (Giant Huntsman is currently folded into Huntsman)"),
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=1, le=100),
     db: Session = Depends(db_session),
@@ -901,9 +924,10 @@ def fleet_control_health(
     140°F in this engagement window) and ``cook_elapsed_seconds`` so the
     UI can distinguish "engaged with real fire" from "engaged, no heat yet."
     """
-    from app.services.product_taxonomy import classify_product
+    from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
 
     now = datetime.now(timezone.utc)
+    huntsman_ids = build_huntsman_device_ids(db)
     # 30 min window — any longer risks pulling a multi-million-row
     # stream slab into memory on the app server. The live-fire onset is
     # still useful within this window: a cook that's been running for
@@ -939,7 +963,11 @@ def fleet_control_health(
         reported = ((latest.raw_payload or {}).get("device_data") or {}).get("reported") or {}
         mac = (reported.get("mac") or "").lower() or None
         grill_type = latest.grill_type
-        product_family = classify_product(grill_type, latest.firmware_version)
+        product_family = classify_product(
+            grill_type, latest.firmware_version,
+            device_id=device_id,
+            huntsman_device_ids=huntsman_ids,
+        )
         product_tallies[product_family] = product_tallies.get(product_family, 0) + 1
         # target_set_at: scan the event window backward to find the most
         # recent target_temp change. Cheap because each device has <=30

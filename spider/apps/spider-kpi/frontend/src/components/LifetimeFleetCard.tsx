@@ -156,7 +156,21 @@ export function LifetimeFleetCard() {
             </tr>
           </thead>
           <tbody>
-            {FAMILIES.map(fam => {
+            {FAMILIES
+              // Giant Huntsman is currently consolidated into Huntsman on the
+              // backend (see product_taxonomy.CONSOLIDATE_GIANT_HUNTSMAN) —
+              // drop any family row that's empty across BOTH active and the
+              // current source so we don't render a stale zero line. Self-heals
+              // when Agustín's app integration lands and the flag flips.
+              .filter(fam => {
+                const act = activeBy[fam] ?? 0
+                const life = sourceData.unavailable ? 0 : (sourceBy[fam] ?? 0)
+                const aws = lifetime.aws_registered.by_family[fam] ?? 0
+                // Always keep the core three; only hide when truly empty.
+                if (fam === 'Weber Kettle' || fam === 'Huntsman' || fam === 'Unknown') return true
+                return act + life + aws > 0
+              })
+              .map(fam => {
               const color = FAMILY_COLORS[fam]
               const active = activeBy[fam] ?? 0
               const lifetimeCount = sourceData.unavailable ? null : (sourceBy[fam] ?? 0)

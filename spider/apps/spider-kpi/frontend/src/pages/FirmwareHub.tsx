@@ -1049,7 +1049,7 @@ function OverviewTab() {
           <section className="card">
             <div className="card-title">Product family — active in window</div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-              AWS ``grill_type`` + firmware version rolled up into the three field lines. Weber Kettle covers Kettle 22 / Kettle 26 / Webcraft (JOEHY ``W:K:22:1:V`` defaults here). Huntsman covers JOEHY on firmware 01.01.33 plus ADN V2 Huntsman builds. Giant Huntsman is reserved.
+              AWS <code>grill_type</code> + firmware history rolled up into product families. Weber Kettle covers Kettle 22 / Kettle 26 / Webcraft (JOEHY <code>W:K:22:1:V</code> that never ran 01.01.33, plus ADN V2 Kettle builds). Huntsman covers any JOEHY device that has EVER reported 01.01.33 (so factory-Huntsman units that have since OTA'd past it still classify correctly) plus ADN V2 Huntsman builds. Giant Huntsman is currently folded into Huntsman until the app integration gives us a differentiable signal.
             </div>
             {metrics.product_distribution && metrics.product_distribution.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
