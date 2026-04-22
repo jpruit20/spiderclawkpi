@@ -759,6 +759,18 @@ export const api = {
     request<AlphaFirmwareTimeline>(`/api/beta/alpha-cohort/${encodeURIComponent(mac)}/firmware-timeline`, { signal }),
   betaAlphaAnalytics: (signal?: AbortSignal) =>
     request<AlphaCohortAnalytics>('/api/beta/alpha-cohort/analytics', { signal }),
+  betaAlphaTrend: (signal?: AbortSignal) =>
+    request<AlphaCohortTrend>('/api/beta/alpha-cohort/trend', { signal }),
+  betaAlphaErrorPatterns: (signal?: AbortSignal) =>
+    request<AlphaCohortErrorPatterns>('/api/beta/alpha-cohort/error-patterns', { signal }),
+  betaAlphaInsight: (signal?: AbortSignal) =>
+    request<AlphaCohortInsight>('/api/beta/alpha-cohort/insight', { signal }),
+  betaAlphaInsightRegenerate: () =>
+    request<AlphaCohortInsight>('/api/beta/alpha-cohort/insight/regenerate', {
+      method: 'POST',
+      body: {},
+      timeoutMs: 240000,
+    }),
   betaGammaStatus: (signal?: AbortSignal) =>
     request<GammaStatusResponse>('/api/beta/gamma-status', { signal }),
   ecrs: (includeClosed = false, signal?: AbortSignal) =>
@@ -1174,6 +1186,60 @@ export interface AlphaCohortAnalytics {
   window_days: number
   alpha_device_id_count: number
   segments: AlphaCohortAnalyticsSegment[]
+}
+
+export interface AlphaCohortTrendPoint {
+  firmware_version: string
+  sessions: number
+  devices: number
+  cook_success_rate: number | null
+  avg_disconnects_per_session: number | null
+  avg_error_events_per_session: number | null
+  avg_max_overshoot_f: number | null
+  avg_in_control_pct: number | null
+  avg_stability_score: number | null
+  avg_time_to_stabilize_seconds: number | null
+  small_sample: boolean
+}
+
+export interface AlphaCohortTrend {
+  window_days: number
+  alpha_device_id_count: number
+  points: AlphaCohortTrendPoint[]
+  production_baseline: AlphaCohortTrendPoint & { versions: string[] }
+}
+
+export interface AlphaErrorPatternVersion {
+  firmware_version: string
+  sessions: number
+  error_free_sessions_pct: number | null
+  top_error_codes: Array<{
+    code: string
+    occurrences: number
+    incidence_pct: number | null
+  }>
+}
+
+export interface AlphaCohortErrorPatterns {
+  versions: AlphaErrorPatternVersion[]
+  window_days: number
+}
+
+export interface AlphaInsightObservation {
+  title: string
+  detail: string
+  recommendation: string
+  severity: 'improving' | 'regressing' | 'investigate' | 'info'
+  firmware_versions_cited: string[]
+}
+
+export interface AlphaCohortInsight {
+  generated_at: string | null
+  model?: string
+  overall_theme: string | null
+  observations: AlphaInsightObservation[]
+  cached?: boolean
+  duration_ms?: number
 }
 
 export interface GammaWave {

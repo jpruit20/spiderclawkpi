@@ -3,9 +3,19 @@ import { ApiError, api } from '../lib/api'
 import type {
   AlphaBulkImportResult,
   AlphaCohortAnalytics,
+  AlphaCohortErrorPatterns,
+  AlphaCohortInsight,
+  AlphaCohortTrend,
   AlphaFirmwareTimeline,
 } from '../lib/api'
 import { fmtInt } from '../lib/format'
+import {
+  CartesianGrid, Legend, Line, LineChart, ReferenceLine,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts'
+import { useAuth } from './AuthGate'
+
+const OWNER_EMAIL = 'joseph@spidergrills.com'
 
 /* ─── helpers ─────────────────────────────────────────────────────── */
 
@@ -284,6 +294,452 @@ export function AlphaFirmwareTimelineCard({ mac, onClose }: { mac: string; onClo
         ) : null}
       </div>
     </div>
+  )
+}
+
+/* ─── Version-over-version trend chart ───────────────────────────── */
+
+type MetricKey =
+  | 'cook_success_rate'
+  | 'avg_in_control_pct'
+  | 'avg_stability_score'
+  | 'avg_disconnects_per_session'
+  | 'avg_max_overshoot_f'
+  | 'avg_time_to_stabilize_seconds'
+  | 'avg_error_events_per_session'
+
+type MetricDef = {
+  key: MetricKey
+  label: string
+  unit: string
+  higherIsBetter: boolean
+  transform?: (v: number) => number
+  formatter: (v: number) => string
+}
+
+const METRIC_DEFS: MetricDef[] = [
+  {
+    key: 'cook_success_rate',
+    label: 'Cook success',
+    unit: '%',
+    higherIsBetter: true,
+    transform: v => v * 100,
+    formatter: v => `${v.toFixed(1)}%`,
+  },
+  {
+    key: 'avg_in_control_pct',
+    label: 'In-control %',
+    unit: '%',
+    higherIsBetter: true,
+    transform: v => v * 100,
+    formatter: v => `${v.toFixed(1)}%`,
+  },
+  {
+    key: 'avg_stability_score',
+    label: 'Stability',
+    unit: '%',
+    higherIsBetter: true,
+    transform: v => v * 100,
+    formatter: v => `${v.toFixed(1)}%`,
+  },
+  {
+    key: 'avg_disconnects_per_session',
+    label: 'Disconnects / cook',
+    unit: '',
+    higherIsBetter: false,
+    formatter: v => v.toFixed(2),
+  },
+  {
+    key: 'avg_max_overshoot_f',
+    label: 'Max overshoot',
+    unit: '°F',
+    higherIsBetter: false,
+    formatter: v => `${v.toFixed(1)}°F`,
+  },
+  {
+    key: 'avg_time_to_stabilize_seconds',
+    label: 'Time to stabilize',
+    unit: 'min',
+    higherIsBetter: false,
+    transform: v => v / 60,
+    formatter: v => `${v.toFixed(1)}m`,
+  },
+  {
+    key: 'avg_error_events_per_session',
+    label: 'Errors / cook',
+    unit: '',
+    higherIsBetter: false,
+    formatter: v => v.toFixed(2),
+  },
+]
+
+export function AlphaTrendChart() {
+  const [data, setData] = useState<AlphaCohortTrend | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [metric, setMetric] = useState<MetricKey>('cook_success_rate')
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.betaAlphaTrend(ctl.signal)
+      .then(r => { setData(r); setError(null) })
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+    return () => ctl.abort()
+  }, [])
+
+  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Trend error: {error}</div></section>
+  if (!data) return <section className="card"><div className="state-message">Loading alpha trend…</div></section>
+
+  const def = METRIC_DEFS.find(d => d.key === metric)!
+  const transform = def.transform ?? ((v: number) => v)
+
+  const chartData = data.points.map(p => {
+    const raw = p[metric]
+    return {
+      firmware: p.firmware_version,
+      value: raw != null ? transform(raw) : null,
+      sessions: p.sessions,
+      devices: p.devices,
+      small_sample: p.small_sample,
+    }
+  })
+
+  const baselineRaw = data.production_baseline[metric]
+  const baseline = baselineRaw != null ? transform(baselineRaw) : null
+
+  const alphaAvgOfLastThree = (() => {
+    const last = data.points.slice(-3).map(p => p[metric]).filter((v): v is number => v != null)
+    if (!last.length) return null
+    return transform(last.reduce((a, b) => a + b, 0) / last.length)
+  })()
+
+  const deltaVsBaseline = (baseline != null && alphaAvgOfLastThree != null)
+    ? alphaAvgOfLastThree - baseline
+    : null
+
+  const deltaGood = deltaVsBaseline != null
+    ? (def.higherIsBetter ? deltaVsBaseline > 0 : deltaVsBaseline < 0)
+    : null
+
+  return (
+    <section className="card">
+      <div className="venom-panel-head">
+        <div>
+          <strong>Alpha firmware journey · {def.label}</strong>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+            {data.window_days}-day window · {data.alpha_device_id_count} alpha devices · production baseline = {data.production_baseline.versions.join(' + ')}
+          </div>
+        </div>
+        <div>
+          <select
+            value={metric}
+            onChange={e => setMetric(e.target.value as MetricKey)}
+            className="deci-input"
+            style={{ fontSize: 12 }}
+          >
+            {METRIC_DEFS.map(m => (
+              <option key={m.key} value={m.key}>{m.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {deltaVsBaseline != null ? (
+        <div style={{
+          fontSize: 12,
+          marginBottom: 8,
+          padding: '6px 10px',
+          borderRadius: 6,
+          background: deltaGood ? 'rgba(57, 208, 143, 0.08)' : 'rgba(255, 109, 122, 0.08)',
+          borderLeft: `3px solid ${deltaGood ? 'var(--green)' : 'var(--red)'}`,
+        }}>
+          <strong>Last-3-version avg vs production baseline:</strong>{' '}
+          <span style={{ color: deltaGood ? 'var(--green)' : 'var(--red)' }}>
+            {deltaVsBaseline >= 0 ? '+' : ''}{deltaVsBaseline.toFixed(2)} {def.unit}
+            {' '}({deltaGood ? 'better' : 'worse'} than prod)
+          </span>
+        </div>
+      ) : null}
+
+      <div style={{ height: 280 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 30 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+            <XAxis
+              dataKey="firmware"
+              tick={{ fontSize: 11 }}
+              stroke="var(--muted)"
+              angle={-25}
+              textAnchor="end"
+              height={50}
+            />
+            <YAxis tick={{ fontSize: 11 }} stroke="var(--muted)" />
+            <Tooltip
+              contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }}
+              formatter={(v: number | null) => v == null ? '—' : def.formatter(v)}
+              labelFormatter={(l: string) => {
+                const pt = chartData.find(p => p.firmware === l)
+                return `${l}${pt ? ` · n=${pt.sessions} sess, ${pt.devices} dev${pt.small_sample ? ' (small)' : ''}` : ''}`
+              }}
+            />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Line
+              type="monotone"
+              dataKey="value"
+              name={`alpha ${def.label}`}
+              stroke="var(--orange)"
+              strokeWidth={2}
+              dot={(props: { cx: number; cy: number; payload: { small_sample: boolean } }) => {
+                const { cx, cy, payload } = props
+                return (
+                  <circle
+                    cx={cx} cy={cy} r={payload.small_sample ? 3 : 5}
+                    fill={payload.small_sample ? 'transparent' : 'var(--orange)'}
+                    stroke="var(--orange)" strokeWidth={2}
+                  />
+                )
+              }}
+              connectNulls
+            />
+            {baseline != null ? (
+              <ReferenceLine
+                y={baseline}
+                stroke="var(--blue)"
+                strokeDasharray="6 3"
+                label={{
+                  value: `prod baseline ${def.formatter(baseline)}`,
+                  fill: 'var(--blue)',
+                  fontSize: 11,
+                  position: 'right',
+                }}
+              />
+            ) : null}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+        Open dot = small sample (&lt;10 devices or &lt;20 sessions) — directional only.
+      </div>
+    </section>
+  )
+}
+
+/* ─── Per-version error-pattern card ──────────────────────────────── */
+
+export function AlphaErrorPatternsCard() {
+  const [data, setData] = useState<AlphaCohortErrorPatterns | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.betaAlphaErrorPatterns(ctl.signal)
+      .then(r => { setData(r); setError(null) })
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+    return () => ctl.abort()
+  }, [])
+
+  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error patterns failed: {error}</div></section>
+  if (!data) return <section className="card"><div className="state-message">Loading error patterns…</div></section>
+
+  return (
+    <section className="card">
+      <div className="venom-panel-head">
+        <div>
+          <strong>Top error codes per alpha version</strong>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+            Last {data.window_days} days · alpha devices only · incidence % = sessions touched by the code / total sessions on that version
+          </div>
+        </div>
+      </div>
+      {data.versions.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+          No alpha-cohort sessions yet in window. Run some cooks, then come back.
+        </div>
+      ) : (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          gap: 12,
+        }}>
+          {data.versions.map(v => (
+            <div key={v.firmware_version} style={{
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: 10,
+              background: 'rgba(255,255,255,0.015)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <strong style={{ fontSize: 13 }}>{v.firmware_version}</strong>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  {v.sessions} session{v.sessions === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, marginBottom: 8 }}>
+                {v.error_free_sessions_pct != null
+                  ? `${(v.error_free_sessions_pct * 100).toFixed(0)}% error-free cooks`
+                  : 'no sessions'}
+              </div>
+              {v.top_error_codes.length === 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--green)' }}>No errors recorded — clean.</div>
+              ) : (
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 11 }}>
+                  {v.top_error_codes.map(c => (
+                    <li key={c.code} style={{
+                      display: 'flex', justifyContent: 'space-between',
+                      padding: '3px 0', borderTop: '1px solid rgba(255,255,255,0.04)',
+                    }}>
+                      <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{c.code}</code>
+                      <span style={{ color: 'var(--muted)' }}>
+                        {c.occurrences}× · {c.incidence_pct != null ? `${(c.incidence_pct * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/* ─── Opus 4.7 narrative insight card ─────────────────────────────── */
+
+const SEVERITY_COLOR: Record<string, string> = {
+  improving: 'var(--green)',
+  regressing: 'var(--red)',
+  investigate: 'var(--orange)',
+  info: 'var(--blue)',
+}
+
+const SEVERITY_ICON: Record<string, string> = {
+  improving: '▲',
+  regressing: '▼',
+  investigate: '⚠',
+  info: '•',
+}
+
+export function AlphaInsightCard() {
+  const { user } = useAuth()
+  const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
+  const [data, setData] = useState<AlphaCohortInsight | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const ctl = new AbortController()
+    api.betaAlphaInsight(ctl.signal)
+      .then(r => setData(r))
+      .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
+    return () => ctl.abort()
+  }, [])
+
+  const regenerate = async () => {
+    if (!confirm('Run Opus 4.7 on the alpha cohort data? This is a ~30-60 second call.')) return
+    setBusy(true)
+    setError(null)
+    try {
+      const fresh = await api.betaAlphaInsightRegenerate()
+      setData(fresh)
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const hasContent = data && (data.overall_theme || (data.observations?.length ?? 0) > 0)
+
+  return (
+    <section className="card" style={{ borderLeft: '3px solid #8b5cf6' }}>
+      <div className="venom-panel-head">
+        <div>
+          <strong>Opus 4.7 · alpha program narrative</strong>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+            {data?.generated_at
+              ? `Generated ${new Date(data.generated_at).toLocaleString()}${data.duration_ms ? ` · ${Math.round(data.duration_ms / 1000)}s` : ''}`
+              : 'Not generated yet — click "Run Opus analysis" to write the narrative.'}
+          </div>
+        </div>
+        {isOwner ? (
+          <button
+            className="range-button active"
+            onClick={regenerate}
+            disabled={busy}
+          >
+            {busy ? 'Opus is thinking…' : (hasContent ? 'Regenerate' : 'Run Opus analysis')}
+          </button>
+        ) : null}
+      </div>
+      {error ? <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</div> : null}
+      {hasContent ? (
+        <>
+          {data.overall_theme ? (
+            <div style={{
+              fontSize: 14,
+              fontWeight: 500,
+              padding: '10px 12px',
+              background: 'rgba(139, 92, 246, 0.08)',
+              borderRadius: 6,
+              marginBottom: 12,
+              lineHeight: 1.4,
+            }}>
+              {data.overall_theme}
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {data.observations.map((o, i) => {
+              const color = SEVERITY_COLOR[o.severity] || 'var(--muted)'
+              const icon = SEVERITY_ICON[o.severity] || '•'
+              return (
+                <div
+                  key={i}
+                  style={{
+                    borderLeft: `3px solid ${color}`,
+                    padding: '8px 12px',
+                    background: 'rgba(255,255,255,0.02)',
+                    borderRadius: 4,
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', marginBottom: 4 }}>
+                    <span style={{ color, fontWeight: 700, fontSize: 14 }}>{icon}</span>
+                    <strong style={{ fontSize: 13 }}>{o.title}</strong>
+                    <span style={{
+                      fontSize: 10, color, fontWeight: 600,
+                      textTransform: 'uppercase', letterSpacing: 0.4,
+                    }}>
+                      {o.severity}
+                    </span>
+                    {o.firmware_versions_cited.length > 0 ? (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 'auto' }}>
+                        cites: {o.firmware_versions_cited.join(', ')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p style={{ fontSize: 12, margin: '2px 0 6px', lineHeight: 1.5 }}>{o.detail}</p>
+                  <div style={{
+                    fontSize: 12, padding: '6px 10px',
+                    background: 'rgba(110, 168, 255, 0.06)',
+                    borderRadius: 4,
+                    borderLeft: '2px solid var(--blue)',
+                  }}>
+                    <strong>→ Next action:</strong> {o.recommendation}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--muted)', padding: '8px 0' }}>
+          {busy
+            ? 'Opus is analyzing the alpha program — ~30-60 seconds…'
+            : (isOwner
+              ? 'Click "Run Opus analysis" above to generate 3-5 actionable observations from the trend + error-pattern data.'
+              : 'No narrative generated yet.')}
+        </div>
+      )}
+    </section>
   )
 }
 

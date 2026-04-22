@@ -1031,6 +1031,354 @@ def alpha_cohort_analytics(db: Session = Depends(db_session)) -> dict[str, Any]:
     }
 
 
+# ── Alpha cohort · trend (version-over-version journey) ─────────────
+
+
+def _alpha_device_ids(db: Session) -> set[str]:
+    rows = db.execute(
+        select(BetaCohortMember.device_id).where(BetaCohortMember.opt_in_source == "alpha")
+    ).all()
+    return {r[0] for r in rows if r[0] and not str(r[0]).startswith("mac:")}
+
+
+def _version_sort_key(v: str) -> tuple[int, ...]:
+    """Sort '01.01.90' < '01.01.95' < '01.01.99' < '01.01.100' correctly."""
+    try:
+        return tuple(int(p) for p in v.split(".") if p.isdigit())
+    except ValueError:
+        return (0, 0, 0)
+
+
+@router.get("/alpha-cohort/trend")
+def alpha_cohort_trend(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Chronological journey across alpha firmware versions, with a
+    production baseline overlay.
+
+    Returns:
+      * points[]: ordered alpha-cohort metric rows keyed by firmware
+        version (90, 91, 92, … 99). Each row carries sample size + all
+        the headline metrics so the UI can draw multi-line charts.
+      * production_baseline{}: aggregate metrics over production
+        fleet versions 01.01.33 and 01.01.34 from the same window.
+        Gives us the "are we beating status quo?" horizontal line.
+      * window_days: the session lookback we used.
+    """
+    from app.models import TelemetrySession as _TelemetrySession
+
+    window_days = 180
+    window_start = datetime.now(timezone.utc) - timedelta(days=window_days)
+    alpha_ids = _alpha_device_ids(db)
+
+    # Pull the per-session fields we aggregate.
+    session_rows = db.execute(
+        select(
+            _TelemetrySession.firmware_version,
+            _TelemetrySession.device_id,
+            _TelemetrySession.cook_success,
+            _TelemetrySession.disconnect_events,
+            _TelemetrySession.max_overshoot_f,
+            _TelemetrySession.in_control_pct,
+            _TelemetrySession.temp_stability_score,
+            _TelemetrySession.time_to_stabilization_seconds,
+            _TelemetrySession.error_count,
+        )
+        .where(_TelemetrySession.session_start >= window_start)
+        .where(_TelemetrySession.firmware_version.is_not(None))
+    ).all()
+
+    # Bucket per (firmware_version, is_alpha)
+    alpha_buckets: dict[str, dict[str, Any]] = {}
+    prod_buckets: dict[str, dict[str, Any]] = {}
+
+    def _mk() -> dict[str, Any]:
+        return {
+            "sessions": 0, "successes": 0, "disconnects": 0, "error_events": 0,
+            "overshoot": [], "in_control": [], "stability": [], "stabilize": [],
+            "devices": set(),
+        }
+
+    for r in session_rows:
+        fw = r[0] or "unknown"
+        did = r[1]
+        is_alpha = did in alpha_ids
+        target = alpha_buckets if is_alpha else prod_buckets
+        b = target.setdefault(fw, _mk())
+        b["sessions"] += 1
+        if r[2]:
+            b["successes"] += 1
+        b["disconnects"] += int(r[3] or 0)
+        b["error_events"] += int(r[8] or 0)
+        if r[4] is not None:
+            b["overshoot"].append(float(r[4]))
+        if r[5] is not None:
+            b["in_control"].append(float(r[5]))
+        if r[6] is not None:
+            b["stability"].append(float(r[6]))
+        if r[7] is not None:
+            b["stabilize"].append(float(r[7]))
+        b["devices"].add(did)
+
+    def _avg(xs: list[float]) -> Optional[float]:
+        return (sum(xs) / len(xs)) if xs else None
+
+    def _summarize(b: dict[str, Any]) -> dict[str, Any]:
+        n = b["sessions"]
+        return {
+            "sessions": n,
+            "devices": len(b["devices"]),
+            "cook_success_rate": (b["successes"] / n) if n else None,
+            "avg_disconnects_per_session": (b["disconnects"] / n) if n else None,
+            "avg_error_events_per_session": (b["error_events"] / n) if n else None,
+            "avg_max_overshoot_f": _avg(b["overshoot"]),
+            "avg_in_control_pct": _avg(b["in_control"]),
+            "avg_stability_score": _avg(b["stability"]),
+            "avg_time_to_stabilize_seconds": _avg(b["stabilize"]),
+            # Small-sample flag — <10 devices or <20 sessions means
+            # don't draw strong conclusions.
+            "small_sample": (len(b["devices"]) < 10) or (n < 20),
+        }
+
+    # Alpha journey — chronologically ordered.
+    alpha_points = [
+        {"firmware_version": fw, **_summarize(b)}
+        for fw, b in sorted(alpha_buckets.items(), key=lambda kv: _version_sort_key(kv[0]))
+    ]
+
+    # Production baseline from 01.01.33 + 01.01.34 combined.
+    prod_baseline_versions = ("01.01.33", "01.01.34")
+    combined: dict[str, Any] = _mk()
+    for v in prod_baseline_versions:
+        b = prod_buckets.get(v)
+        if not b:
+            continue
+        combined["sessions"] += b["sessions"]
+        combined["successes"] += b["successes"]
+        combined["disconnects"] += b["disconnects"]
+        combined["error_events"] += b["error_events"]
+        combined["overshoot"] += b["overshoot"]
+        combined["in_control"] += b["in_control"]
+        combined["stability"] += b["stability"]
+        combined["stabilize"] += b["stabilize"]
+        combined["devices"] |= b["devices"]
+
+    production_baseline = {
+        "versions": list(prod_baseline_versions),
+        **_summarize(combined),
+    }
+
+    return {
+        "window_days": window_days,
+        "alpha_device_id_count": len(alpha_ids),
+        "points": alpha_points,
+        "production_baseline": production_baseline,
+    }
+
+
+# ── Alpha cohort · per-version error patterns ───────────────────────
+
+
+@router.get("/alpha-cohort/error-patterns")
+def alpha_cohort_error_patterns(
+    top_n: int = 5,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Top error codes per alpha firmware version. Uses
+    TelemetrySession.error_codes_json (list-of-strings) and counts
+    incidence per code, returning the top N per version.
+    """
+    from app.models import TelemetrySession as _TelemetrySession
+
+    alpha_ids = _alpha_device_ids(db)
+    if not alpha_ids:
+        return {"versions": []}
+
+    window_start = datetime.now(timezone.utc) - timedelta(days=180)
+    rows = db.execute(
+        select(
+            _TelemetrySession.firmware_version,
+            _TelemetrySession.error_codes_json,
+        )
+        .where(_TelemetrySession.session_start >= window_start)
+        .where(_TelemetrySession.firmware_version.is_not(None))
+        .where(_TelemetrySession.device_id.in_(alpha_ids))
+    ).all()
+
+    # fw_version → {code: count}, plus session totals for % incidence
+    per_version: dict[str, dict[str, int]] = {}
+    session_totals: dict[str, int] = {}
+    for fw, codes in rows:
+        fw = fw or "unknown"
+        session_totals[fw] = session_totals.get(fw, 0) + 1
+        if not codes:
+            continue
+        v = per_version.setdefault(fw, {})
+        for code in codes:
+            if code is None:
+                continue
+            key = str(code)
+            v[key] = v.get(key, 0) + 1
+
+    versions = []
+    for fw in sorted(session_totals.keys(), key=_version_sort_key):
+        total = session_totals[fw]
+        codes = per_version.get(fw, {})
+        ranked = sorted(codes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        versions.append({
+            "firmware_version": fw,
+            "sessions": total,
+            "error_free_sessions_pct": (
+                (total - sum(codes.values())) / total if total else None
+            ),
+            "top_error_codes": [
+                {"code": code, "occurrences": count, "incidence_pct": count / total if total else None}
+                for code, count in ranked
+            ],
+        })
+
+    return {"versions": versions, "window_days": 180}
+
+
+# ── Alpha cohort · Opus 4.7 narrative insight ────────────────────────
+
+
+_ALPHA_INSIGHT_CACHE: dict[str, Any] = {"generated_at": None, "payload": None}
+
+
+class AlphaInsightObservation(BaseModel):
+    title: str = Field(description="Short 4-8 word headline.")
+    detail: str = Field(description="One paragraph (2-4 sentences) on what the data shows.")
+    recommendation: str = Field(description="One concrete next action — who, what, by when.")
+    severity: str = Field(description="'improving' | 'regressing' | 'investigate' | 'info'")
+    firmware_versions_cited: list[str] = Field(default_factory=list)
+
+
+class AlphaInsightBundle(BaseModel):
+    overall_theme: str = Field(description="One-sentence headline for the whole alpha program state.")
+    observations: list[AlphaInsightObservation] = Field(description="3-5 observations, ordered by urgency.")
+
+
+ALPHA_INSIGHT_SYSTEM_PROMPT = """You are the firmware program lead at Spider Grills,
+a premium BBQ-controller company whose Venom controller runs thousands of pellet grills
+in the field. Right now the engineering team is running an alpha program: firmware
+versions 01.01.90 → 01.01.99, tested on a small set of internal + opt-in devices.
+Production fleet is on 01.01.33 and 01.01.34.
+
+Your job: read the per-version metrics + error patterns for the alpha cohort and write
+3–5 ACTIONABLE observations. Think like a program lead, not a dashboard narrator —
+every observation should name a specific firmware version, a specific metric, and a
+specific next action.
+
+How to read the data:
+- `points[]` is the alpha cohort's version journey (90 → 99).
+- `production_baseline` is 01.01.33/34 combined — the "status quo" we must beat.
+- `cook_success_rate`, `avg_in_control_pct`, `avg_stability_score` — higher is better.
+- `avg_disconnects_per_session`, `avg_max_overshoot_f`, `avg_time_to_stabilize_seconds`,
+  `avg_error_events_per_session` — lower is better.
+- `small_sample=true` means <10 devices or <20 sessions. Don't make strong claims from
+  these; call the small sample out explicitly when citing them.
+
+What to output:
+- `overall_theme`: one sentence, "alpha is trending better / alpha regressed at N / mixed."
+- For each observation:
+  - `severity`: 'improving' (showing clear gain vs baseline or earlier version),
+                 'regressing' (worse than the prior version or baseline by a meaningful margin),
+                 'investigate' (anomaly that needs a human to look at before shipping),
+                 'info' (context-setting observation worth knowing but not acting on today).
+  - `title`: a headline like "01.01.97 doubled disconnects vs 01.01.95"
+  - `detail`: 2-4 sentences citing the actual numbers.
+  - `recommendation`: concrete action. "Matías: bisect 01.01.95 → 97 for the WiFi
+                       reconnect regression. Target fix in 01.01.100."
+
+Bad example (too generic): "Cook success is up this year."
+Good example: "01.01.95 lifted cook success to 71% (n=42 sessions, 4 devices) vs
+              01.01.93's 58% — a 13pp gain. Production baseline is 68%. The gain held
+              through 01.01.99 (74%). Recommendation: if no regression emerges in the
+              next week, flag 01.01.99 as a candidate for beta promotion."
+
+Return ONLY the structured output. No preamble, no prose wrapper."""
+
+
+@router.post("/alpha-cohort/insight/regenerate")
+def alpha_insight_regenerate(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Trigger an Opus 4.7 pass and cache the result. Expensive (one
+    1M-context Opus call); use the GET /insight for cache-reads."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    # Pull the same context the dashboard shows: trend + error patterns.
+    trend = alpha_cohort_trend(db)
+    errors = alpha_cohort_error_patterns(top_n=5, db=db)
+    if not trend["points"]:
+        raise HTTPException(status_code=400, detail="No alpha sessions yet — run some cooks before asking Opus to analyze.")
+
+    import anthropic
+    client = anthropic.Anthropic(
+        api_key=settings.anthropic_api_key,
+        timeout=180,
+        max_retries=1,
+    )
+    user_msg = (
+        "Here is the current state of the Spider Grills alpha firmware program.\n\n"
+        "ALPHA JOURNEY (version-ordered):\n"
+        + json.dumps(trend, default=str, indent=2)
+        + "\n\nERROR PATTERNS PER ALPHA VERSION:\n"
+        + json.dumps(errors, default=str, indent=2)
+        + "\n\nGenerate the overall_theme + 3-5 observations."
+    )
+
+    started = datetime.now(timezone.utc)
+    try:
+        response = client.messages.parse(
+            model="claude-opus-4-7",
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            system=[{
+                "type": "text",
+                "text": ALPHA_INSIGHT_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_msg}],
+            output_format=AlphaInsightBundle,
+        )
+    except Exception as exc:
+        logger.exception("alpha insight Opus call failed")
+        raise HTTPException(status_code=502, detail=f"Opus call failed: {exc}")
+
+    bundle: Optional[AlphaInsightBundle] = response.parsed_output
+    if bundle is None:
+        raise HTTPException(status_code=502, detail="Opus returned no parsed output")
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "model": "claude-opus-4-7",
+        "overall_theme": bundle.overall_theme,
+        "observations": [o.model_dump() for o in bundle.observations],
+        "duration_ms": int((datetime.now(timezone.utc) - started).total_seconds() * 1000),
+    }
+    _ALPHA_INSIGHT_CACHE["generated_at"] = payload["generated_at"]
+    _ALPHA_INSIGHT_CACHE["payload"] = payload
+    return payload
+
+
+@router.get("/alpha-cohort/insight")
+def alpha_insight_get(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Return the latest cached Opus narrative. If nothing cached yet,
+    returns a 404-style empty shell so the UI can prompt for first run."""
+    payload = _ALPHA_INSIGHT_CACHE.get("payload")
+    if not payload:
+        return {
+            "generated_at": None,
+            "overall_theme": None,
+            "observations": [],
+            "cached": False,
+        }
+    return {**payload, "cached": True}
+
+
 # ── Gamma waves (production rollout) ─────────────────────────────────
 
 

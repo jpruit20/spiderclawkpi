@@ -46,7 +46,10 @@ import { DiagnosticsCard } from '../components/DiagnosticsCard'
 import { DivisionHero } from '../components/DivisionHero'
 import {
   AlphaBulkRegisterCard,
+  AlphaErrorPatternsCard,
   AlphaFirmwareTimelineCard,
+  AlphaInsightCard,
+  AlphaTrendChart,
   AlphaVsFleetAnalyticsCard,
 } from '../components/AlphaCohortTools'
 import { fmtInt } from '../lib/format'
@@ -249,8 +252,17 @@ function AlphaCohortPanel() {
         </div>
       </section>
 
-      {/* Cohort-vs-fleet analytics — the whole point of registering */}
+      {/* Opus 4.7 narrative — 3-5 actionable observations for the program lead */}
+      <AlphaInsightCard />
+
+      {/* Version-over-version trend — visual "are we getting better" journey */}
+      <AlphaTrendChart />
+
+      {/* Cohort-vs-fleet analytics — per-version alpha vs production table */}
       <AlphaVsFleetAnalyticsCard />
+
+      {/* Per-version error-pattern rollup — what actually breaks on each FW */}
+      <AlphaErrorPatternsCard />
 
       <section className="card">
         <div className="card-title">Members ({data.count})</div>
