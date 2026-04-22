@@ -389,6 +389,7 @@ def _serialize_product(p: PartnerProduct) -> dict[str, Any]:
         "handle": p.handle,
         "title": p.title,
         "fuel_type": p.fuel_type,
+        "category": p.category,
         "bag_size_lb": p.bag_size_lb,
         "retail_price_usd": p.retail_price_usd,
         "currency": p.currency,

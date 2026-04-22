@@ -5,10 +5,19 @@ Today just Jealous Devil; shape is generic so Royal Oak / Kingsford
 changes.
 
 Mechanism: Shopify publishes a standard ``/products.json`` endpoint
-on every storefront. We fetch the public JSON, filter to
-charcoal-relevant products (by handle/title keywords), parse bag
-size + fuel type out of the title, and upsert into
-``partner_products``.
+on every storefront. We fetch the public JSON, filter to charcoal
+SKUs that fit the 2026 JIT beta scope, parse bag size + category +
+fuel type, and upsert into ``partner_products``.
+
+2026-04-22 scope (Joseph): only ingest SKUs whose title contains
+"lump" or "briquette". Specialty lines (Hex Supernatural, binchotan)
+and non-charcoal consumables (firestarters, firelogs, pellets) are
+deliberately excluded from the modeling surface — we don't want the
+cohort calculator offering SKUs we can't predict burn-rate for.
+
+Shipping is 100% on Jealous Devil's side; we never touch the
+charcoal physically, so nothing in this module or downstream
+modeling should add shipping into the Spider Grills margin math.
 
 Runs daily via ``run_partner_catalog_refresh_job``. Manual refresh
 also available via ``POST /api/charcoal/partners/refresh``.
@@ -30,20 +39,36 @@ logger = logging.getLogger(__name__)
 
 
 # Each partner declares: the base storefront URL (for source_url + the
-# products.json fetch) and a filter that drops non-charcoal items
-# (merch, patches, etc.) so the catalog stays clean.
+# products.json fetch) and a filter that drops non-charcoal items so
+# the catalog stays clean.
+#
+# ``include_title_keywords`` — the title must contain at least one of
+# these (case-insensitive). Using "briquet" catches both "briquette"
+# and the "briquets" typo some JD SKUs carry.
+#
+# ``exclude_title_keywords`` — even if a title matches the include
+# list, any of these kills it. "supernatural" and "binchotan" block
+# JD's specialty lines per Joseph's 2026-04-22 scoping call.
+#
+# ``exclude_tags`` — Shopify products.json ships tags as either a
+# string or a list depending on the store. Anything tagged "merch"
+# on JD's store is apparel / swag — drop it regardless of title.
 PARTNERS: dict[str, dict[str, Any]] = {
     "jealous_devil": {
         "storefront": "https://jealousdevil.com",
-        "filter_keywords": ("lump", "briquet", "charcoal"),
-        # Items to exclude even if they contain the keywords — e.g.
-        # merchandise that references charcoal in the title.
-        "exclude_keywords": ("patch", "hat", "shirt", "sticker", "pin", "swag"),
+        "include_title_keywords": ("lump", "briquet"),
+        "exclude_title_keywords": (
+            "supernatural",   # Hex Supernatural = premium binchotan-style
+            "binchotan",
+            "patch", "hat", "shirt", "sticker", "pin", "swag",
+        ),
+        "exclude_tags": ("merch",),
     },
 }
 
 _REQUEST_TIMEOUT_SECONDS = 20
 _USER_AGENT = "SpiderGrills-KPI/1.0 (partner-catalog-fetcher; ops@spidergrills.com)"
+_GRAMS_PER_LB = 453.59237
 
 
 def _infer_fuel_type(title: str, handle: str) -> Optional[str]:
@@ -56,33 +81,83 @@ def _infer_fuel_type(title: str, handle: str) -> Optional[str]:
     return None
 
 
-def _infer_bag_size_lb(title: str, handle: str) -> Optional[int]:
-    """Pull a weight out of the title. Common patterns:
-      '35 Pounds', '20 lb', '20-lb', '20lb'. Kilos converted to lb.
+def _infer_category(title: str, handle: str) -> str:
+    """Map a product to a modeling bucket. Stays aligned with the
+    include filter — anything that makes it past the scraper will land
+    in 'lump_charcoal' or 'briquette'. 'other' is only returned if we
+    ever relax ``include_title_keywords`` and start letting e.g.
+    firestarters through."""
+    fuel = _infer_fuel_type(title, handle)
+    if fuel == "lump":
+        return "lump_charcoal"
+    if fuel == "briquette":
+        return "briquette"
+    return "other"
+
+
+_TITLE_LB_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:lb|lbs|pound|pounds|-?lb)\b", re.IGNORECASE)
+_TITLE_KG_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:kg|kilogram|kilos?)\b", re.IGNORECASE)
+
+
+def _infer_bag_size_lb(title: str, handle: str, variant: dict[str, Any]) -> Optional[int]:
+    """Pull a weight out of the title first; fall back to
+    ``variants[0].grams`` if the title doesn't advertise a weight. A
+    few JD SKUs just say "XL Bag" with no number in the title — the
+    Shopify variant payload is the safety net.
+
+    Common title patterns: '35 Pounds', '20 lb', '20-lb', '20lb', '20.5 lb'.
+    Kilos are converted to lb. Grams from the variant are rounded to
+    the nearest whole pound because every real SKU is a round number.
     """
     text = f"{title} {handle}"
-    # First match wins; most titles have exactly one weight.
-    m = re.search(r"(\d{1,3})\s*(?:lb|lbs|pound|pounds|-?lb)\b", text, re.IGNORECASE)
+    m = _TITLE_LB_RE.search(text)
     if m:
         try:
-            return int(m.group(1))
+            return int(round(float(m.group(1))))
         except ValueError:
-            return None
-    # Kilograms → lb
-    m = re.search(r"(\d{1,3})\s*(?:kg|kilogram|kilos?)\b", text, re.IGNORECASE)
+            pass
+    m = _TITLE_KG_RE.search(text)
     if m:
         try:
-            return int(round(int(m.group(1)) * 2.20462))
+            return int(round(float(m.group(1)) * 2.20462))
         except ValueError:
-            return None
+            pass
+    # Variant-grams fallback. Shopify sometimes ships grams as an int,
+    # sometimes as a string — coerce either way. 0 / missing → skip.
+    grams_raw = variant.get("grams")
+    try:
+        grams = float(grams_raw) if grams_raw not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        grams = 0.0
+    if grams > 0:
+        lb = grams / _GRAMS_PER_LB
+        # Anything under ~1 lb is almost certainly apparel / an
+        # accessory that leaked past the filter — don't fabricate a
+        # bag size for it.
+        if lb >= 1.0:
+            return int(round(lb))
     return None
 
 
-def _matches_filter(handle: str, title: str, cfg: dict[str, Any]) -> bool:
+def _extract_tags(raw_tags: Any) -> tuple[str, ...]:
+    """Shopify returns ``tags`` as either a comma-separated string
+    ("merch, 20lb, lump") or as a list of strings depending on the
+    store. Normalize to a lowercased tuple either way."""
+    if isinstance(raw_tags, list):
+        return tuple(str(t).strip().lower() for t in raw_tags if t)
+    if isinstance(raw_tags, str):
+        return tuple(t.strip().lower() for t in raw_tags.split(",") if t.strip())
+    return ()
+
+
+def _matches_filter(handle: str, title: str, tags: tuple[str, ...], cfg: dict[str, Any]) -> bool:
     low = f"{handle} {title}".lower()
-    if not any(k in low for k in cfg["filter_keywords"]):
+    if not any(k in low for k in cfg["include_title_keywords"]):
         return False
-    if any(k in low for k in cfg["exclude_keywords"]):
+    if any(k in low for k in cfg["exclude_title_keywords"]):
+        return False
+    excluded_tags = cfg.get("exclude_tags", ())
+    if any(t in tags for t in excluded_tags):
         return False
     return True
 
@@ -135,7 +210,8 @@ def upsert_partner_catalog(db: Session, partner_key: str) -> dict[str, Any]:
         title = (p.get("title") or "").strip()
         if not handle or not title:
             continue
-        if not _matches_filter(handle, title, cfg):
+        tags = _extract_tags(p.get("tags"))
+        if not _matches_filter(handle, title, tags, cfg):
             continue
         stats["products_matched"] += 1
         fetched_handles.add(handle)
@@ -153,7 +229,8 @@ def upsert_partner_catalog(db: Session, partner_key: str) -> dict[str, Any]:
             continue
         available = bool(variant.get("available"))
         fuel = _infer_fuel_type(title, handle)
-        bag_size = _infer_bag_size_lb(title, handle)
+        category = _infer_category(title, handle)
+        bag_size = _infer_bag_size_lb(title, handle, variant)
         source_url = f"{storefront}/products/{handle}"
 
         existing = db.execute(
@@ -169,6 +246,7 @@ def upsert_partner_catalog(db: Session, partner_key: str) -> dict[str, Any]:
                 handle=handle,
                 title=title,
                 fuel_type=fuel,
+                category=category,
                 bag_size_lb=bag_size,
                 retail_price_usd=price,
                 currency="USD",
@@ -181,6 +259,7 @@ def upsert_partner_catalog(db: Session, partner_key: str) -> dict[str, Any]:
         else:
             existing.title = title
             existing.fuel_type = fuel
+            existing.category = category
             existing.bag_size_lb = bag_size
             existing.retail_price_usd = price
             existing.source_url = source_url

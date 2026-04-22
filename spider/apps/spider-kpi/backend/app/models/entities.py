@@ -1634,8 +1634,17 @@ class PartnerProduct(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     # 'lump' | 'briquette' | 'other' — inferred from title keywords
     fuel_type: Mapped[Optional[str]] = mapped_column(String(16))
-    # Bag weight in lb, inferred from title (e.g. "35 pounds" → 35). None
-    # if the title doesn't advertise a weight (e.g. merchandise / swag).
+    # Catalog bucket used by the JIT modeling UI. For the 2026 beta we
+    # only ingest core charcoal SKUs — anything whose title contains
+    # "lump" or "briquette". Values: 'lump_charcoal' | 'briquette' |
+    # 'other'. Specialty items (Hex Supernatural, binchotan) are
+    # deliberately not scraped; if we ever expand the catalog, add the
+    # new bucket here rather than overloading 'other'.
+    category: Mapped[Optional[str]] = mapped_column(String(32))
+    # Bag weight in lb, inferred from the title first and falling back
+    # to variants[0].grams × 0.00220462 when the title doesn't spell
+    # out a weight (some JD SKUs just say "XL Bag"). None if neither
+    # source yields a plausible number.
     bag_size_lb: Mapped[Optional[int]] = mapped_column(Integer)
     retail_price_usd: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
