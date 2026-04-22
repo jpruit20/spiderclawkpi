@@ -120,7 +120,17 @@ def order_aging(
     rows = _latest_snapshot_rows(db)
 
     # ── CURRENT aging state ──
+    #
+    # Filter carefully: old ShopifyOrderEvent snapshots (taken before we
+    # started capturing fulfillment_status + fulfillments) can LOOK
+    # unfulfilled because fulfillment_status defaults to None. Skip any
+    # snapshot that doesn't explicitly carry the field — we'd rather
+    # under-count than show 1,500 phantom unfulfilled orders.
+    def _has_fulfillment_data(raw: dict, normalized: dict) -> bool:
+        return ("fulfillment_status" in raw) or ("fulfillment_status" in normalized)
+
     open_orders: list[dict[str, Any]] = []
+    stale_snapshot_skipped = 0
     for order_id, raw, normalized in rows:
         if not order_id:
             continue
@@ -128,12 +138,18 @@ def order_aging(
         cancelled_at = _parse_iso(raw.get("cancelled_at") or normalized.get("cancelled_at"))
         if cancelled_at is not None:
             continue
+        if not _has_fulfillment_data(raw, normalized):
+            stale_snapshot_skipped += 1
+            continue
         # fulfillment_status is either 'fulfilled', 'partial', 'restocked',
         # null (unfulfilled), or 'unfulfilled'. Anything not 'fulfilled'
         # means work remains — but exclude 'restocked' which means
         # returned/restocked (not an open fulfillment).
-        fs = (raw.get("fulfillment_status") or normalized.get("fulfillment_status") or "").lower()
-        if fs == "fulfilled" or fs == "restocked":
+        fs_raw = raw.get("fulfillment_status")
+        if fs_raw is None:
+            fs_raw = normalized.get("fulfillment_status")
+        fs = (fs_raw or "").lower()
+        if fs in ("fulfilled", "restocked"):
             continue
         created_at = _parse_iso(raw.get("created_at") or normalized.get("created_at"))
         if created_at is None:
@@ -221,6 +237,11 @@ def order_aging(
         day_labels.append(anchor.date().isoformat())
 
         for _, raw, normalized in rows:
+            # Same stale-snapshot filter as current state — can't
+            # reconstruct history from a snapshot that lacks the
+            # fulfillment fields.
+            if not _has_fulfillment_data(raw, normalized):
+                continue
             created_at = _parse_iso(raw.get("created_at") or normalized.get("created_at"))
             if created_at is None or created_at > anchor:
                 continue
@@ -269,13 +290,15 @@ def order_aging(
         "meta": {
             "method": "snapshot_reconstruction",
             "snapshot_rows_scanned": len(rows),
+            "stale_snapshot_skipped": stale_snapshot_skipped,
             "notes": (
                 "Trend reconstructed from per-order snapshot state "
                 "(created_at, first_fulfilled_at, cancelled_at). Counts are "
                 "'orders still open at end-of-day, bucketed by age as of "
-                "that day'. Requires at least one poll_unfulfilled sync "
-                "to cover orders older than the regular updated_at poll "
-                "window."
+                "that day'. Snapshots captured before fulfillment_status was "
+                "added to the sync are excluded to prevent phantom "
+                "unfulfilled counts — click 'Refresh from Shopify' to "
+                "backfill current state."
             ),
         },
     }
