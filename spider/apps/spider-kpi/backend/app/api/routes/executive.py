@@ -596,9 +596,34 @@ def wismo_kpi(
     }
 
 
-# Context: ~13k Venoms shipped as of 2026-04 — used as the denominator
-# floor when telemetry active-device counts are unavailable.
-INSTALLED_BASE_VENOMS = 13_000
+# Installed-base denominator.
+#
+# Before 2026-04-21 this was a hardcoded 13,000 placeholder. The real
+# number is now computed live from telemetry — distinct device_ids in
+# the last 24 months — via `_live_installed_base` below. The constant
+# survives as a floor-of-last-resort only (if telemetry is entirely
+# unavailable, we'd rather return *something* than divide by zero).
+INSTALLED_BASE_VENOMS_FLOOR = 1
+
+
+def _live_installed_base(db: Session) -> int:
+    """24-month rolling unique active devices. Matches /api/fleet/size.
+
+    Used as the denominator for the annualized probe-failure-rate. Kept
+    inline here (not an HTTP call to /api/fleet/size) to avoid
+    round-tripping through the auth layer for an internal calculation.
+    """
+    try:
+        return int(db.execute(text("""
+            SELECT COUNT(DISTINCT device_id)
+              FROM telemetry_sessions
+             WHERE device_id IS NOT NULL
+               AND device_id NOT LIKE 'mac:%%'
+               AND session_start >= NOW() - interval '24 months'
+        """)).scalar() or 0) or INSTALLED_BASE_VENOMS_FLOOR
+    except Exception:
+        logger.exception("live installed-base query failed; falling back to floor")
+        return INSTALLED_BASE_VENOMS_FLOOR
 
 
 @router.get("/probe-failure-rate")
@@ -675,11 +700,14 @@ def probe_failure_rate(
         )
 
     # Annualized rate per installed-base unit (what fraction of the
-    # deployed fleet files a probe-failure ticket per year).
+    # deployed fleet files a probe-failure ticket per year). Installed
+    # base = live 24mo rolling unique active devices, not a hardcoded
+    # placeholder.
+    installed_base_venoms = _live_installed_base(db)
     annualized_rate_per_installed_base: Optional[float] = None
-    if INSTALLED_BASE_VENOMS > 0 and days > 0:
+    if installed_base_venoms > 0 and days > 0:
         annualized_rate_per_installed_base = (
-            probe_count / INSTALLED_BASE_VENOMS * (365.0 / days)
+            probe_count / installed_base_venoms * (365.0 / days)
         )
 
     # Daily trend — one row per day in the window, even if 0.
@@ -740,7 +768,7 @@ def probe_failure_rate(
             if total_in_window else 0.0
         ),
         "active_devices_in_window": active_devices_in_window,
-        "installed_base_venoms": INSTALLED_BASE_VENOMS,
+        "installed_base_venoms": installed_base_venoms,
         "rate_per_1000_active_30d": (
             round(rate_per_1000_active_30d, 3)
             if rate_per_1000_active_30d is not None else None

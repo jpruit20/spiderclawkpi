@@ -17,6 +17,7 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
+import { LifetimeFleetCard } from '../components/LifetimeFleetCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { BaselineBand } from '../components/BaselineBand'
 import { EventTimelinePanel } from '../components/EventTimelinePanel'
@@ -345,6 +346,7 @@ export function ProductEngineeringDivision() {
   const [marketIntel, setMarketIntel] = useState<MarketIntelligence | null>(null)
   const [cxSnapshot, setCxSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [appSide, setAppSide] = useState<AppSideFleetResponse | null>(null)
+  const [fleetSize, setFleetSize] = useState<import('../lib/api').FleetSizeResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -438,13 +440,14 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [telData, issuesData, radarData, miData, cxData, appSideData] = await Promise.all([
+        const [telData, issuesData, radarData, miData, cxData, appSideData, fleetData] = await Promise.all([
           api.telemetrySummary(daysDiff, ctrl.signal, debouncedStart, debouncedEnd),
           api.engineeringIssues(ctrl.signal).catch(() => null),
           api.issues(ctrl.signal).catch(() => null),
           api.marketIntelligence(30, ctrl.signal).catch(() => null),
           api.cxSnapshot(ctrl.signal).catch(() => null),
           api.appSideFleet(daysDiff, ctrl.signal, debouncedStart, debouncedEnd).catch(() => null),
+          api.fleetSize(ctrl.signal).catch(() => null),
         ])
         if (!ctrl.signal.aborted) {
           setTelemetry(telData)
@@ -453,6 +456,7 @@ export function ProductEngineeringDivision() {
           setMarketIntel(miData)
           setCxSnapshot(cxData)
           setAppSide(appSideData)
+          setFleetSize(fleetData)
         }
       } catch (err) {
         if (!ctrl.signal.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load product data')
@@ -602,7 +606,13 @@ export function ProductEngineeringDivision() {
   // reference, not as the headline number.
   const probeFailureCount = probeFailure?.probe_failure_count ?? null
   const probeActiveDevices = probeFailure?.active_devices_in_window ?? 0
-  const probeInstalledBase = probeFailure?.installed_base_venoms ?? 13000
+  // Canonical: live 24-month active-fleet count from /api/fleet/size.
+  // Falls back to the executive payload's self-reported number, then
+  // (only if neither is loaded yet) to 0 — the UI should treat 0 as
+  // "loading" and show dashes, never the stale 13k placeholder.
+  const probeInstalledBase = fleetSize?.active_24mo.total
+    ?? probeFailure?.installed_base_venoms
+    ?? 0
   const probeWindowDays = probeFailure?.window_days ?? 0
   const probeRatePer1kActive = probeFailure?.rate_per_1000_active_30d ?? null
   const probeAnnualizedProjected = probeFailure?.annualized_failures_projected ?? null
@@ -928,6 +938,12 @@ export function ProductEngineeringDivision() {
             <>
               <TruthLegend />
 
+              {/* Fleet composition — canonical 24mo active count +
+                  lifetime breakdown by product family and source.
+                  Replaces the 13k placeholder that used to live in
+                  several places. */}
+              <LifetimeFleetCard />
+
               {/* Visual gauge dashboard — glanceable fleet health.
                   Benchmarks: cook success 69% median (28-month baseline),
                   error rate ≤1.3% healthy / ≥1.8% incident. */}
@@ -1154,7 +1170,7 @@ export function ProductEngineeringDivision() {
                     populates; falls back to a 9-day stream-events count
                     in the meantime. */}
                 {cookDuration && (
-                  <UniqueDeviceCohortPanel stats={cookDuration} />
+                  <UniqueDeviceCohortPanel stats={cookDuration} installedBase={fleetSize?.active_24mo.total ?? 0} />
                 )}
               </section>
 

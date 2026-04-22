@@ -256,6 +256,10 @@ export const api = {
   cxSnapshot: (signal?: AbortSignal) => request<CXSnapshotResponse>('/api/cx/snapshot', { signal }),
   shopifyOrderAging: (trendDays = 14, signal?: AbortSignal) =>
     request<OrderAgingResponse>(`/api/shopify/order-aging?trend_days=${trendDays}`, { signal }),
+  fleetSize: (signal?: AbortSignal) =>
+    request<FleetSizeResponse>('/api/fleet/size', { signal }),
+  fleetLifetime: (signal?: AbortSignal) =>
+    request<FleetLifetimeResponse>('/api/fleet/lifetime', { signal }),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',
@@ -1262,6 +1266,44 @@ export interface OrderAgingOldestOrder {
 export interface OrderAgingTrendSeries {
   label: string
   counts: number[]
+}
+
+export interface FleetFamilyBreakdown {
+  'Weber Kettle': number
+  'Huntsman': number
+  'Giant Huntsman': number
+  'Unknown': number
+}
+
+export interface FleetSizeResponse {
+  generated_at: string
+  window_days: number
+  active_24mo: {
+    total: number
+    by_family: FleetFamilyBreakdown
+  }
+  definition: string
+}
+
+export interface FleetLifetimeResponse {
+  generated_at: string
+  aws_registered: {
+    total: number
+    by_family: FleetFamilyBreakdown
+    note: string
+  }
+  shopify_units: {
+    total: number
+    by_family: FleetFamilyBreakdown
+    coverage_orders_with_line_items: number
+    coverage_orders_total: number
+    note: string
+  }
+  amazon_units: {
+    total: number | null
+    by_family: FleetFamilyBreakdown | null
+    note: string
+  }
 }
 
 export interface OrderAgingResponse {

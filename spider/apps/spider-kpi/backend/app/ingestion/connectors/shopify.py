@@ -458,7 +458,7 @@ def sync_shopify_orders(db: Session, hours: int = 48) -> dict[str, Any]:
         _ORDER_FIELDS = (
             "id,created_at,updated_at,total_price,current_total_price,"
             "total_discounts,financial_status,cancelled_at,customer.id,"
-            "fulfillment_status,tags,fulfillments"
+            "fulfillment_status,tags,fulfillments,line_items"
         )
         params = {
             "status": "any",
@@ -642,7 +642,7 @@ def sync_unfulfilled_orders(db: Session) -> dict[str, Any]:
         _ORDER_FIELDS = (
             "id,created_at,updated_at,total_price,current_total_price,"
             "total_discounts,financial_status,cancelled_at,customer.id,"
-            "fulfillment_status,tags,fulfillments"
+            "fulfillment_status,tags,fulfillments,line_items"
         )
         all_orders: list[dict[str, Any]] = []
         seen_ids: set[Any] = set()

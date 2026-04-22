@@ -3,8 +3,8 @@ import { fmtInt, fmtPct } from '../lib/format'
 import type { CookDurationStats } from '../lib/types'
 
 /**
- * Device-cohort analytics — "of our ~13k installed-base Venoms, how
- * broad is the active user base this window?"
+ * Device-cohort analytics — "of our active-fleet Venoms, how broad is
+ * the user base this window?"
  *
  * Primary metric:
  *   * Unique active devices — count of distinct device_ids that
@@ -13,22 +13,17 @@ import type { CookDurationStats } from '../lib/types'
  *     (few power users) vs broad engagement
  *   * Avg / median sessions per device
  *
- * Backfill-safe: falls back to stream-events-derived device count for
- * the last 9 days when telemetry_sessions hasn't been populated yet.
- * Shows a 'pending' banner so the reader knows why cohort detail is
- * thin until the backfill finishes.
+ * `installedBase` should come from /api/fleet/size.active_24mo.total.
+ * Passing 0 (or omitting) makes the % row render "—" instead of lying
+ * against a stale placeholder — which is what the old 13k default did.
  */
-
-// Default — can be overridden via prop once we confirm the actual
-// installed-base number in config.
-const DEFAULT_INSTALLED_BASE = 13000
 
 type Props = {
   stats: CookDurationStats
   installedBase?: number
 }
 
-export function UniqueDeviceCohortPanel({ stats, installedBase = DEFAULT_INSTALLED_BASE }: Props) {
+export function UniqueDeviceCohortPanel({ stats, installedBase = 0 }: Props) {
   const hasSessions = stats.source === 'telemetry_sessions'
   const uniqueDevices = stats.unique_devices || 0
   const partial = !!stats.unique_devices_is_partial
@@ -107,7 +102,9 @@ export function UniqueDeviceCohortPanel({ stats, installedBase = DEFAULT_INSTALL
             {pctActive != null ? fmtPct(pctActive, 1) : '—'}
           </div>
           <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-            of ~{fmtInt(installedBase)} Venoms shipped
+            {installedBase > 0
+              ? `of ${fmtInt(installedBase)} active-fleet Venoms (24mo)`
+              : 'fleet-size endpoint pending'}
           </div>
         </div>
 
