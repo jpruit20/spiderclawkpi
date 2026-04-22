@@ -752,7 +752,7 @@ export const api = {
   }) =>
     request<AlphaBulkImportResult>('/api/beta/alpha-cohort/bulk-import', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: payload,
       timeoutMs: 120000,
     }),
   betaAlphaFirmwareTimeline: (mac: string, signal?: AbortSignal) =>
