@@ -615,7 +615,13 @@ def sync_unfulfilled_orders(db: Session) -> dict[str, Any]:
     or =partial and upsert its raw_payload + normalized_payload. Used
     to seed the order-aging endpoint and keep the open queue fresh.
     """
-    configured, _status = _configured_status()
+    configured = bool(
+        settings.shopify_store_url
+        and (
+            settings.shopify_admin_access_token
+            or (settings.shopify_api_key and settings.shopify_api_secret)
+        )
+    )
     if not configured:
         return {"ok": False, "message": "Shopify not configured", "records_processed": 0}
 
