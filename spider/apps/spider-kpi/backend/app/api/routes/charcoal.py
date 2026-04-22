@@ -20,11 +20,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select, text
+from pydantic import BaseModel, Field
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_dashboard_session
-from app.models import TelemetrySession
+from app.models import CharcoalJITSubscription, TelemetrySession
 from app.services.product_taxonomy import (
     FAMILY_HUNTSMAN,
     FAMILY_WEBER_KETTLE,
@@ -306,3 +307,210 @@ def fleet_distinct_filters(db: Session = Depends(db_session)) -> dict[str, Any]:
         "firmware_versions": [{"value": f, "devices": int(n)} for f, n in firmwares],
         "product_families": [FAMILY_WEBER_KETTLE, FAMILY_HUNTSMAN, "Giant Huntsman", "Unknown"],
     }
+
+
+# ── JIT program enrollment ──────────────────────────────────────────
+#
+# Backs the "Enrollment" tab on the Charcoal page. One row per
+# (device, user) pair. The scheduler (to be added) will read this
+# table, compute burn rate per device from TelemetrySession, and
+# write `next_ship_after` timestamps. Draft Shopify order creation
+# is explicitly NOT wired here yet — we're collecting enrollments
+# first so we can run the prediction cadence dry before any
+# shipments are billed.
+
+
+VALID_FUELS = ("lump", "briquette")
+VALID_STATUSES = ("active", "paused", "cancelled")
+
+
+class JITSubscribeIn(BaseModel):
+    mac: str = Field(..., max_length=32)
+    user_key: Optional[str] = Field(None, max_length=128)
+    fuel_preference: str = Field(..., description="'lump' or 'briquette'")
+    bag_size_lb: int = Field(20, ge=5, le=100)
+    lead_time_days: int = Field(5, ge=1, le=30)
+    safety_stock_days: int = Field(7, ge=0, le=30)
+    shipping_zip: Optional[str] = Field(None, max_length=16)
+    shipping_lat: Optional[float] = None
+    shipping_lon: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class JITPatchIn(BaseModel):
+    fuel_preference: Optional[str] = None
+    bag_size_lb: Optional[int] = Field(None, ge=5, le=100)
+    lead_time_days: Optional[int] = Field(None, ge=1, le=30)
+    safety_stock_days: Optional[int] = Field(None, ge=0, le=30)
+    shipping_zip: Optional[str] = None
+    shipping_lat: Optional[float] = None
+    shipping_lon: Optional[float] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+def _serialize_sub(row: CharcoalJITSubscription) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "device_id": row.device_id,
+        "mac": row.mac_normalized,
+        "user_key": row.user_key,
+        "fuel_preference": row.fuel_preference,
+        "bag_size_lb": row.bag_size_lb,
+        "lead_time_days": row.lead_time_days,
+        "safety_stock_days": row.safety_stock_days,
+        "shipping_zip": row.shipping_zip,
+        "shipping_lat": row.shipping_lat,
+        "shipping_lon": row.shipping_lon,
+        "status": row.status,
+        "enrolled_by": row.enrolled_by,
+        "notes": row.notes,
+        "last_forecast": row.last_forecast_json or {},
+        "last_shipped_at": row.last_shipped_at.isoformat() if row.last_shipped_at else None,
+        "next_ship_after": row.next_ship_after.isoformat() if row.next_ship_after else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.post("/jit/subscribe")
+def jit_subscribe(
+    payload: JITSubscribeIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Enroll a device in the Charcoal JIT program.
+
+    Resolves the MAC to a device_id via the existing telemetry-stream
+    lookup. If no device_ids exist (offline device), we store the
+    subscription with device_id=NULL; the scheduler will re-key it
+    when telemetry first arrives.
+    """
+    from app.api.routes.firmware import _device_ids_for_mac, normalize_mac
+
+    if payload.fuel_preference not in VALID_FUELS:
+        raise HTTPException(status_code=400, detail=f"fuel_preference must be one of {VALID_FUELS}")
+
+    mac = normalize_mac(payload.mac)
+    if mac is None:
+        raise HTTPException(status_code=400, detail="invalid MAC")
+
+    device_ids = _device_ids_for_mac(db, mac)
+    # Prefer the most-recently-seen device_id when a MAC maps to several.
+    primary_device_id = device_ids[0] if device_ids else None
+
+    existing = db.execute(
+        select(CharcoalJITSubscription).where(
+            CharcoalJITSubscription.mac_normalized == mac,
+            (CharcoalJITSubscription.user_key == payload.user_key),
+        )
+    ).scalars().first()
+
+    if existing is not None:
+        # Idempotent upsert — update fields, preserve subscription ID.
+        existing.device_id = primary_device_id or existing.device_id
+        existing.fuel_preference = payload.fuel_preference
+        existing.bag_size_lb = payload.bag_size_lb
+        existing.lead_time_days = payload.lead_time_days
+        existing.safety_stock_days = payload.safety_stock_days
+        if payload.shipping_zip is not None:
+            existing.shipping_zip = payload.shipping_zip
+        if payload.shipping_lat is not None:
+            existing.shipping_lat = payload.shipping_lat
+        if payload.shipping_lon is not None:
+            existing.shipping_lon = payload.shipping_lon
+        if payload.notes is not None:
+            existing.notes = payload.notes
+        existing.status = "active"
+        db.commit()
+        return {"ok": True, "action": "updated", "subscription": _serialize_sub(existing)}
+
+    row = CharcoalJITSubscription(
+        device_id=primary_device_id,
+        mac_normalized=mac,
+        user_key=payload.user_key,
+        fuel_preference=payload.fuel_preference,
+        bag_size_lb=payload.bag_size_lb,
+        lead_time_days=payload.lead_time_days,
+        safety_stock_days=payload.safety_stock_days,
+        shipping_zip=payload.shipping_zip,
+        shipping_lat=payload.shipping_lat,
+        shipping_lon=payload.shipping_lon,
+        notes=payload.notes,
+        status="active",
+        enrolled_by="dashboard",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "action": "created", "subscription": _serialize_sub(row)}
+
+
+@router.get("/jit/subscriptions")
+def jit_list(
+    status: Optional[str] = None,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """All JIT subscriptions, optionally filtered by status."""
+    stmt = select(CharcoalJITSubscription).order_by(desc(CharcoalJITSubscription.updated_at))
+    if status:
+        if status not in VALID_STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of {VALID_STATUSES}")
+        stmt = stmt.where(CharcoalJITSubscription.status == status)
+    rows = db.execute(stmt).scalars().all()
+    by_status: dict[str, int] = {}
+    by_fuel: dict[str, int] = {}
+    for r in rows:
+        by_status[r.status] = by_status.get(r.status, 0) + 1
+        by_fuel[r.fuel_preference] = by_fuel.get(r.fuel_preference, 0) + 1
+    return {
+        "subscriptions": [_serialize_sub(r) for r in rows],
+        "count": len(rows),
+        "by_status": by_status,
+        "by_fuel": by_fuel,
+    }
+
+
+@router.patch("/jit/subscriptions/{subscription_id}")
+def jit_patch(
+    subscription_id: int,
+    payload: JITPatchIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Update a subscription — pause, cancel, change bag size, etc."""
+    row = db.get(CharcoalJITSubscription, subscription_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    if payload.fuel_preference is not None:
+        if payload.fuel_preference not in VALID_FUELS:
+            raise HTTPException(status_code=400, detail=f"fuel_preference must be one of {VALID_FUELS}")
+        row.fuel_preference = payload.fuel_preference
+    if payload.bag_size_lb is not None: row.bag_size_lb = payload.bag_size_lb
+    if payload.lead_time_days is not None: row.lead_time_days = payload.lead_time_days
+    if payload.safety_stock_days is not None: row.safety_stock_days = payload.safety_stock_days
+    if payload.shipping_zip is not None: row.shipping_zip = payload.shipping_zip
+    if payload.shipping_lat is not None: row.shipping_lat = payload.shipping_lat
+    if payload.shipping_lon is not None: row.shipping_lon = payload.shipping_lon
+    if payload.notes is not None: row.notes = payload.notes
+    if payload.status is not None:
+        if payload.status not in VALID_STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of {VALID_STATUSES}")
+        row.status = payload.status
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "subscription": _serialize_sub(row)}
+
+
+@router.delete("/jit/subscriptions/{subscription_id}")
+def jit_cancel(
+    subscription_id: int,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Soft-cancel: flip status to 'cancelled' rather than delete, so
+    we retain audit trail. Use the PATCH endpoint with status=active
+    to re-enroll."""
+    row = db.get(CharcoalJITSubscription, subscription_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    row.status = "cancelled"
+    db.commit()
+    return {"ok": True, "subscription": _serialize_sub(row)}

@@ -7,26 +7,31 @@ import {
 import { ApiError, api } from '../lib/api'
 import type {
   CharcoalDeviceSessionsResponse, CharcoalFleetAggregateResponse, CharcoalFleetFilters,
+  CharcoalJITListResponse, CharcoalJITSubscription,
 } from '../lib/api'
 import { fmtInt } from '../lib/format'
 import {
   DEFAULT_FUEL_PARAMS,
+  estimateAmbientTempF,
   estimateSessionFuel,
   forecastShipments,
+  predictFuelType,
   rollingBurnRate,
   rollupFuel,
   thermalDemandBtuPerHr,
   type CookFuelEstimate,
   type FuelParams,
   type FuelType,
+  type FuelTypePrediction,
 } from '../lib/charcoalModel'
 
-type Tab = 'device' | 'fleet' | 'jit'
+type Tab = 'device' | 'fleet' | 'jit' | 'enrollment'
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
   { key: 'device', label: 'Per device', desc: 'MAC lookup → burn history' },
   { key: 'fleet', label: 'Fleet', desc: 'Date range + cohort filters' },
   { key: 'jit', label: 'JIT program', desc: 'Auto-ship forecast' },
+  { key: 'enrollment', label: 'Program enrollment', desc: 'Subscribe a device to auto-ship' },
 ]
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -149,6 +154,35 @@ function DeviceTab({ params }: { params: FuelParams }) {
   const rollup = useMemo(() => rollupFuel(estimates), [estimates])
   const burn = useMemo(() => rollingBurnRate(estimates, 90), [estimates])
 
+  // Fuel-type prediction aggregated across all this device's cooks.
+  // We don't have per-session time-series on the /sessions response
+  // yet (actual_temp_time_series would balloon the payload), so the
+  // heuristic runs on duration + target temp alone. Confidence stays
+  // capped at 'medium'; extending the endpoint to return the series
+  // would bump it to 'high' for cooks where we have live samples.
+  const fuelPredictionRollup = useMemo(() => {
+    if (!data || data.sessions.length === 0) return null
+    const preds: FuelTypePrediction[] = data.sessions.map(s => predictFuelType(s))
+    // Weight each prediction by cook duration — long cooks count more.
+    const totalHours = data.sessions.reduce((s, x) => s + x.duration_hours, 0)
+    if (totalHours === 0) return null
+    const wLump = data.sessions.reduce((s, x, i) => s + preds[i].p_lump * x.duration_hours, 0) / totalHours
+    const cooksHighConf = preds.filter(p => p.confidence === 'high').length
+    return {
+      p_lump: wLump,
+      p_briquette: 1 - wLump,
+      cooks_scored: preds.length,
+      cooks_high_conf: cooksHighConf,
+    }
+  }, [data])
+
+  // Ambient estimate for the most recent cook (display only — the
+  // thermal model can optionally apply it when we enable the tax).
+  const recentAmbient = useMemo(() => {
+    if (!data || data.sessions.length === 0) return null
+    return estimateAmbientTempF(data.sessions[0].session_start)
+  }, [data])
+
   const chartData = estimates.map(e => ({
     session_start: e.session_start,
     date: e.session_start ? e.session_start.slice(0, 10) : '',
@@ -228,6 +262,72 @@ function DeviceTab({ params }: { params: FuelParams }) {
               fuel={assumedFuel}
             />
           </section>
+
+          {/* Fuel-type prediction + ambient estimate */}
+          {(fuelPredictionRollup || recentAmbient) ? (
+            <section className="card">
+              <div className="venom-panel-head">
+                <div>
+                  <strong>Model inferences</strong>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                    What the thermal model *thinks* about this device, without ground truth.
+                    Replace with labelled data once the in-app fuel-type survey lands.
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+                {fuelPredictionRollup ? (
+                  <div style={{
+                    padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
+                    background: fuelPredictionRollup.p_lump >= 0.6
+                      ? 'rgba(255, 178, 87, 0.06)'
+                      : fuelPredictionRollup.p_lump <= 0.4
+                        ? 'rgba(110, 168, 255, 0.06)'
+                        : 'rgba(255,255,255,0.02)',
+                    borderLeft: `3px solid ${fuelPredictionRollup.p_lump >= 0.6 ? 'var(--orange)' : fuelPredictionRollup.p_lump <= 0.4 ? 'var(--blue)' : 'var(--muted)'}`,
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Predicted fuel (cook-weighted)
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                      {fuelPredictionRollup.p_lump >= 0.6
+                        ? <span style={{ color: 'var(--orange)' }}>Lump — {Math.round(fuelPredictionRollup.p_lump * 100)}%</span>
+                        : fuelPredictionRollup.p_lump <= 0.4
+                          ? <span style={{ color: 'var(--blue)' }}>Briquette — {Math.round(fuelPredictionRollup.p_briquette * 100)}%</span>
+                          : <span style={{ color: 'var(--muted)' }}>Mixed / unclear — {Math.round(fuelPredictionRollup.p_lump * 100)}/{Math.round(fuelPredictionRollup.p_briquette * 100)}</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                      Heuristic (duration + target temp). {fuelPredictionRollup.cooks_scored} cooks scored
+                      {fuelPredictionRollup.cooks_high_conf > 0 ? `, ${fuelPredictionRollup.cooks_high_conf} high-confidence` : ''}.
+                    </div>
+                  </div>
+                ) : null}
+                {recentAmbient ? (
+                  <div style={{
+                    padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
+                    background: 'rgba(0,0,0,0.2)',
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Last-cook ambient (est.)
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                      {recentAmbient.ambient_f}°F
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                      {recentAmbient.note}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 10, lineHeight: 1.5 }}>
+                <strong>How the fuel prediction works:</strong> we score each cook by temp profile —
+                very long cooks at low temp lean briquette; high-temp sears and highly-variable temp profiles lean lump.
+                We don't have ground truth yet, so call these directional hints, not facts.
+                Once beta testers start logging actual fuel per cook, we'll retrain the scorer against labelled data
+                and bump confidence accordingly.
+              </div>
+            </section>
+          ) : null}
 
           {/* Per-cook chart */}
           <section className="card">
@@ -678,6 +778,276 @@ function JITTab({ params }: { params: FuelParams }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   TAB 4 — PROGRAM ENROLLMENT
+   ═══════════════════════════════════════════════════════════════════ */
+
+function EnrollmentTab() {
+  const [list, setList] = useState<CharcoalJITListResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const [mac, setMac] = useState('')
+  const [userKey, setUserKey] = useState('')
+  const [fuel, setFuel] = useState<'lump' | 'briquette'>('lump')
+  const [bagLb, setBagLb] = useState(20)
+  const [leadDays, setLeadDays] = useState(5)
+  const [safetyDays, setSafetyDays] = useState(7)
+  const [zip, setZip] = useState('')
+  const [notes, setNotes] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'paused' | 'cancelled'>('')
+
+  const load = () => {
+    const ctl = new AbortController()
+    api.charcoalJITList(statusFilter || undefined, ctl.signal)
+      .then(r => { setList(r); setError(null) })
+      .catch(e => { if (e.name !== 'AbortError') setError(e instanceof ApiError ? e.message : String(e)) })
+    return ctl
+  }
+
+  useEffect(() => {
+    const ctl = load()
+    return () => ctl.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter])
+
+  const enroll = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!mac.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.charcoalJITSubscribe({
+        mac: mac.trim(),
+        user_key: userKey.trim() || undefined,
+        fuel_preference: fuel,
+        bag_size_lb: bagLb,
+        lead_time_days: leadDays,
+        safety_stock_days: safetyDays,
+        shipping_zip: zip.trim() || undefined,
+        notes: notes.trim() || undefined,
+      })
+      // Clear form + reload
+      setMac(''); setUserKey(''); setZip(''); setNotes('')
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const patch = async (id: number, changes: Parameters<typeof api.charcoalJITPatch>[1]) => {
+    try {
+      await api.charcoalJITPatch(id, changes)
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    }
+  }
+
+  return (
+    <>
+      {/* Enrollment form */}
+      <section className="card" style={{ borderLeft: '3px solid var(--green)' }}>
+        <div className="venom-panel-head">
+          <div>
+            <strong>Enroll a device in Charcoal JIT</strong>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              Sign-up is idempotent — re-running with the same MAC updates the existing subscription rather than creating a duplicate. Nothing ships automatically yet; this populates the queue the future scheduler will read.
+            </div>
+          </div>
+        </div>
+        <form onSubmit={enroll} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 10 }}>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Device MAC <span style={{ color: 'var(--red)' }}>*</span></label>
+            <input
+              type="text" value={mac} onChange={e => setMac(e.target.value)}
+              placeholder="fcb467f9b456"
+              className="deci-input"
+              required
+              style={{ width: '100%', fontSize: 12, fontFamily: 'ui-monospace, monospace' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>User key (optional)</label>
+            <input
+              type="text" value={userKey} onChange={e => setUserKey(e.target.value)}
+              placeholder="email or user_id"
+              className="deci-input"
+              style={{ width: '100%', fontSize: 12 }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Fuel preference</label>
+            <select value={fuel} onChange={e => setFuel(e.target.value as 'lump' | 'briquette')} className="deci-input" style={{ width: '100%', fontSize: 12 }}>
+              <option value="lump">Lump hardwood</option>
+              <option value="briquette">Briquettes</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Bag size (lb)</label>
+            <select value={bagLb} onChange={e => setBagLb(Number(e.target.value))} className="deci-input" style={{ width: '100%', fontSize: 12 }}>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={40}>40</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Lead time (days)</label>
+            <input type="number" min={1} max={30} value={leadDays} onChange={e => setLeadDays(Number(e.target.value) || 5)} className="deci-input" style={{ width: '100%', fontSize: 12 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Safety stock (days)</label>
+            <input type="number" min={0} max={30} value={safetyDays} onChange={e => setSafetyDays(Number(e.target.value) || 7)} className="deci-input" style={{ width: '100%', fontSize: 12 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Shipping ZIP</label>
+            <input
+              type="text" value={zip} onChange={e => setZip(e.target.value)}
+              placeholder="10001"
+              className="deci-input"
+              style={{ width: '100%', fontSize: 12 }}
+            />
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={{ fontSize: 11, color: 'var(--muted)' }}>Notes (optional)</label>
+            <input
+              type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. beta tester cohort, bulk-charcoal pilot"
+              className="deci-input"
+              style={{ width: '100%', fontSize: 12 }}
+            />
+          </div>
+          <div style={{ alignSelf: 'flex-end' }}>
+            <button type="submit" className="range-button active" disabled={busy || !mac.trim()}>
+              {busy ? 'Saving…' : 'Enroll device'}
+            </button>
+          </div>
+        </form>
+        {error ? <div style={{ marginTop: 10, color: 'var(--red)', fontSize: 12 }}>{error}</div> : null}
+      </section>
+
+      {/* Subscription list */}
+      <section className="card">
+        <div className="venom-panel-head" style={{ alignItems: 'center' }}>
+          <div>
+            <strong>Current subscriptions ({list?.count ?? 0})</strong>
+            {list ? (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                By status: {Object.entries(list.by_status).map(([s, n]) => `${s}=${n}`).join(' · ') || '—'} ·
+                By fuel: {Object.entries(list.by_fuel).map(([f, n]) => `${f}=${n}`).join(' · ') || '—'}
+              </div>
+            ) : null}
+          </div>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)} className="deci-input" style={{ fontSize: 12 }}>
+            <option value="">All statuses</option>
+            <option value="active">Active only</option>
+            <option value="paused">Paused only</option>
+            <option value="cancelled">Cancelled only</option>
+          </select>
+        </div>
+
+        {!list ? (
+          <div className="state-message">Loading subscriptions…</div>
+        ) : list.subscriptions.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--muted)', padding: '8px 0' }}>
+            No subscriptions yet. Use the form above to enroll your first device.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 900 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
+                  <th style={{ padding: '6px 8px' }}>MAC / user</th>
+                  <th>Fuel</th>
+                  <th>Bag</th>
+                  <th>Lead / safety</th>
+                  <th>ZIP</th>
+                  <th>Status</th>
+                  <th>Enrolled</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.subscriptions.map(sub => (
+                  <tr key={sub.id} style={{
+                    borderTop: '1px solid var(--border)',
+                    opacity: sub.status === 'cancelled' ? 0.55 : 1,
+                  }}>
+                    <td style={{ padding: '6px 8px' }}>
+                      <div style={{ fontFamily: 'ui-monospace, monospace' }}>{sub.mac || '—'}</div>
+                      {sub.user_key ? <div style={{ fontSize: 10, color: 'var(--muted)' }}>{sub.user_key}</div> : null}
+                    </td>
+                    <td>
+                      <span className={`badge ${sub.fuel_preference === 'lump' ? 'badge-warn' : 'badge-neutral'}`}>
+                        {sub.fuel_preference}
+                      </span>
+                    </td>
+                    <td>{sub.bag_size_lb} lb</td>
+                    <td>{sub.lead_time_days}d / {sub.safety_stock_days}d</td>
+                    <td>{sub.shipping_zip || '—'}</td>
+                    <td>
+                      <span className={`badge ${sub.status === 'active' ? 'badge-good' : sub.status === 'paused' ? 'badge-warn' : 'badge-muted'}`}>
+                        {sub.status}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 10, color: 'var(--muted)' }}>
+                      {sub.created_at ? sub.created_at.slice(0, 10) : '—'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: 4 }}>
+                        {sub.status === 'active' ? (
+                          <button
+                            className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                            onClick={() => patch(sub.id, { status: 'paused' })}
+                          >Pause</button>
+                        ) : sub.status === 'paused' ? (
+                          <button
+                            className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                            onClick={() => patch(sub.id, { status: 'active' })}
+                          >Resume</button>
+                        ) : null}
+                        {sub.status !== 'cancelled' ? (
+                          <button
+                            className="range-button" style={{ fontSize: 10, padding: '2px 8px', color: 'var(--red)' }}
+                            onClick={() => {
+                              if (confirm(`Cancel JIT for MAC ${sub.mac}?`)) patch(sub.id, { status: 'cancelled' })
+                            }}
+                          >Cancel</button>
+                        ) : (
+                          <button
+                            className="range-button" style={{ fontSize: 10, padding: '2px 8px' }}
+                            onClick={() => patch(sub.id, { status: 'active' })}
+                          >Reactivate</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card" style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.6 }}>
+        <strong style={{ color: 'var(--text)' }}>What happens next (not live yet):</strong>
+        <ol style={{ marginTop: 6, paddingLeft: 20 }}>
+          <li>A scheduler reads active subscriptions every morning, pulls the device's 90-day burn from TelemetrySession, and writes a fresh <code>next_ship_after</code> timestamp using the forecast model.</li>
+          <li>When <code>NOW() &gt; next_ship_after − lead_time_days</code>, the scheduler creates a Shopify draft order against the user's saved address and emails the user a "we're sending you {'{'}bag_size{'}'} lb of {'{'}fuel{'}'} on {'{'}date{'}'}; reply to change" confirmation.</li>
+          <li>If the user replies / clicks through within 48 hours to change qty or fuel, the draft updates. Otherwise it converts to a real order automatically.</li>
+          <li>Shopify webhook on fulfillment writes back <code>last_shipped_at</code>, and the cycle restarts.</li>
+        </ol>
+        <div style={{ marginTop: 8 }}>
+          The enrollment record above is the prerequisite for all of this. Collect enrollments → run the scheduler dry to watch predictions → flip the shipment trigger live when we're confident.
+        </div>
+      </section>
+    </>
+  )
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
    PAGE SHELL
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -723,6 +1093,7 @@ export function CharcoalUsage() {
       {tab === 'device' ? <DeviceTab params={params} /> : null}
       {tab === 'fleet' ? <FleetTab params={params} /> : null}
       {tab === 'jit' ? <JITTab params={params} /> : null}
+      {tab === 'enrollment' ? <EnrollmentTab /> : null}
     </div>
   )
 }

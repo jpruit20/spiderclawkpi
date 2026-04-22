@@ -282,6 +282,42 @@ export const api = {
   },
   charcoalFleetFilters: (signal?: AbortSignal) =>
     request<CharcoalFleetFilters>('/api/charcoal/fleet/distinct-filters', { signal }),
+  charcoalJITList: (status: string | undefined, signal?: AbortSignal) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+    return request<CharcoalJITListResponse>(`/api/charcoal/jit/subscriptions${qs}`, { signal })
+  },
+  charcoalJITSubscribe: (payload: {
+    mac: string
+    user_key?: string
+    fuel_preference: 'lump' | 'briquette'
+    bag_size_lb: number
+    lead_time_days: number
+    safety_stock_days: number
+    shipping_zip?: string
+    notes?: string
+  }) =>
+    request<{ ok: boolean; action: 'created' | 'updated'; subscription: CharcoalJITSubscription }>(
+      '/api/charcoal/jit/subscribe',
+      { method: 'POST', body: payload },
+    ),
+  charcoalJITPatch: (id: number, patch: Partial<{
+    fuel_preference: 'lump' | 'briquette'
+    bag_size_lb: number
+    lead_time_days: number
+    safety_stock_days: number
+    shipping_zip: string
+    status: 'active' | 'paused' | 'cancelled'
+    notes: string
+  }>) =>
+    request<{ ok: boolean; subscription: CharcoalJITSubscription }>(
+      `/api/charcoal/jit/subscriptions/${id}`,
+      { method: 'PATCH', body: patch },
+    ),
+  charcoalJITCancel: (id: number) =>
+    request<{ ok: boolean; subscription: CharcoalJITSubscription }>(
+      `/api/charcoal/jit/subscriptions/${id}`,
+      { method: 'DELETE' },
+    ),
   shopifySyncUnfulfilled: () =>
     request<{ ok: boolean; records_processed: number; records_inserted?: number; records_updated?: number; duration_ms?: number }>(
       '/api/shopify/sync-unfulfilled',
@@ -1336,6 +1372,35 @@ export interface CharcoalFleetAggregateResponse {
     first_session_at: string | null
     last_session_at: string | null
   }>
+}
+
+export interface CharcoalJITSubscription {
+  id: number
+  device_id: string | null
+  mac: string | null
+  user_key: string | null
+  fuel_preference: 'lump' | 'briquette'
+  bag_size_lb: number
+  lead_time_days: number
+  safety_stock_days: number
+  shipping_zip: string | null
+  shipping_lat: number | null
+  shipping_lon: number | null
+  status: 'active' | 'paused' | 'cancelled'
+  enrolled_by: string | null
+  notes: string | null
+  last_forecast: Record<string, unknown>
+  last_shipped_at: string | null
+  next_ship_after: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface CharcoalJITListResponse {
+  subscriptions: CharcoalJITSubscription[]
+  count: number
+  by_status: Record<string, number>
+  by_fuel: Record<string, number>
 }
 
 export interface CharcoalFleetFilters {

@@ -232,6 +232,172 @@ export type ShipmentForecast = {
   upcoming_ship_dates: string[]
 }
 
+/* ─── Fuel-type prediction from cook signature ─────────────────────
+ * We don't have ground truth on whether the user burned lump or
+ * briquettes — no app prompt yet, no historical labels. This heuristic
+ * scores each cook on features that *should* correlate with fuel type,
+ * so Joseph can eyeball the fleet and compare to intuition. When the
+ * in-app survey starts collecting actuals (weeks out), we'll replace
+ * this with a fit from labelled data.
+ *
+ * Features (higher value → more lump-like):
+ *  - Temperature coefficient of variation: lump oscillates more as
+ *    individual pieces catch/consume. Briquette holds a flatter line.
+ *  - Max temp reached: >425°F (sear territory) strongly favors lump.
+ *  - Ramp rate: lump reaches target faster.
+ *
+ * Features that pull toward briquette:
+ *  - Long low-and-slow: >6hr at <275°F pit temp implies the user wanted
+ *    to set it and forget it — briquette is the practical choice.
+ *  - Very low CV over a long cook: briquettes burn uniformly.
+ *
+ * Output: probability that the cook burned lump (0..1) + the per-
+ * feature contributions so the UI can show *why* we guessed what we
+ * guessed.
+ */
+
+export type FuelTypePrediction = {
+  p_lump: number
+  p_briquette: number
+  confidence: 'low' | 'medium' | 'high'
+  features: Array<{ name: string; value: number | string; contribution: number }>
+  note?: string
+}
+
+/** Compute coefficient of variation (stddev / mean) on a number list. */
+function cv(values: number[]): number | null {
+  if (values.length < 5) return null
+  const mean = values.reduce((s, v) => s + v, 0) / values.length
+  if (mean <= 0) return null
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length
+  return Math.sqrt(variance) / mean
+}
+
+/**
+ * Predict lump vs briquette from a cook session.
+ *
+ * Requires the actual_temp_time_series to do the variance analysis.
+ * Without it (historical S3-backed sessions), falls back to
+ * duration/target-temp only and flags confidence as 'low'.
+ */
+export function predictFuelType(
+  session: CookSession,
+  actualTempSeries?: Array<{ t?: number; v: number }>,
+): FuelTypePrediction {
+  const features: Array<{ name: string; value: number | string; contribution: number }> = []
+  // Start at 0 (neutral). Positive = lump-leaning, negative = briquette-leaning.
+  let score = 0
+
+  const avgTemp = session.avg_actual_temp_f ?? session.target_temp_f ?? 250
+  const duration = session.duration_hours
+
+  // Feature 1: Max temp reached — strongly distinguishing above ~425°F.
+  if (avgTemp >= 425) {
+    const lumpBias = Math.min(1.5, (avgTemp - 425) / 100 + 0.5)
+    score += lumpBias
+    features.push({ name: 'High temp (>425°F)', value: `${avgTemp.toFixed(0)}°F`, contribution: lumpBias })
+  } else if (avgTemp < 275 && duration >= 6) {
+    // Feature 2: Long low-and-slow cook — briquette-favored.
+    const briqBias = -Math.min(1.2, (duration - 6) / 6 + 0.5)
+    score += briqBias
+    features.push({ name: 'Long low-and-slow', value: `${duration.toFixed(1)}h at ${avgTemp.toFixed(0)}°F`, contribution: briqBias })
+  }
+
+  // Feature 3: Temperature variance (when we have the time-series).
+  let tempCv: number | null = null
+  if (actualTempSeries && actualTempSeries.length > 5) {
+    const vals = actualTempSeries.map(s => s.v).filter(v => v > 0 && v < 1000)
+    tempCv = cv(vals)
+    if (tempCv != null) {
+      // CV <0.05 = very stable (briquette), >0.12 = noisy (lump)
+      if (tempCv >= 0.12) {
+        const contrib = Math.min(1.2, (tempCv - 0.12) * 10 + 0.5)
+        score += contrib
+        features.push({ name: 'High temp variance', value: `CV ${(tempCv * 100).toFixed(1)}%`, contribution: contrib })
+      } else if (tempCv <= 0.05) {
+        const contrib = -Math.min(1.0, (0.05 - tempCv) * 20 + 0.3)
+        score += contrib
+        features.push({ name: 'Flat temp profile', value: `CV ${(tempCv * 100).toFixed(1)}%`, contribution: contrib })
+      } else {
+        features.push({ name: 'Moderate temp variance', value: `CV ${(tempCv * 100).toFixed(1)}%`, contribution: 0 })
+      }
+    }
+  }
+
+  // Feature 4: Very short cook (<90 min) + very high temp — sear/grill
+  // → leans lump
+  if (duration <= 1.5 && avgTemp >= 400) {
+    score += 0.6
+    features.push({ name: 'Short hot cook', value: `${duration.toFixed(1)}h at ${avgTemp.toFixed(0)}°F`, contribution: 0.6 })
+  }
+
+  // Logistic-ish squash to [0, 1]. Scale of 2.5 gives us "strong signal"
+  // at ±1.5, neutral at 0.
+  const p_lump = 1 / (1 + Math.exp(-score * 1.1))
+  const p_briquette = 1 - p_lump
+
+  // Confidence: we need temp-variance data and a clear-enough score.
+  let confidence: 'low' | 'medium' | 'high' = 'low'
+  if (tempCv != null && Math.abs(score) >= 0.7) confidence = 'high'
+  else if (tempCv != null && Math.abs(score) >= 0.3) confidence = 'medium'
+  else if (Math.abs(score) >= 0.7) confidence = 'medium'
+
+  const note = tempCv == null
+    ? 'No time-series data for this cook — prediction uses duration + target only. Confidence capped at medium.'
+    : undefined
+
+  return { p_lump, p_briquette, confidence, features, note }
+}
+
+/* ─── Ambient temperature estimation ────────────────────────────────
+ * Without geolocation we estimate ambient from US-wide seasonal
+ * average (NOAA 30-year climate normal for CONUS). That's weak — a
+ * 70°F average in April hides 90°F Phoenix vs 45°F Anchorage — but
+ * it's still better than assuming 70°F year-round.
+ *
+ * When geo lands (via Shopify ship-zip lookup or Agustín's app data),
+ * pass ``latDeg`` to get a seasonal adjustment per latitude band.
+ * Future: hit a weather-history API for the exact day/location.
+ */
+export function estimateAmbientTempF(
+  cookDateISO: string | null,
+  latDeg?: number | null,
+): { ambient_f: number; method: 'us_monthly_avg' | 'latitude_adjusted' | 'fallback'; note: string } {
+  // Fallback when we can't parse the date.
+  if (!cookDateISO) {
+    return { ambient_f: 68, method: 'fallback', note: 'No cook date — using 68°F national annual average.' }
+  }
+  const d = new Date(cookDateISO)
+  if (isNaN(d.getTime())) {
+    return { ambient_f: 68, method: 'fallback', note: 'Unparseable cook date — using 68°F national annual average.' }
+  }
+  // CONUS monthly average (NOAA climate normal, rounded).
+  // Index 0 = January.
+  const CONUS_MONTHLY_F = [34, 37, 45, 54, 63, 72, 76, 75, 68, 56, 45, 36]
+  const month = d.getUTCMonth()
+  const base = CONUS_MONTHLY_F[month]
+
+  if (latDeg == null) {
+    return {
+      ambient_f: base,
+      method: 'us_monthly_avg',
+      note: 'No location — using CONUS monthly climate average. ±15°F error possible.',
+    }
+  }
+
+  // Rough latitude correction: every degree north of 40° → cooler by
+  // ~0.8°F in summer, 1.2°F in winter. Every degree south → warmer.
+  const latDelta = latDeg - 40
+  const winterWeight = Math.abs(Math.cos((month - 5) * Math.PI / 6)) // strongest in Dec/Jan
+  const perDegree = 0.8 + 0.4 * winterWeight
+  const adjusted = base - latDelta * perDegree
+  return {
+    ambient_f: Math.round(adjusted),
+    method: 'latitude_adjusted',
+    note: `CONUS monthly avg (${base}°F) adjusted for latitude ${latDeg.toFixed(1)}°N. Still no day-specific weather.`,
+  }
+}
+
 export function forecastShipments(
   lb_per_week: number,
   fuel: FuelType,

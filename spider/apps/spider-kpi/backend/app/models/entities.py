@@ -1613,6 +1613,51 @@ class AISelfGrade(Base):
     usage_json: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
+class CharcoalJITSubscription(TimestampMixin, Base):
+    """A device enrolled in the Charcoal JIT auto-ship program.
+
+    One row per (device, user) pair. A single physical grill paired
+    with multiple user accounts could produce multiple device_ids and
+    thus multiple subscriptions — that's fine; whichever user signed
+    up for JIT is the one who gets billed.
+
+    ``shipping_zip`` is what drives the ambient-temp estimate +
+    geo-aware burn tuning once the weather API connector lands. It's
+    nullable because at enrollment time we may only have the MAC and
+    fuel preference — the user can add/confirm shipping later.
+
+    ``status`` values:
+      - ``active``    — regular shipments auto-triggered
+      - ``paused``    — user paused (manual resume)
+      - ``cancelled`` — ended, retained for audit
+    """
+    __tablename__ = "charcoal_jit_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("device_id", "user_key", name="uq_charcoal_jit_device_user"),
+        Index("ix_charcoal_jit_status", "status"),
+        Index("ix_charcoal_jit_mac", "mac_normalized"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    mac_normalized: Mapped[Optional[str]] = mapped_column(String(12))
+    user_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    fuel_preference: Mapped[str] = mapped_column(String(16), nullable=False)  # 'lump' | 'briquette'
+    bag_size_lb: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    safety_stock_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    shipping_zip: Mapped[Optional[str]] = mapped_column(String(16))
+    shipping_lat: Mapped[Optional[float]] = mapped_column(Float)
+    shipping_lon: Mapped[Optional[float]] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    enrolled_by: Mapped[Optional[str]] = mapped_column(String(128))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Computed + persisted by the scheduler (to be added in a follow-up):
+    last_forecast_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    last_shipped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    next_ship_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class AiNarrative(TimestampMixin, Base):
     """Persistent store for on-demand Opus narratives — the "write 3-5
     actionable observations and cache the result" pattern.
