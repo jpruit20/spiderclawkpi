@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '../components/AuthGate'
+
+// Firmware + Charcoal sub-pages are owner-only for now (wrapped in
+// OwnerOnlyRoute in App.tsx). Mirror that gate on the UI links so
+// non-owner dashboard users don't see buttons that would 404 them.
+const OWNER_EMAIL = 'joseph@spidergrills.com'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
@@ -339,6 +345,8 @@ function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; 
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 export function ProductEngineeringDivision() {
+  const { user } = useAuth()
+  const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
   const [view, setView] = useState<SubView>('fleet')
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [githubIssues, setGithubIssues] = useState<GithubIssuesResponse | null>(null)
@@ -767,8 +775,12 @@ export function ProductEngineeringDivision() {
                   ]).map(tab => (
                     <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
                   ))}
-                  <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
-                  <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
+                  {isOwner ? (
+                    <>
+                      <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
+                      <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
+                    </>
+                  ) : null}
                 </div>
                 <div style={{ position: 'relative' }}>
                   <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>
@@ -1268,22 +1280,24 @@ export function ProductEngineeringDivision() {
                   firmware-release markers overlaid. */}
               <FirmwareImpactTimeline weeks={26} />
 
-              {/* Firmware — own page now. Beta program, alpha (R&D),
-                  gamma waves, and per-device drill-down all live in
-                  /division/product-engineering/firmware. Summary link
-                  card sits in the slot between Fleet Health and
-                  Innovation Radar. */}
-              <section className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                <div>
-                  <div className="card-title">Firmware Hub</div>
-                  <div style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 640 }}>
-                    Alpha (internal R&D), Beta (external opt-in), Gamma (production waves), plus per-device drill-down with live 15 s shadow polling — moved to its own page so the feedback loop stays tight.
+              {/* Firmware Hub — owner-only for now. The full page
+                  (alpha / beta / gamma / per-device drill-down) lives
+                  at /division/product-engineering/firmware but is
+                  gated. Hide the entry card from non-owner accounts
+                  entirely rather than showing a button that 404s. */}
+              {isOwner ? (
+                <section className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <div className="card-title">Firmware Hub</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 640 }}>
+                      Alpha (internal R&D), Beta (external opt-in), Gamma (production waves), plus per-device drill-down with live 15 s shadow polling — moved to its own page so the feedback loop stays tight.
+                    </div>
                   </div>
-                </div>
-                <Link to="/division/product-engineering/firmware" className="range-button active" style={{ textDecoration: 'none' }}>
-                  Open Firmware Hub →
-                </Link>
-              </section>
+                  <Link to="/division/product-engineering/firmware" className="range-button active" style={{ textDecoration: 'none' }}>
+                    Open Firmware Hub →
+                  </Link>
+                </section>
+              ) : null}
 
               {/* ========================================================= */}
               {/* BELOW-THE-FOLD DETAIL — progressive disclosure.           */}

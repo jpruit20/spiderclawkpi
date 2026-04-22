@@ -53,8 +53,8 @@ export function App() {
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
         <Route path="/division/product-engineering" element={withBoundary('Product / Engineering Division', <ProductEngineeringDivision />)} />
-        <Route path="/division/product-engineering/firmware" element={withBoundary('Firmware Hub', <FirmwareHub />)} />
-        <Route path="/division/product-engineering/charcoal" element={withBoundary('Charcoal JIT', <CharcoalUsage />)} />
+        <Route path="/division/product-engineering/firmware" element={<OwnerOnlyRoute>{withBoundary('Firmware Hub', <FirmwareHub />)}</OwnerOnlyRoute>} />
+        <Route path="/division/product-engineering/charcoal" element={<OwnerOnlyRoute>{withBoundary('Charcoal JIT', <CharcoalUsage />)}</OwnerOnlyRoute>} />
         <Route path="/division/operations" element={withBoundary('Operations Division', <OperationsDivision />)} />
         <Route path="/division/production-manufacturing" element={withBoundary('Production / Manufacturing Division', <ProductionManufacturingDivision />)} />
         <Route path="/division/product-enginering" element={<Navigate to="/division/product-engineering" replace />} />
