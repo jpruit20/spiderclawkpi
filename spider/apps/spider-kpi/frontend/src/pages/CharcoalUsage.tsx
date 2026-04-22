@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, ComposedChart,
@@ -1668,17 +1668,39 @@ function Slider({ label, value, min, max, step, onChange, suffix, help }: {
   label: string; value: number; min: number; max: number; step: number
   onChange: (v: number) => void; suffix?: string; help?: string
 }) {
+  // Two-phase value: `live` updates on every tick for the number
+  // display + thumb position; the parent's `onChange` (which triggers
+  // a backend re-fetch) only fires on release. Dragging a slider
+  // otherwise fires ~60 times/sec and pins the single uvicorn worker
+  // into 502 territory even with debounce+abort on the parent.
+  const [live, setLive] = useState(value)
+  // Track whether we're mid-drag; while dragging, ignore parent prop
+  // changes (they'd cause the thumb to jump back to the stale value).
+  const draggingRef = useRef(false)
+  useEffect(() => {
+    if (!draggingRef.current) setLive(value)
+  }, [value])
+
+  const commit = (v: number) => {
+    draggingRef.current = false
+    if (v !== value) onChange(v)
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
         <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</span>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{value}{suffix}</span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{live}{suffix}</span>
       </div>
       <input
         type="range"
         min={min} max={max} step={step}
-        value={value}
-        onChange={e => onChange(Number(e.target.value))}
+        value={live}
+        onChange={e => { draggingRef.current = true; setLive(Number(e.target.value)) }}
+        onPointerUp={e => commit(Number((e.target as HTMLInputElement).value))}
+        onKeyUp={e => commit(Number((e.target as HTMLInputElement).value))}
+        onTouchEnd={e => commit(Number((e.target as HTMLInputElement).value))}
+        onBlur={e => commit(Number((e.target as HTMLInputElement).value))}
         style={{ width: '100%' }}
       />
       {help ? <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{help}</div> : null}

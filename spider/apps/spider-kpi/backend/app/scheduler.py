@@ -369,6 +369,42 @@ def run_charcoal_jit_forecast_job() -> None:
         db.close()
 
 
+def run_cohort_burn_pool_warmer_job() -> None:
+    """Every 4 min: pre-build the per-device burn pool used by the
+    charcoal modeling endpoint for both lookback windows (90d + 180d).
+
+    The pool is the heavy part of compute_cohort_model — decoding every
+    JSONB actual_temp_time_series in the window, 17K+ sessions, ~500MB
+    transient memory. With this job running we keep the process-local
+    TTL cache warm, so the modeling slider UI always hits in-memory
+    math (~ms) instead of the cold DB+decode path (60+ s, which nginx
+    502s at).
+
+    Safe to run in parallel with user traffic because the cache is
+    populated under a lock and reads return the old value until the
+    new one is in place.
+    """
+    from datetime import datetime, timezone
+    db = SessionLocal()
+    try:
+        from app.services.charcoal_jit import _build_device_burn_pool
+        now = datetime.now(timezone.utc)
+        for lb in (90, 180):
+            try:
+                # force=True rebuilds unconditionally; TTL is 5 min and
+                # we run every 4 min, so the cache never goes cold
+                # between warmer ticks.
+                _build_device_burn_pool(db, lookback_days=lb, now=now, force=True)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "cohort burn pool warmup failed for lookback=%s", lb
+                )
+                db.rollback()
+    finally:
+        db.close()
+
+
 def run_ai_self_grade_job() -> None:
     """Weekly Sunday 14:00 UTC / 10:00 ET: Opus grades the last 7d of
     AI-generated artifacts against the team's feedback reactions and
@@ -423,4 +459,26 @@ def build_scheduler() -> BackgroundScheduler:
     # before the JIT forecast so financial math uses today's prices.
     scheduler.add_job(run_partner_catalog_refresh_job, "cron", hour=10, minute=30, id="partner-catalog-refresh-daily", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
+    # Keep the cohort-modeling burn pool hot. Without this, the first
+    # user to hit /api/charcoal/modeling/cohort after a cache miss pays
+    # ~60–120 s of JSONB decode and the page 502s at nginx's timeout.
+    # Fires 15 s after boot (one-shot warmup) then every 4 min.
+    scheduler.add_job(
+        run_cohort_burn_pool_warmer_job,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
+        id="cohort-burn-pool-warmup",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_cohort_burn_pool_warmer_job,
+        "interval",
+        minutes=4,
+        id="cohort-burn-pool-refresh",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     return scheduler

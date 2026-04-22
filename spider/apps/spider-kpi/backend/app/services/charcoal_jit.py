@@ -16,6 +16,8 @@ TS from the Python (or the reverse).
 from __future__ import annotations
 
 import logging
+import threading
+import time as _time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -26,6 +28,155 @@ from app.models import CharcoalJITSubscription, PartnerProduct, ShopifyOrderEven
 from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
 
 logger = logging.getLogger(__name__)
+
+
+# ── Process-local TTL cache for the cohort burn pool ─────────────────
+#
+# compute_cohort_model() used to re-query + re-decode every JSONB
+# actual_temp_time_series (potentially hundreds of samples per session,
+# 17K+ sessions in a 90d window) on every slider move. One user
+# dragging a slider would pin the single uvicorn worker for 10+ s
+# and nginx would 502.
+#
+# Only ``lookback_days`` actually forces a DB re-query — families,
+# min_cooks, target_percentile_floor, signup_pct, SKU, margin, churn,
+# horizon are all pure post-hoc arithmetic. So we cache the per-device
+# burn pool keyed by lookback_days and serve 99% of slider moves from
+# memory.
+#
+# 5-minute TTL lines up with the existing product_taxonomy helper and
+# with how long a user actually sits on this page.
+
+_BURN_POOL_TTL_SEC = 300
+_burn_pool_cache: dict[int, tuple[float, list[dict[str, Any]]]] = {}
+_burn_pool_lock = threading.Lock()
+
+
+def _build_device_burn_pool(
+    db: Session,
+    *,
+    lookback_days: int,
+    now: datetime,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """Pull every qualifying session once and reduce to per-device
+    monthly burn (both fuel types). This is the expensive step: JSONB
+    temp-series decode for every session in the window.
+
+    Returns a list of:
+        {
+          "device_id": str,
+          "product_family": str,
+          "sessions_in_window": int,
+          "lump_lb_per_month": float,
+          "briq_lb_per_month": float,
+        }
+
+    Cached process-locally with a 5-minute TTL keyed by lookback_days
+    — families/min_cooks/targeting/signup/margin/churn/horizon/SKU are
+    post-hoc filters or arithmetic, so they do NOT invalidate this.
+
+    ``force=True`` bypasses the cache check (but still writes). Used
+    by the scheduler warmer so the cache never goes stale at the exact
+    moment a user hits the endpoint.
+    """
+    cache_key = int(lookback_days)
+    nowsec = _time.monotonic()
+    if not force:
+        with _burn_pool_lock:
+            hit = _burn_pool_cache.get(cache_key)
+            if hit is not None and (nowsec - hit[0]) < _BURN_POOL_TTL_SEC:
+                return hit[1]
+
+    cutoff = now - timedelta(days=lookback_days)
+    rows = db.execute(
+        select(
+            TelemetrySession.device_id,
+            TelemetrySession.grill_type,
+            TelemetrySession.firmware_version,
+            TelemetrySession.session_start,
+            TelemetrySession.session_duration_seconds,
+            TelemetrySession.target_temp,
+            TelemetrySession.actual_temp_time_series,
+        )
+        .where(TelemetrySession.device_id.is_not(None))
+        .where(TelemetrySession.device_id.notlike("mac:%"))
+        .where(TelemetrySession.session_start >= cutoff)
+        .where(TelemetrySession.session_duration_seconds >= 300)
+    ).all()
+
+    huntsman_ids = build_huntsman_device_ids(db)
+
+    # device_id → (lump_lb_sum, briq_lb_sum, session_count, latest_meta)
+    per_device: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        dev, grill, fw, start, dur_s, tgt, series = r
+        if not dur_s or not start:
+            continue
+        avg_actual = None
+        if isinstance(series, list) and series:
+            vsum = 0.0
+            vct = 0
+            for s in series:
+                try:
+                    v = float(s.get("v"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if 0 < v < 1000:
+                    vsum += v
+                    vct += 1
+            if vct:
+                avg_actual = vsum / vct
+        avg_temp = avg_actual if avg_actual is not None else tgt
+        if avg_temp is None:
+            continue
+        lump, briq = session_fuel_lb(dur_s / 3600.0, float(avg_temp))
+        bucket = per_device.get(dev)
+        if bucket is None:
+            per_device[dev] = {
+                "lump_sum": lump,
+                "briq_sum": briq,
+                "count": 1,
+                "grill": grill,
+                "fw": fw,
+                "last_start": start,
+            }
+        else:
+            bucket["lump_sum"] += lump
+            bucket["briq_sum"] += briq
+            bucket["count"] += 1
+            if start > bucket["last_start"]:
+                bucket["grill"] = grill
+                bucket["fw"] = fw
+                bucket["last_start"] = start
+
+    scale = 30.0 / float(lookback_days) if lookback_days > 0 else 0.0
+    pool: list[dict[str, Any]] = []
+    for dev, b in per_device.items():
+        family = classify_product(
+            b["grill"], b["fw"],
+            device_id=dev,
+            huntsman_device_ids=huntsman_ids,
+        )
+        pool.append({
+            "device_id": dev,
+            "product_family": family,
+            "sessions_in_window": b["count"],
+            "lump_lb_per_month": b["lump_sum"] * scale,
+            "briq_lb_per_month": b["briq_sum"] * scale,
+        })
+
+    with _burn_pool_lock:
+        _burn_pool_cache[cache_key] = (nowsec, pool)
+    return pool
+
+
+def invalidate_cohort_burn_pool_cache() -> None:
+    """Drop all cached burn pools. Called after data imports that would
+    change the window (e.g. a new telemetry backfill). Also handy for
+    tests."""
+    with _burn_pool_lock:
+        _burn_pool_cache.clear()
 
 
 # ── Thermal model (mirror of the TS version) ─────────────────────────
@@ -326,16 +477,6 @@ def forecast_subscription(
 # changes, the one place to add it is ``_compute_cohort_totals``.
 
 
-def _lb_per_month_for_device(fuel_rows: list[tuple[float, float, datetime]], fuel_pref: str, window_days: int) -> float:
-    """Translate the per-session fuel tuples into monthly pounds for
-    the cohort modeler. Normalized to 30-day months so signups get
-    clean per-month projections regardless of lookback window length."""
-    if not fuel_rows or window_days <= 0:
-        return 0.0
-    total = sum((r[0] if fuel_pref == "lump" else r[1]) for r in fuel_rows)
-    return total * (30.0 / float(window_days))
-
-
 def _percentile(sorted_vals: list[float], q: float) -> float:
     """Linear-interpolated percentile helper. ``q`` in [0, 1].
     Returns 0.0 on empty input rather than raising — callers expect a
@@ -399,63 +540,14 @@ def compute_cohort_model(
     margin_pct = max(0.0, min(float(margin_pct), 100.0))
     target_percentile_floor = max(0.0, min(float(target_percentile_floor), 95.0))
 
-    cutoff = now - timedelta(days=lookback_days)
     families_set = (
         {f.strip() for f in product_families if f and f.strip()}
         if product_families
         else None
     )
 
-    # Pull every session in the window once, grouped by device. We
-    # need the raw sessions (not aggregates) because the thermal model
-    # wants duration × avg_temp per session.
-    rows = db.execute(
-        select(
-            TelemetrySession.device_id,
-            TelemetrySession.grill_type,
-            TelemetrySession.firmware_version,
-            TelemetrySession.session_start,
-            TelemetrySession.session_duration_seconds,
-            TelemetrySession.target_temp,
-            TelemetrySession.actual_temp_time_series,
-        )
-        .where(TelemetrySession.device_id.is_not(None))
-        .where(TelemetrySession.device_id.notlike("mac:%"))
-        .where(TelemetrySession.session_start >= cutoff)
-        .where(TelemetrySession.session_duration_seconds >= 300)
-    ).all()
-
-    huntsman_ids = build_huntsman_device_ids(db)
-
-    # device_id → list[(lump_lb, briq_lb, start)] plus latest meta
-    per_device_sessions: dict[str, list[tuple[float, float, datetime]]] = {}
-    per_device_meta: dict[str, tuple[Optional[str], Optional[str], datetime]] = {}
-    for r in rows:
-        dev, grill, fw, start, dur_s, tgt, series = r
-        avg_actual = None
-        if isinstance(series, list) and series:
-            vals: list[float] = []
-            for s in series:
-                try:
-                    v = float(s.get("v"))
-                except (AttributeError, TypeError, ValueError):
-                    continue
-                if 0 < v < 1000:
-                    vals.append(v)
-            if vals:
-                avg_actual = sum(vals) / len(vals)
-        avg_temp = avg_actual if avg_actual is not None else tgt
-        if avg_temp is None:
-            continue
-        lump, briq = session_fuel_lb(dur_s / 3600.0, float(avg_temp))
-        per_device_sessions.setdefault(dev, []).append((lump, briq, start))
-        # Latest meta wins — iteration order isn't deterministic so we
-        # just keep the latest session_start we've seen.
-        prev = per_device_meta.get(dev)
-        if prev is None or start > prev[2]:
-            per_device_meta[dev] = (grill, fw, start)
-
-    # Resolve the SKU + its fuel preference
+    # Resolve the SKU + its fuel preference FIRST — we need to know
+    # which fuel column of the cached pool to read.
     sku = db.get(PartnerProduct, partner_product_id) if partner_product_id else None
     if sku is None:
         # Empty cohort shape so the UI can render without exploding
@@ -473,26 +565,26 @@ def compute_cohort_model(
         }
     fuel_pref = sku.fuel_type or "lump"
 
-    # Classify each device, apply cohort filter, compute monthly lb
+    # Heavy step (cached): pull + decode every session in the lookback
+    # window. All subsequent filters are pure arithmetic on the pool,
+    # so this is the ONLY part that changes per lookback value.
+    pool = _build_device_burn_pool(db, lookback_days=lookback_days, now=now)
+
+    # Apply family + min-cooks + fuel-choice filters post-hoc.
+    fuel_key = "lump_lb_per_month" if fuel_pref == "lump" else "briq_lb_per_month"
     eligible: list[dict[str, Any]] = []
-    for dev, sessions in per_device_sessions.items():
-        grill, fw, _last = per_device_meta[dev]
-        family = classify_product(
-            grill, fw,
-            device_id=dev,
-            huntsman_device_ids=huntsman_ids,
-        )
-        if families_set is not None and family not in families_set:
+    for d in pool:
+        if families_set is not None and d["product_family"] not in families_set:
             continue
-        if len(sessions) < min_cooks_in_window:
+        if d["sessions_in_window"] < min_cooks_in_window:
             continue
-        lb_per_month = _lb_per_month_for_device(sessions, fuel_pref, lookback_days)
+        lb_per_month = d[fuel_key]
         if lb_per_month <= 0:
             continue
         eligible.append({
-            "device_id": dev,
-            "product_family": family,
-            "sessions_in_window": len(sessions),
+            "device_id": d["device_id"],
+            "product_family": d["product_family"],
+            "sessions_in_window": d["sessions_in_window"],
             "lb_per_month": lb_per_month,
         })
 
