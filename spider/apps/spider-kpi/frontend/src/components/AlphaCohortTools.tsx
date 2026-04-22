@@ -92,6 +92,9 @@ export function AlphaBulkRegisterCard({ onComplete }: { onComplete: () => void }
         <div><strong>{r.already_registered}</strong> already registered</div>
         <div><strong>{r.invalid_macs.length}</strong> invalid MAC{r.invalid_macs.length === 1 ? '' : 's'}</div>
         <div><strong>{r.unknown_firmware.length}</strong> unknown firmware</div>
+        <div title="MAC resolved via app-side observations only (no recent stream telemetry — registered under a synthetic device_id; re-keys to the real device_id when the grill comes online)">
+          <strong>{r.app_side_only?.length ?? 0}</strong> app-side only
+        </div>
       </div>
       {Object.keys(r.by_firmware_version).length > 0 ? (
         <div style={{ marginTop: 10, fontSize: 12 }}>
@@ -116,8 +119,20 @@ export function AlphaBulkRegisterCard({ onComplete }: { onComplete: () => void }
       ) : null}
       {r.unknown_firmware.length > 0 ? (
         <div style={{ marginTop: 10, fontSize: 12, color: 'var(--orange)' }}>
-          Unknown firmware (no recent telemetry): {r.unknown_firmware.slice(0, 10).join(', ')}
-          {r.unknown_firmware.length > 10 ? ` +${r.unknown_firmware.length - 10} more` : ''}
+          <strong>Unknown firmware</strong> — no stream events AND no app-side observations for these MACs.
+          Likely offline or never reported. Supply a <code>firmware_version_override</code> per MAC to force, or wait until they come online.
+          <div style={{ marginTop: 4, fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: 'var(--muted)' }}>
+            {r.unknown_firmware.slice(0, 20).join(', ')}
+            {r.unknown_firmware.length > 20 ? ` · +${r.unknown_firmware.length - 20} more` : ''}
+          </div>
+        </div>
+      ) : null}
+      {r.app_side_only && r.app_side_only.length > 0 ? (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--blue)' }}>
+          <strong>Registered via app-side fallback</strong> ({r.app_side_only.length} device{r.app_side_only.length === 1 ? '' : 's'}) —
+          no recent stream events, but firmware version found in app-side device observations
+          (Freshdesk + app sync). Registered under a synthetic <code>mac:xxxx</code> device_id so
+          the member is tracked; it auto-re-keys to the real device_id when the grill next reports.
         </div>
       ) : null}
       {r.dry_run && r.successful > 0 ? (

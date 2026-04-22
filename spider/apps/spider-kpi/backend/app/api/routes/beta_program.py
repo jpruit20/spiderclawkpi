@@ -468,6 +468,52 @@ def mark_ota_pushed(
 # ── Alpha cohort (employees + R&D grills) ────────────────────────────
 
 
+def _rekey_synthetic_alpha_ids(db: Session) -> int:
+    """Upgrade any alpha cohort members registered with a synthetic
+    ``mac:xxxxxxxxxxxx`` device_id to the real telemetry device_id
+    hash, once the device has reported stream events.
+
+    Called lazily from ``list_alpha_cohort`` so the upgrade happens as
+    data flows in — no separate scheduler step required. Cheap: one
+    SELECT per synthetic row. Returns how many rows were re-keyed.
+    """
+    from sqlalchemy import text
+    from app.api.routes.firmware import _device_ids_for_mac
+
+    synthetic = db.execute(
+        select(BetaCohortMember)
+        .where(BetaCohortMember.opt_in_source == "alpha")
+        .where(BetaCohortMember.device_id.like("mac:%"))
+    ).scalars().all()
+    if not synthetic:
+        return 0
+    updated = 0
+    for m in synthetic:
+        mac = m.device_id[4:]
+        if len(mac) != 12:
+            continue
+        real_ids = _device_ids_for_mac(db, mac, limit=1)
+        if not real_ids:
+            continue
+        real = real_ids[0]
+        # If a real-keyed row already exists for this (release, device_id),
+        # delete the synthetic one to satisfy the unique constraint.
+        existing = db.execute(
+            select(BetaCohortMember).where(
+                BetaCohortMember.release_id == m.release_id,
+                BetaCohortMember.device_id == real,
+            )
+        ).scalars().first()
+        if existing is not None:
+            db.delete(m)
+        else:
+            m.device_id = real
+        updated += 1
+    if updated:
+        db.commit()
+    return updated
+
+
 @router.get("/alpha-cohort")
 def list_alpha_cohort(db: Session = Depends(db_session)) -> dict[str, Any]:
     """All BetaCohortMembers whose opt-in came via the 'alpha' source.
@@ -476,7 +522,13 @@ def list_alpha_cohort(db: Session = Depends(db_session)) -> dict[str, Any]:
     distinction is carried on the ``opt_in_source`` column. This endpoint
     surfaces the alpha view so the Firmware Hub can show R&D grill
     progress without leaking customer devices onto that tab.
+
+    Side effect: auto-rekeys any synthetic ``mac:xxx`` device_id rows
+    to their real telemetry device_id hashes if the grill has come
+    back online since the bulk-import registration.
     """
+    rekeyed = _rekey_synthetic_alpha_ids(db)
+
     rows = db.execute(
         select(BetaCohortMember, FirmwareRelease)
         .join(FirmwareRelease, FirmwareRelease.id == BetaCohortMember.release_id)
@@ -510,6 +562,7 @@ def list_alpha_cohort(db: Session = Depends(db_session)) -> dict[str, Any]:
         "members": members,
         "count": len(members),
         "state_distribution": by_state,
+        "rekeyed_synthetic_ids": rekeyed,
     }
 
 
@@ -579,6 +632,7 @@ def alpha_bulk_import(
         _device_ids_for_mac,
         normalize_mac,
     )
+    from app.models import AppSideDeviceObservation
 
     now = datetime.now(timezone.utc)
     release_cache: dict[str, FirmwareRelease] = {}
@@ -622,6 +676,11 @@ def alpha_bulk_import(
     already_registered = 0
     invalid_macs: list[str] = []
     unknown_firmware: list[str] = []
+    # MACs resolved only via app-side observations (no live stream data).
+    # Registered under a synthetic `mac:xxx` device_id so they aren't lost;
+    # re-keying to the real device_id happens automatically the first time
+    # the device reports telemetry.
+    app_side_only: list[str] = []
 
     for entry in payload.entries:
         raw_mac = (entry.mac or "").strip()
@@ -635,24 +694,16 @@ def alpha_bulk_import(
             continue
 
         device_ids = _device_ids_for_mac(db, mac)
-        if not device_ids:
-            results.append({
-                "input_mac": raw_mac,
-                "mac": mac,
-                "status": "no_telemetry",
-                "note": "MAC has not reported any stream events — device may be offline or newly provisioned. Registering under firmware_version_override if provided.",
-            })
-            if not entry.firmware_version_override:
-                continue
-            # Fall through to use the override + skip device-id insertion.
-
-        # Detect current firmware version
+        # Telemetry source used for firmware detection (for result reporting).
+        source: str = "stream"
         fw_version: Optional[str] = entry.firmware_version_override
         first_seen_on_version: Optional[datetime] = None
+
         if fw_version is None and device_ids:
+            # Preferred: last firmware seen in the live stream window.
             row = db.execute(text(
                 f"""
-                SELECT firmware_version, MIN(sample_timestamp) AS first_seen, MAX(sample_timestamp) AS last_seen
+                SELECT firmware_version, MIN(sample_timestamp) AS first_seen
                 FROM telemetry_stream_events
                 WHERE {_MAC_EXPR} = :mac
                   AND firmware_version IS NOT NULL
@@ -665,6 +716,24 @@ def alpha_bulk_import(
                 fw_version = row[0]
                 first_seen_on_version = row[1]
 
+        # Fallback: app-side device observations. Stream events retain
+        # only ~7d, so alpha testers who haven't cooked recently fall
+        # through to this path. AppSideDeviceObservation keeps much
+        # longer history via Freshdesk + app sync.
+        if fw_version is None:
+            obs = db.execute(
+                select(AppSideDeviceObservation)
+                .where(AppSideDeviceObservation.mac_normalized == mac)
+                .where(AppSideDeviceObservation.firmware_version.is_not(None))
+                .order_by(desc(AppSideDeviceObservation.observed_at))
+                .limit(1)
+            ).scalars().first()
+            if obs is not None:
+                fw_version = obs.firmware_version
+                first_seen_on_version = obs.observed_at
+                if not device_ids:
+                    source = "app_side"
+
         if not fw_version:
             unknown_firmware.append(mac)
             results.append({
@@ -672,19 +741,28 @@ def alpha_bulk_import(
                 "mac": mac,
                 "device_id_count": len(device_ids),
                 "status": "unknown_firmware",
-                "note": "Could not determine firmware — no recent stream events with firmware_version set. Pass firmware_version_override to force.",
+                "note": "No firmware detected in stream events or app-side observations. Pass firmware_version_override to force a version.",
             })
             continue
 
         release = _ensure_release(fw_version)
         by_firmware[fw_version] = by_firmware.get(fw_version, 0) + 1
 
+        # If we had no device_ids, fall back to synthetic `mac:` id so the
+        # MAC is tracked; the telemetry re-keyer will link it up when the
+        # device comes back online.
+        target_device_ids = device_ids or [f"mac:{mac}"]
+        if not device_ids:
+            app_side_only.append(mac)
+
         if payload.dry_run:
+            successful += 1
             results.append({
                 "input_mac": raw_mac,
                 "mac": mac,
                 "device_id_count": len(device_ids),
                 "firmware_version": fw_version,
+                "firmware_source": source,
                 "release_id": release.id,
                 "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
                 "status": "would_register",
@@ -696,9 +774,6 @@ def alpha_bulk_import(
         # to multiple device_id hashes if it was paired with multiple
         # user accounts). Upsert via ON CONFLICT DO NOTHING semantics.
         created_for_device = 0
-        target_device_ids = device_ids or [f"mac:{mac}"]
-        # If no stream events, we still want a cohort row so the MAC is
-        # tracked — use a synthetic device_id based on the MAC.
         for did in target_device_ids:
             exists = db.execute(
                 select(BetaCohortMember).where(
@@ -717,6 +792,7 @@ def alpha_bulk_import(
                 candidate_reason_json={
                     "historical_import": True,
                     "imported_from_mac": mac,
+                    "firmware_source": source,
                     "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
                     "note": "Registered via alpha-cohort bulk import; device was already running this firmware before dashboard registration.",
                 },
@@ -736,6 +812,7 @@ def alpha_bulk_import(
             "mac": mac,
             "device_id_count": len(device_ids),
             "firmware_version": fw_version,
+            "firmware_source": source,
             "release_id": release.id,
             "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
             "status": "registered",
@@ -756,6 +833,7 @@ def alpha_bulk_import(
         "releases_created": releases_created,
         "invalid_macs": invalid_macs,
         "unknown_firmware": unknown_firmware,
+        "app_side_only": app_side_only,
         "already_registered": already_registered,
         "results": results,
     }

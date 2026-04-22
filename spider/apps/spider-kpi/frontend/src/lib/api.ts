@@ -1123,12 +1123,14 @@ export interface AlphaBulkImportResult {
   releases_created: string[]
   invalid_macs: string[]
   unknown_firmware: string[]
+  app_side_only: string[]
   already_registered: number
   results: Array<{
     input_mac: string
     mac?: string
     device_id_count?: number
     firmware_version?: string
+    firmware_source?: 'stream' | 'app_side' | 'override'
     release_id?: number
     first_seen_on_version?: string | null
     status: 'registered' | 'would_register' | 'invalid_mac' | 'unknown_firmware' | 'no_telemetry'
