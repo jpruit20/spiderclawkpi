@@ -745,6 +745,20 @@ export const api = {
     request<BetaProgramSummary>('/api/beta/summary', { signal }),
   betaAlphaCohort: (signal?: AbortSignal) =>
     request<AlphaCohortResponse>('/api/beta/alpha-cohort', { signal }),
+  betaAlphaBulkImport: (payload: {
+    entries: Array<{ mac: string; user_id?: string; firmware_version_override?: string }>
+    dry_run: boolean
+    release_notes?: string
+  }) =>
+    request<AlphaBulkImportResult>('/api/beta/alpha-cohort/bulk-import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      timeoutMs: 120000,
+    }),
+  betaAlphaFirmwareTimeline: (mac: string, signal?: AbortSignal) =>
+    request<AlphaFirmwareTimeline>(`/api/beta/alpha-cohort/${encodeURIComponent(mac)}/firmware-timeline`, { signal }),
+  betaAlphaAnalytics: (signal?: AbortSignal) =>
+    request<AlphaCohortAnalytics>('/api/beta/alpha-cohort/analytics', { signal }),
   betaGammaStatus: (signal?: AbortSignal) =>
     request<GammaStatusResponse>('/api/beta/gamma-status', { signal }),
   ecrs: (includeClosed = false, signal?: AbortSignal) =>
@@ -1099,6 +1113,65 @@ export interface AlphaCohortResponse {
   members: AlphaCohortMember[]
   count: number
   state_distribution: Record<string, number>
+}
+
+export interface AlphaBulkImportResult {
+  dry_run: boolean
+  total_requested: number
+  successful: number
+  by_firmware_version: Record<string, number>
+  releases_created: string[]
+  invalid_macs: string[]
+  unknown_firmware: string[]
+  already_registered: number
+  results: Array<{
+    input_mac: string
+    mac?: string
+    device_id_count?: number
+    firmware_version?: string
+    release_id?: number
+    first_seen_on_version?: string | null
+    status: 'registered' | 'would_register' | 'invalid_mac' | 'unknown_firmware' | 'no_telemetry'
+    cohort_rows_inserted?: number
+    note?: string
+    user_id?: string | null
+  }>
+}
+
+export interface AlphaFirmwareVersionRow {
+  firmware_version: string
+  stream_first_seen: string | null
+  stream_last_seen: string | null
+  stream_active_days: number
+  stream_sample_count: number
+  session_count: number
+  first_session_at: string | null
+  last_session_at: string | null
+}
+
+export interface AlphaFirmwareTimeline {
+  mac: string
+  device_id_count: number
+  versions: AlphaFirmwareVersionRow[]
+}
+
+export interface AlphaCohortAnalyticsSegment {
+  firmware_version: string
+  cohort: 'alpha' | 'production'
+  sessions: number
+  devices: number
+  cook_success_rate: number | null
+  avg_disconnects_per_session: number | null
+  avg_max_overshoot_f: number | null
+  avg_in_control_pct: number | null
+  avg_stability_score: number | null
+  avg_time_to_stabilize_seconds: number | null
+}
+
+export interface AlphaCohortAnalytics {
+  window_days: number
+  alpha_device_id_count: number
+  segments: AlphaCohortAnalyticsSegment[]
 }
 
 export interface GammaWave {

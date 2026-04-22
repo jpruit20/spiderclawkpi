@@ -44,6 +44,11 @@ import { CookTimelineChart } from '../components/CookTimelineChart'
 import { FirmwareReleaseHistoryCard } from '../components/FirmwareReleaseHistoryCard'
 import { DiagnosticsCard } from '../components/DiagnosticsCard'
 import { DivisionHero } from '../components/DivisionHero'
+import {
+  AlphaBulkRegisterCard,
+  AlphaFirmwareTimelineCard,
+  AlphaVsFleetAnalyticsCard,
+} from '../components/AlphaCohortTools'
 import { fmtInt } from '../lib/format'
 
 type TabKey = 'overview' | 'device' | 'alpha' | 'beta' | 'gamma' | 'deploy' | 'log'
@@ -188,29 +193,53 @@ function AlphaCohortPanel() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [focusedDeviceId, setFocusedDeviceId] = useState<string | null>(null)
+  const [focusedMac, setFocusedMac] = useState<string | null>(null)
 
-  useEffect(() => {
+  const reload = () => {
     const ctl = new AbortController()
     setLoading(true)
     api.betaAlphaCohort(ctl.signal)
       .then(d => { setData(d); setError(null) })
       .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
       .finally(() => setLoading(false))
+    return ctl
+  }
+
+  useEffect(() => {
+    const ctl = reload()
     return () => ctl.abort()
   }, [])
 
-  if (loading) return <section className="card"><div className="state-message">Loading alpha cohort…</div></section>
-  if (error) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
+  if (loading && !data) return <section className="card"><div className="state-message">Loading alpha cohort…</div></section>
+  if (error && !data) return <section className="card"><div className="state-message" style={{ color: 'var(--red)' }}>Error: {error}</div></section>
   if (!data) return null
+
+  // Best-effort: pull a MAC-looking string out of the candidate_reason_json
+  // payload so the per-device firmware timeline can be keyed by MAC even
+  // though cohort rows are device_id-based.
+  const macForRow = (m: AlphaCohortResponse['members'][number]): string | null => {
+    const reason = (m as unknown as { candidate_reason_json?: { imported_from_mac?: string } }).candidate_reason_json
+    const fromReason = reason?.imported_from_mac
+    if (fromReason) return fromReason
+    // Synthetic device_id path from bulk import: `mac:xxxxxxxxxxxx`
+    if (m.device_id.startsWith('mac:')) return m.device_id.slice(4)
+    return null
+  }
 
   return (
     <>
+      {/* Bulk registration form — Joseph's alpha tester import flow */}
+      <AlphaBulkRegisterCard onComplete={() => { reload() }} />
+
       <section className="card">
         <div className="card-title">Alpha (R&D) cohort</div>
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-          Spider Grills-internal grills — cohort members with <code>opt_in_source = 'alpha'</code>.
-          Shares the BetaCohortMember schema with beta but is kept separate here so customer devices
-          don't show up in the R&D view.
+          Spider Grills-internal grills + historical alpha testers — cohort members with
+          <code style={{ margin: '0 4px' }}>opt_in_source = 'alpha'</code>.
+          Shares the BetaCohortMember schema with beta but is kept separate here so
+          production customer devices don't show up in the R&D view. Bulk-imported
+          testers are registered as <code>state='ota_pushed'</code> because the firmware
+          was already running on their device before dashboard registration.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
           <Stat label="Alpha members" value={data.count.toLocaleString()} />
@@ -220,48 +249,73 @@ function AlphaCohortPanel() {
         </div>
       </section>
 
+      {/* Cohort-vs-fleet analytics — the whole point of registering */}
+      <AlphaVsFleetAnalyticsCard />
+
       <section className="card">
         <div className="card-title">Members ({data.count})</div>
         {data.members.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-            No alpha members yet. Add one by inviting an internal device to a release and recording
-            the opt-in with <code>source=alpha</code>.
+            No alpha members yet. Use the bulk-register form above to paste your list
+            of alpha tester MAC addresses.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 720 }}>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 820 }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                   <th style={{ padding: '6px 8px' }}>Release</th>
-                  <th>Device</th>
+                  <th>Device / MAC</th>
                   <th>User</th>
                   <th>State</th>
-                  <th>Score</th>
                   <th>Invited</th>
                   <th>Opted in</th>
                   <th>OTA pushed</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {data.members.map(m => (
-                  <tr
-                    key={`${m.release_id}:${m.device_id}`}
-                    onClick={() => setFocusedDeviceId(m.device_id)}
-                    style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                    title="Click for cook timeline"
-                  >
-                    <td style={{ padding: '6px 8px' }}>{m.release_version}{m.release_title ? ` · ${m.release_title}` : ''}</td>
-                    <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{m.device_id.slice(0, 10)}…</td>
-                    <td>{m.user_id ?? '—'}</td>
-                    <td>{m.state}</td>
-                    <td>{m.candidate_score != null ? m.candidate_score.toFixed(2) : '—'}</td>
-                    <td>{fmtDateTime(m.invited_at)}</td>
-                    <td>{fmtDateTime(m.opted_in_at)}</td>
-                    <td>{fmtDateTime(m.ota_pushed_at)}</td>
-                  </tr>
-                ))}
+                {data.members.map(m => {
+                  const mac = macForRow(m)
+                  return (
+                    <tr
+                      key={`${m.release_id}:${m.device_id}`}
+                      style={{ borderTop: '1px solid var(--border)' }}
+                    >
+                      <td style={{ padding: '6px 8px' }}>{m.release_version}{m.release_title ? ` · ${m.release_title}` : ''}</td>
+                      <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                        {mac || `${m.device_id.slice(0, 10)}…`}
+                      </td>
+                      <td>{m.user_id ?? '—'}</td>
+                      <td>{m.state}</td>
+                      <td>{fmtDateTime(m.invited_at)}</td>
+                      <td>{fmtDateTime(m.opted_in_at)}</td>
+                      <td>{fmtDateTime(m.ota_pushed_at)}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: 4 }}>
+                          {mac ? (
+                            <button
+                              className="range-button"
+                              style={{ fontSize: 10, padding: '2px 8px' }}
+                              onClick={() => setFocusedMac(mac)}
+                              title="Firmware-version journey for this MAC"
+                            >
+                              FW journey
+                            </button>
+                          ) : null}
+                          <button
+                            className="range-button"
+                            style={{ fontSize: 10, padding: '2px 8px' }}
+                            onClick={() => setFocusedDeviceId(m.device_id)}
+                            title="Cook timeline for this device"
+                          >
+                            Cook timeline
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -273,6 +327,12 @@ function AlphaCohortPanel() {
           lookbackHours={24}
           modal
           onClose={() => setFocusedDeviceId(null)}
+        />
+      ) : null}
+      {focusedMac ? (
+        <AlphaFirmwareTimelineCard
+          mac={focusedMac}
+          onClose={() => setFocusedMac(null)}
         />
       ) : null}
     </>

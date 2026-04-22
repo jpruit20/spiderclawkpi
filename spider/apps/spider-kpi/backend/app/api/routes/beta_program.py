@@ -513,6 +513,446 @@ def list_alpha_cohort(db: Session = Depends(db_session)) -> dict[str, Any]:
     }
 
 
+# ── Alpha cohort · bulk historical import ────────────────────────────
+
+
+class AlphaImportEntry(BaseModel):
+    """One MAC to register. Accepts any common MAC format (colons,
+    dashes, no separators, mixed case); it's normalized server-side."""
+    mac: str = Field(..., max_length=32)
+    user_id: Optional[str] = Field(None, max_length=128)
+    # Optional override — if set, we pin the device to this firmware
+    # version instead of auto-detecting from telemetry. Useful when a
+    # device hasn't phoned home in a while but we know what it's on.
+    firmware_version_override: Optional[str] = Field(None, max_length=64)
+
+
+class AlphaBulkImportIn(BaseModel):
+    entries: list[AlphaImportEntry] = Field(default_factory=list)
+    dry_run: bool = False
+    # Default notes stamped onto auto-created historical releases.
+    release_notes: Optional[str] = Field(
+        default=(
+            "[HISTORICAL IMPORT] Firmware was already running on field "
+            "devices before dashboard registration. Do NOT use this "
+            "release record to initiate a new OTA push — it has no "
+            "binary attached. Created by alpha cohort bulk import."
+        ),
+        max_length=2048,
+    )
+
+
+@router.post("/alpha-cohort/bulk-import")
+def alpha_bulk_import(
+    payload: AlphaBulkImportIn,
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Bulk-register alpha testers without triggering a new firmware
+    release.
+
+    For each MAC:
+      1. Normalize + resolve to the device_id hashes that have reported
+         under it.
+      2. Detect current firmware version from the latest stream event
+         (unless ``firmware_version_override`` is provided).
+      3. Auto-create a FirmwareRelease row for that version if missing,
+         with status='ga', approved_for_alpha=True, and a historical-
+         import marker in notes. No binary, no OTA capability — this
+         is a registration-only record.
+      4. Insert a BetaCohortMember with opt_in_source='alpha' and
+         state='ota_pushed' (the device is already on the firmware),
+         idempotent by the unique (release_id, device_id) constraint.
+
+    The device's historical telemetry is already pulled by the regular
+    telemetry pipeline, so no separate backfill is needed — registration
+    unlocks the analytics surfaces, that's all.
+
+    Dashboard deploy flows (beta / gamma) continue to work for this
+    cohort: the members are regular ``state='ota_pushed'`` rows, so
+    inviting them to a *new* release uses the standard invite + OTA
+    path.
+    """
+    # Import here to avoid a cycle (firmware route imports from services).
+    from sqlalchemy import text
+    from app.api.routes.firmware import (
+        _MAC_EXPR,
+        _device_ids_for_mac,
+        normalize_mac,
+    )
+
+    now = datetime.now(timezone.utc)
+    release_cache: dict[str, FirmwareRelease] = {}
+    releases_created: list[str] = []
+
+    # Preload every firmware release version → row for fast lookup.
+    existing_releases = db.execute(select(FirmwareRelease)).scalars().all()
+    for r in existing_releases:
+        release_cache[r.version] = r
+
+    def _ensure_release(version: str) -> FirmwareRelease:
+        if version in release_cache:
+            return release_cache[version]
+        # Semver-ish title from version: "Alpha 01.01.95"
+        r = FirmwareRelease(
+            version=version,
+            title=f"Alpha {version}",
+            notes=payload.release_notes,
+            addresses_issues=[],
+            status="ga",
+            beta_cohort_target_size=100,
+            approved_for_alpha=True,
+            approval_audit_json=[{
+                "event": "historical_import",
+                "at": now.isoformat(),
+                "by": "dashboard:alpha-bulk-import",
+                "note": "Auto-created to hold historical alpha cohort membership.",
+            }],
+            created_by="dashboard:alpha-bulk-import",
+            released_at=now,
+        )
+        db.add(r)
+        db.flush()  # need the PK for BetaCohortMember.release_id
+        release_cache[version] = r
+        releases_created.append(version)
+        return r
+
+    results: list[dict[str, Any]] = []
+    by_firmware: dict[str, int] = {}
+    successful = 0
+    already_registered = 0
+    invalid_macs: list[str] = []
+    unknown_firmware: list[str] = []
+
+    for entry in payload.entries:
+        raw_mac = (entry.mac or "").strip()
+        mac = normalize_mac(raw_mac)
+        if mac is None:
+            invalid_macs.append(raw_mac)
+            results.append({
+                "input_mac": raw_mac,
+                "status": "invalid_mac",
+            })
+            continue
+
+        device_ids = _device_ids_for_mac(db, mac)
+        if not device_ids:
+            results.append({
+                "input_mac": raw_mac,
+                "mac": mac,
+                "status": "no_telemetry",
+                "note": "MAC has not reported any stream events — device may be offline or newly provisioned. Registering under firmware_version_override if provided.",
+            })
+            if not entry.firmware_version_override:
+                continue
+            # Fall through to use the override + skip device-id insertion.
+
+        # Detect current firmware version
+        fw_version: Optional[str] = entry.firmware_version_override
+        first_seen_on_version: Optional[datetime] = None
+        if fw_version is None and device_ids:
+            row = db.execute(text(
+                f"""
+                SELECT firmware_version, MIN(sample_timestamp) AS first_seen, MAX(sample_timestamp) AS last_seen
+                FROM telemetry_stream_events
+                WHERE {_MAC_EXPR} = :mac
+                  AND firmware_version IS NOT NULL
+                GROUP BY firmware_version
+                ORDER BY MAX(sample_timestamp) DESC NULLS LAST
+                LIMIT 1
+                """
+            ), {"mac": mac}).first()
+            if row is not None:
+                fw_version = row[0]
+                first_seen_on_version = row[1]
+
+        if not fw_version:
+            unknown_firmware.append(mac)
+            results.append({
+                "input_mac": raw_mac,
+                "mac": mac,
+                "device_id_count": len(device_ids),
+                "status": "unknown_firmware",
+                "note": "Could not determine firmware — no recent stream events with firmware_version set. Pass firmware_version_override to force.",
+            })
+            continue
+
+        release = _ensure_release(fw_version)
+        by_firmware[fw_version] = by_firmware.get(fw_version, 0) + 1
+
+        if payload.dry_run:
+            results.append({
+                "input_mac": raw_mac,
+                "mac": mac,
+                "device_id_count": len(device_ids),
+                "firmware_version": fw_version,
+                "release_id": release.id,
+                "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
+                "status": "would_register",
+                "user_id": entry.user_id,
+            })
+            continue
+
+        # Insert a cohort member per device_id (a physical grill can map
+        # to multiple device_id hashes if it was paired with multiple
+        # user accounts). Upsert via ON CONFLICT DO NOTHING semantics.
+        created_for_device = 0
+        target_device_ids = device_ids or [f"mac:{mac}"]
+        # If no stream events, we still want a cohort row so the MAC is
+        # tracked — use a synthetic device_id based on the MAC.
+        for did in target_device_ids:
+            exists = db.execute(
+                select(BetaCohortMember).where(
+                    BetaCohortMember.release_id == release.id,
+                    BetaCohortMember.device_id == did,
+                )
+            ).scalars().first()
+            if exists is not None:
+                already_registered += 1
+                continue
+            member = BetaCohortMember(
+                release_id=release.id,
+                device_id=did,
+                user_id=entry.user_id,
+                candidate_score=None,
+                candidate_reason_json={
+                    "historical_import": True,
+                    "imported_from_mac": mac,
+                    "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
+                    "note": "Registered via alpha-cohort bulk import; device was already running this firmware before dashboard registration.",
+                },
+                state="ota_pushed",
+                invited_at=now,
+                opted_in_at=now,
+                opt_in_source="alpha",
+                ota_pushed_at=first_seen_on_version or now,
+                ota_confirmed_at=first_seen_on_version or now,
+            )
+            db.add(member)
+            created_for_device += 1
+
+        successful += 1
+        results.append({
+            "input_mac": raw_mac,
+            "mac": mac,
+            "device_id_count": len(device_ids),
+            "firmware_version": fw_version,
+            "release_id": release.id,
+            "first_seen_on_version": first_seen_on_version.isoformat() if first_seen_on_version else None,
+            "status": "registered",
+            "cohort_rows_inserted": created_for_device,
+            "user_id": entry.user_id,
+        })
+
+    if payload.dry_run:
+        db.rollback()
+    else:
+        db.commit()
+
+    return {
+        "dry_run": payload.dry_run,
+        "total_requested": len(payload.entries),
+        "successful": successful,
+        "by_firmware_version": by_firmware,
+        "releases_created": releases_created,
+        "invalid_macs": invalid_macs,
+        "unknown_firmware": unknown_firmware,
+        "already_registered": already_registered,
+        "results": results,
+    }
+
+
+# ── Alpha cohort · per-device firmware timeline ──────────────────────
+
+
+@router.get("/alpha-cohort/{mac}/firmware-timeline")
+def alpha_firmware_timeline(mac: str, db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Firmware-version journey for a single alpha tester device.
+
+    Returns one row per version the MAC has been observed on, with
+    first-seen / last-seen timestamps and a session count. Lets the
+    dashboard show "this grill ran 01.01.90 for 11 cooks before moving
+    to 01.01.92…" etc.
+    """
+    from sqlalchemy import text
+    from app.api.routes.firmware import _MAC_EXPR, _device_ids_for_mac, normalize_mac
+
+    normalized = normalize_mac(mac)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="invalid MAC")
+    device_ids = _device_ids_for_mac(db, normalized)
+
+    # Stream-event-derived version transitions.
+    rows = db.execute(text(
+        f"""
+        SELECT firmware_version,
+               MIN(sample_timestamp) AS first_seen,
+               MAX(sample_timestamp) AS last_seen,
+               COUNT(DISTINCT CASE WHEN engaged IS TRUE THEN DATE_TRUNC('day', sample_timestamp) END) AS active_days,
+               COUNT(*) AS sample_count
+        FROM telemetry_stream_events
+        WHERE {_MAC_EXPR} = :mac
+          AND firmware_version IS NOT NULL
+        GROUP BY firmware_version
+        ORDER BY MIN(sample_timestamp) ASC
+        """
+    ), {"mac": normalized}).all()
+
+    # Session counts per firmware (TelemetrySession has deeper retention
+    # than telemetry_stream_events, so this pair is the richest view).
+    session_rows: list[tuple[str, int, Optional[datetime], Optional[datetime]]] = []
+    if device_ids:
+        # SQLAlchemy 2.0 tuple select keeps the result ordered + typed.
+        from app.models import TelemetrySession as _TelemetrySession
+        session_rows = list(db.execute(
+            select(
+                _TelemetrySession.firmware_version,
+                func.count(_TelemetrySession.id),
+                func.min(_TelemetrySession.session_start),
+                func.max(_TelemetrySession.session_end),
+            )
+            .where(_TelemetrySession.device_id.in_(device_ids))
+            .where(_TelemetrySession.firmware_version.is_not(None))
+            .group_by(_TelemetrySession.firmware_version)
+            .order_by(func.min(_TelemetrySession.session_start))
+        ).all())
+    session_by_version = {
+        (row[0] or "unknown"): {
+            "session_count": int(row[1] or 0),
+            "first_session_at": row[2].isoformat() if row[2] else None,
+            "last_session_at": row[3].isoformat() if row[3] else None,
+        }
+        for row in session_rows
+    }
+
+    versions = []
+    for row in rows:
+        version = row[0] or "unknown"
+        sessions = session_by_version.get(version, {"session_count": 0, "first_session_at": None, "last_session_at": None})
+        versions.append({
+            "firmware_version": version,
+            "stream_first_seen": row[1].isoformat() if row[1] else None,
+            "stream_last_seen": row[2].isoformat() if row[2] else None,
+            "stream_active_days": int(row[3] or 0),
+            "stream_sample_count": int(row[4] or 0),
+            **sessions,
+        })
+
+    return {
+        "mac": normalized,
+        "device_id_count": len(device_ids),
+        "versions": versions,
+    }
+
+
+# ── Alpha cohort · analytics vs fleet ────────────────────────────────
+
+
+@router.get("/alpha-cohort/analytics")
+def alpha_cohort_analytics(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Comparison view: alpha cohort (by firmware) vs. the rest of the
+    production fleet on 01.01.33 / 01.01.34.
+
+    Returns summary rows of cook success, stability, overshoot, and
+    disconnect proxy rate, segmented by firmware version and whether
+    the device is a registered alpha member.
+    """
+    from app.models import TelemetrySession as _TelemetrySession
+
+    # Alpha device_ids (everything in BetaCohortMember with opt_in_source='alpha').
+    alpha_device_ids = set(
+        row[0] for row in db.execute(
+            select(BetaCohortMember.device_id).where(BetaCohortMember.opt_in_source == "alpha")
+        ).all()
+        if row[0] and not (row[0] or "").startswith("mac:")
+    )
+
+    # Pull aggregate stats per (firmware_version, is_alpha).
+    #
+    # We look at last 180 days of sessions to make the comparison
+    # meaningful — enough history for alpha to cover 01.01.90 onward,
+    # while keeping the fleet-baseline current.
+    window_start = datetime.now(timezone.utc) - __import__("datetime").timedelta(days=180)
+
+    # Fetch everything in one query + group in Python (segmentation by
+    # alpha membership is a set-contains check, awkward to do in SQL).
+    rows = db.execute(
+        select(
+            _TelemetrySession.firmware_version,
+            _TelemetrySession.device_id,
+            _TelemetrySession.cook_success,
+            _TelemetrySession.disconnect_events,
+            _TelemetrySession.max_overshoot_f,
+            _TelemetrySession.in_control_pct,
+            _TelemetrySession.temp_stability_score,
+            _TelemetrySession.time_to_stabilization_seconds,
+        )
+        .where(_TelemetrySession.session_start >= window_start)
+        .where(_TelemetrySession.firmware_version.is_not(None))
+    ).all()
+
+    # Key: (firmware_version, is_alpha)
+    buckets: dict[tuple[str, bool], dict[str, Any]] = {}
+    for r in rows:
+        fw = r[0] or "unknown"
+        is_alpha = r[1] in alpha_device_ids
+        key = (fw, is_alpha)
+        b = buckets.setdefault(key, {
+            "sessions": 0,
+            "successes": 0,
+            "disconnect_events": 0,
+            "overshoot_samples": [],
+            "in_control_samples": [],
+            "stability_samples": [],
+            "stabilize_samples": [],
+            "device_ids": set(),
+        })
+        b["sessions"] += 1
+        if r[2]:
+            b["successes"] += 1
+        b["disconnect_events"] += int(r[3] or 0)
+        if r[4] is not None:
+            b["overshoot_samples"].append(float(r[4]))
+        if r[5] is not None:
+            b["in_control_samples"].append(float(r[5]))
+        if r[6] is not None:
+            b["stability_samples"].append(float(r[6]))
+        if r[7] is not None:
+            b["stabilize_samples"].append(float(r[7]))
+        b["device_ids"].add(r[1])
+
+    def _mean(xs: list[float]) -> float | None:
+        if not xs:
+            return None
+        return sum(xs) / len(xs)
+
+    def _pct(xs: list[float]) -> float | None:
+        if not xs:
+            return None
+        return sum(xs) / len(xs)
+
+    segments = []
+    for (fw, is_alpha), b in sorted(buckets.items(), key=lambda kv: (kv[0][1] is False, kv[0][0])):
+        success_rate = b["successes"] / b["sessions"] if b["sessions"] else None
+        segments.append({
+            "firmware_version": fw,
+            "cohort": "alpha" if is_alpha else "production",
+            "sessions": b["sessions"],
+            "devices": len(b["device_ids"]),
+            "cook_success_rate": success_rate,
+            "avg_disconnects_per_session": b["disconnect_events"] / b["sessions"] if b["sessions"] else None,
+            "avg_max_overshoot_f": _mean(b["overshoot_samples"]),
+            "avg_in_control_pct": _pct(b["in_control_samples"]),
+            "avg_stability_score": _mean(b["stability_samples"]),
+            "avg_time_to_stabilize_seconds": _mean(b["stabilize_samples"]),
+        })
+
+    return {
+        "window_days": 180,
+        "alpha_device_id_count": len(alpha_device_ids),
+        "segments": segments,
+    }
+
+
 # ── Gamma waves (production rollout) ─────────────────────────────────
 
 
