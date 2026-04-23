@@ -10,6 +10,7 @@ from sqlalchemy import and_, case, desc, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.models import SourceSyncRun, TelemetryStreamEvent
+from app.services.product_taxonomy import classify_product
 
 
 def _safe_div(num: float, den: float) -> float:
@@ -324,7 +325,14 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
             latest_grill_type_by_device[device_id] = event.grill_type
 
     firmware = Counter(latest_firmware_by_device.values())
-    grill_types = Counter(latest_grill_type_by_device.values())
+    # Bucket by the canonical product family (Weber Kettle / Huntsman /
+    # Giant Huntsman / Unknown), reconciling JOEHY's shared grill_type
+    # string via the firmware flavour the device is running. Raw grill_type
+    # buckets collapse Huntsman into Weber Kettle.
+    grill_types = Counter(
+        classify_product(grill_type, latest_firmware_by_device.get(device_id))
+        for device_id, grill_type in latest_grill_type_by_device.items()
+    )
 
     derived_sessions: list[DerivedSession] = []
     for device_id, events in device_buckets.items():
@@ -390,7 +398,14 @@ def summarize_stream_telemetry(db: Session, stream_events: list[TelemetryStreamE
     def _cohort_health(rows: list[DerivedSession], label: str) -> list[dict[str, Any]]:
         groups: dict[str, list[DerivedSession]] = defaultdict(list)
         for row in rows:
-            key = row.firmware_version if label == 'firmware' else row.grill_type
+            if label == 'firmware':
+                key = row.firmware_version
+            elif label == 'grill_type':
+                # Reconcile via the product taxonomy — raw grill_type alone
+                # merges Huntsman and Weber Kettle on JOEHY silicon.
+                key = classify_product(row.grill_type, row.firmware_version)
+            else:
+                key = row.grill_type
             groups[key or 'unknown'].append(row)
         payload = []
         for key, items in groups.items():

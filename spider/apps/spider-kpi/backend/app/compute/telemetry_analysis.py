@@ -45,6 +45,7 @@ from app.models import (
     TelemetryReport,
     TelemetrySession,
 )
+from app.services.product_taxonomy import classify_product
 
 
 logger = logging.getLogger(__name__)
@@ -339,21 +340,45 @@ def build_context(db: Session, report_type: ReportType, window_days: Optional[in
                 lines.append(f"| {fw} | {n:,} | {_pct(sr)} | {stab or 0:.3f} | {int(tts or 0)} |")
             lines.append("")
 
-        # Grill-type breakdown
-        gt_q = db.execute(text("""
-            SELECT grill_type, COUNT(*) AS n,
+        # Grill-type breakdown, bucketed into the canonical product family
+        # (Weber Kettle / Huntsman / Giant Huntsman / Unknown). We group by
+        # (grill_type, firmware_version) in SQL, then reduce to families in
+        # Python via classify_product so the JOEHY W:K:22:1:V case resolves
+        # correctly (01.01.33 = Huntsman, else Weber Kettle).
+        gt_rows = db.execute(text("""
+            SELECT grill_type, firmware_version, COUNT(*) AS n,
                    AVG((cook_success::int))::float AS sr,
                    AVG(session_duration_seconds)::float AS dur,
                    AVG(target_temp)::float AS avg_tt
               FROM telemetry_sessions
              WHERE grill_type IS NOT NULL
-             GROUP BY grill_type
-             HAVING COUNT(*) >= 10
-             ORDER BY n DESC
+             GROUP BY grill_type, firmware_version
         """)).all()
+        family_totals: dict[str, dict[str, float]] = {}
+        for grill_type, fw, n, sr, dur, tt in gt_rows:
+            family = classify_product(grill_type, fw)
+            bucket = family_totals.setdefault(family, {"n": 0, "sr_w": 0.0, "dur_w": 0.0, "tt_w": 0.0})
+            bucket["n"] += n
+            if sr is not None:
+                bucket["sr_w"] += float(sr) * n
+            if dur is not None:
+                bucket["dur_w"] += float(dur) * n
+            if tt is not None:
+                bucket["tt_w"] += float(tt) * n
+        gt_q = [
+            (
+                family,
+                int(b["n"]),
+                (b["sr_w"] / b["n"]) if b["n"] else None,
+                (b["dur_w"] / b["n"]) if b["n"] else None,
+                (b["tt_w"] / b["n"]) if b["n"] else None,
+            )
+            for family, b in sorted(family_totals.items(), key=lambda kv: -kv[1]["n"])
+            if b["n"] >= 10
+        ]
         if gt_q:
-            lines.append("### Grill-type session performance")
-            lines.append("| grill | sessions | success_rate | avg_dur_s | avg_target_temp |")
+            lines.append("### Grill-type session performance (by product family)")
+            lines.append("| family | sessions | success_rate | avg_dur_s | avg_target_temp |")
             lines.append("|-------|---------:|-------------:|----------:|----------------:|")
             for gt, n, sr, dur, tt in gt_q:
                 lines.append(f"| {gt} | {n:,} | {_pct(sr)} | {int(dur or 0)} | {tt or 0:.0f} |")

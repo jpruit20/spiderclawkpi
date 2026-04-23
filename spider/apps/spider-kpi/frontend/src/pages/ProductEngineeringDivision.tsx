@@ -49,21 +49,26 @@ type SubView = 'fleet' | 'voice' | 'roadmap'
 /* ------------------------------------------------------------------ */
 /*  Model name mapping                                                */
 /* ------------------------------------------------------------------ */
-const MODEL_NAME_MAP: Record<string, string> = {
-  'W:K:22:1:V': '22" Weber Kettle (Venom)',
-  'Kettle 22': '22" Weber Kettle (Venom)',
-  'kettle_22': '22" Weber Kettle (Venom)',
-  'Kettle22': '22" Weber Kettle (Venom)',
-  'W:K:22': '22" Weber Kettle',
-  'Huntsman': 'Huntsman',
-  'Giant Huntsman': 'Giant Huntsman',
-}
+// As of the product-taxonomy cleanup, the backend emits canonical product
+// family labels directly ("Weber Kettle", "Huntsman", "Giant Huntsman",
+// "Unknown") — the JOEHY W:K:22:1:V/firmware reconciliation now happens
+// server-side in `classify_product` (see backend/app/services/product_taxonomy.py).
+// Raw grill_type strings should no longer appear in model_distribution or
+// grill_type_health after the nightly materializer + backfill have run.
+// If one does (stale row, un-migrated import path), we render it verbatim
+// with a `legacy:` prefix so the bad data is visible instead of silently
+// being re-bucketed into Weber Kettle the way the old map did.
+const FAMILY_LABELS = new Set(['Weber Kettle', 'Huntsman', 'Giant Huntsman', 'Unknown'])
 
 function displayModelName(raw: string): string {
-  return MODEL_NAME_MAP[raw] || raw
+  if (FAMILY_LABELS.has(raw)) return raw
+  return `legacy: ${raw}`
 }
 
-/** Merge model keys that map to the same display name */
+/** Merge model keys that map to the same display name. Now that the
+ *  backend groups by product family, this is effectively a no-op for
+ *  migrated data — kept so any residual duplicate keys from ongoing
+ *  backfills still collapse cleanly. */
 function mergeModelData(data: { model: string; events: number }[]): { model: string; events: number }[] {
   const merged: Record<string, number> = {}
   for (const d of data) {

@@ -26,6 +26,7 @@ from psycopg.rows import dict_row
 # Allow imports from backend/app
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from app.services.cook_classification import EventRow, derive_sessions_from_rows, build_daily_cook_columns
+from app.services.product_taxonomy import classify_product
 
 # ---------------------------------------------------------------------------
 # .env loading
@@ -112,16 +113,37 @@ GROUP BY 1, 2
 ORDER BY 1, 3 DESC;
 """
 
+# Product-family distribution.
+#
+# We MUST group by (grill_type, firmware_version) — not grill_type alone —
+# because the JOEHY silicon reports the same ``W:K:22:1:V`` grill_type for
+# both Huntsman (factory-flashed firmware 01.01.33) and Weber Kettle
+# (01.01.34). Bucketing by grill_type alone collapsed every Huntsman into
+# the Weber Kettle count and gave the dashboard its "all Weber Kettle"
+# skew. ``classify_product`` in Python resolves the pair into the canonical
+# family label before the count lands in JSONB.
+#
+# ``DISTINCT ON`` picks the most recent (grill_type, firmware_version) the
+# device reported on that business_date, so a mid-day OTA doesn't double-
+# count the device across firmware buckets.
 MODEL_DISTRIBUTION_SQL = """\
-SELECT
-    (sample_timestamp AT TIME ZONE 'America/New_York')::date AS business_date,
-    COALESCE(grill_type, 'unknown')              AS model,
-    COUNT(DISTINCT device_id)                    AS device_count
-FROM telemetry_stream_events
-WHERE sample_timestamp IS NOT NULL
-  AND sample_timestamp >= %(cutoff)s
-GROUP BY 1, 2
-ORDER BY 1, 3 DESC;
+WITH latest_per_device_day AS (
+    SELECT DISTINCT ON (device_id, (sample_timestamp AT TIME ZONE 'America/New_York')::date)
+        device_id,
+        (sample_timestamp AT TIME ZONE 'America/New_York')::date AS business_date,
+        grill_type,
+        firmware_version
+    FROM telemetry_stream_events
+    WHERE sample_timestamp IS NOT NULL
+      AND sample_timestamp >= %(cutoff)s
+    ORDER BY device_id,
+             (sample_timestamp AT TIME ZONE 'America/New_York')::date,
+             sample_timestamp DESC
+)
+SELECT business_date, grill_type, firmware_version, COUNT(*) AS device_count
+FROM latest_per_device_day
+GROUP BY business_date, grill_type, firmware_version
+ORDER BY business_date, device_count DESC;
 """
 
 PEAK_HOUR_SQL = """\
@@ -240,6 +262,22 @@ def _build_distribution(rows: list[dict], date_key: str, value_key: str, label_k
     return result
 
 
+def _build_family_distribution(rows: list[dict]) -> dict[date, dict[str, int]]:
+    """Group (grill_type, firmware_version, device_count) rows into
+    {business_date: {product_family: device_count}}.
+
+    Each row has already been deduplicated to one (device_id, business_date)
+    pair upstream (see MODEL_DISTRIBUTION_SQL), so summing device_count
+    across a family bucket gives distinct-device counts per family.
+    """
+    result: dict[date, dict[str, int]] = {}
+    for row in rows:
+        family = classify_product(row.get("grill_type"), row.get("firmware_version"))
+        bucket = result.setdefault(row["business_date"], {})
+        bucket[family] = bucket.get(family, 0) + int(row["device_count"] or 0)
+    return result
+
+
 def _build_peak_hours(rows: list[dict]) -> dict[date, dict[str, int]]:
     """Group peak-hour rows into {business_date: {"HH": count}}."""
     result: dict[date, dict[str, int]] = {}
@@ -298,7 +336,7 @@ def main() -> int:
             return 0
 
         fw_dist = _build_distribution(fw_rows, "business_date", "device_count", "fw")
-        model_dist = _build_distribution(model_rows, "business_date", "device_count", "model")
+        model_dist = _build_family_distribution(model_rows)
         peak_hours = _build_peak_hours(peak_rows)
 
         # ------- Upsert each day -------

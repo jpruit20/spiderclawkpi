@@ -59,6 +59,7 @@ from app.services.cook_classification import (  # noqa: E402
     classify_temp_range,
     derive_sessions_from_rows,
 )
+from app.services.product_taxonomy import classify_product  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +403,16 @@ def read_day_events(path: Path) -> tuple[DayAgg, list[EventRow], dict[str, list[
             if e.get("err"): agg.error_events += 1
             if (r := e.get("r")) is not None:
                 agg.rssi_sum += r; agg.rssi_count += 1
-            if (f := e.get("f")): agg.firmware_counts[f] += 1
-            if (g := e.get("g")): agg.model_counts[g] += 1
+            # Bucket events into the canonical product-family taxonomy at
+            # ingest time. The raw grill_type field collapses Huntsman and
+            # Weber Kettle into one JOEHY string (W:K:22:1:V) and has to be
+            # reconciled against firmware_version via classify_product.
+            f_val = e.get("f")
+            g_val = e.get("g")
+            if f_val:
+                agg.firmware_counts[f_val] += 1
+            if g_val:
+                agg.model_counts[classify_product(g_val, f_val)] += 1
             if (tt := e.get("tt")) is not None and tt > 0:
                 agg.cook_temp_sum += tt; agg.cook_temp_count += 1
 
