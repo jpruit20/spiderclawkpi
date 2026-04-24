@@ -1095,6 +1095,93 @@ export const api = {
       `/api/ai/self-grade/${grade_id}/reject`,
       { method: 'POST' },
     ),
+
+  // ── Klaviyo (app→dashboard intermediary) ────────────────────────
+  klaviyoAppEngagement: (days: number = 30, signal?: AbortSignal) =>
+    request<KlaviyoAppEngagement>(`/api/klaviyo/app-engagement?days=${days}`, { signal }),
+  klaviyoAppProfileSummary: (signal?: AbortSignal) =>
+    request<KlaviyoAppProfileSummary>(`/api/klaviyo/app-profile-summary`, { signal }),
+  klaviyoProductOwnership: (signal?: AbortSignal) =>
+    request<KlaviyoProductOwnership>(`/api/klaviyo/product-ownership-breakdown`, { signal }),
+  klaviyoCustomerLookup: (
+    opts: { email?: string; external_id?: string; limit_events?: number },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.email) q.set('email', opts.email)
+    if (opts.external_id) q.set('external_id', opts.external_id)
+    if (opts.limit_events) q.set('limit_events', String(opts.limit_events))
+    return request<KlaviyoCustomerLookup>(`/api/klaviyo/customer-lookup?${q.toString()}`, { signal })
+  },
+  klaviyoSyncStatus: (signal?: AbortSignal) =>
+    request<KlaviyoSyncStatus>(`/api/klaviyo/sync-status`, { signal }),
+}
+
+export interface KlaviyoAppEngagement {
+  generated_at: string
+  window_days: number
+  dau: number
+  mau: number
+  stickiness_pct: number
+  latest_event_at: string | null
+  daily_unique_openers: Array<{ date: string; unique_profiles: number; events: number }>
+}
+
+export interface KlaviyoAppProfileSummary {
+  generated_at: string
+  app_profiles: number
+  active_30d: number
+  phone_os: Array<{ label: string; count: number; pct: number }>
+  phone_brand: Array<{ label: string; count: number; pct: number }>
+  app_version: Array<{ label: string; count: number; pct: number }>
+  device_types: Array<{ label: string; count: number; pct: number }>
+}
+
+export interface KlaviyoProductOwnership {
+  generated_at: string
+  total_profiles_with_ownership: number
+  breakdown: Array<{ ownership: string; count: number; pct: number }>
+}
+
+export interface KlaviyoCustomerLookup {
+  found: boolean
+  email?: string
+  external_id?: string
+  profile?: {
+    klaviyo_id: string
+    external_id: string | null
+    email: string | null
+    first_name: string | null
+    last_name: string | null
+    device_types: string[]
+    device_firmware_versions: string[]
+    product_ownership: string | null
+    phone_os: string | null
+    phone_model: string | null
+    phone_os_version: string | null
+    phone_brand: string | null
+    app_version: string | null
+    expected_next_order_date: string | null
+    klaviyo_created_at: string | null
+    klaviyo_updated_at: string | null
+    last_event_at: string | null
+  }
+  recent_events?: Array<{
+    metric: string
+    when: string
+    properties: Record<string, unknown>
+  }>
+}
+
+export interface KlaviyoSyncStatus {
+  generated_at: string
+  profiles_total: number
+  events_total: number
+  events_by_metric: Record<string, number>
+  latest_profile_updated_at: string | null
+  latest_event_at: string | null
+  profile_lag_minutes: number | null
+  event_lag_minutes: number | null
 }
 
 export type AIFeedbackArtifactType = 'ai_insight' | 'deci_draft' | 'issue_signal' | 'firmware_verdict'

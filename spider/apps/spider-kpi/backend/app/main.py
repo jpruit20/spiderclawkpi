@@ -25,6 +25,7 @@ from app.api.routes.firmware_deploy import router as firmware_deploy_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.email import router as email_router
 from app.api.routes.health import router as health_router
+from app.api.routes.klaviyo import router as klaviyo_router
 from app.api.routes.lore import router as lore_router
 from app.api.routes.marketing import router as marketing_router
 from app.api.routes.overview import router as overview_router
@@ -111,6 +112,7 @@ app.include_router(ecrs_router)
 app.include_router(executive_router)
 app.include_router(firmware_router)
 app.include_router(firmware_deploy_router)
+app.include_router(klaviyo_router)
 app.include_router(lore_router)
 app.include_router(marketing_router)
 app.include_router(slack_router)

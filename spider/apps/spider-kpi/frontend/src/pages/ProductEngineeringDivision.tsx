@@ -23,6 +23,7 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
+import { AppUsersCard } from '../components/AppUsersCard'
 import { LifetimeFleetCard } from '../components/LifetimeFleetCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { BaselineBand } from '../components/BaselineBand'
@@ -1020,6 +1021,12 @@ export function ProductEngineeringDivision() {
                   Replaces the 13k placeholder that used to live in
                   several places. */}
               <LifetimeFleetCard />
+
+              {/* App & Users — Klaviyo-backed app engagement, distinct
+                  from the Venom telemetry view above (which counts
+                  controllers phoning home; this counts actual app
+                  opens on a mobile device). */}
+              <AppUsersCard />
 
               {/* Visual gauge dashboard — glanceable fleet health.
                   Benchmarks: cook success 69% median (28-month baseline),
