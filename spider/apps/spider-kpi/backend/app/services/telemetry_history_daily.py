@@ -43,6 +43,7 @@ def get_telemetry_history_daily(
             'error_events': row.error_events,
             'firmware_distribution': row.firmware_distribution or {},
             'model_distribution': row.model_distribution or {},
+            'product_family_distribution': row.product_family_distribution or {},
             'avg_cook_temp': row.avg_cook_temp,
             'peak_hour_distribution': row.peak_hour_distribution or {},
             'session_count': row.session_count,
