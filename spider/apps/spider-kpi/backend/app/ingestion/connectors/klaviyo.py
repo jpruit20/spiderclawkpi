@@ -243,20 +243,24 @@ def _latest_event_dt_for_metric(db: Session, metric_name: str) -> Optional[datet
 
 def _metric_id_by_name(db: Session) -> dict[str, str]:
     """Resolve configured metric names to Klaviyo IDs. Cached per-call.
+
+    The ``/metrics`` endpoint does not accept a ``page[size]`` filter
+    (verified 2026-04-24 — it returns HTTP 400 "page_size is not a
+    valid field for the resource 'metric'"). Default page size is
+    small, so we follow the ``links.next`` cursor until the account's
+    metric list is exhausted. Typical accounts have fewer than 100
+    metrics, so this is 2-3 round trips.
     """
-    page = _get("/metrics", params={"page[size]": 200})
     out: dict[str, str] = {}
-    for row in page.get("data") or []:
-        attrs = row.get("attributes") or {}
-        out[attrs.get("name")] = row.get("id")
-    # Paginate if needed (rare — <100 metrics on typical accounts)
-    next_url = (page.get("links") or {}).get("next")
-    while next_url:
-        page = _get(next_url)
+    path_or_url: Optional[str] = "/metrics"
+    while path_or_url:
+        page = _get(path_or_url)
         for row in page.get("data") or []:
             attrs = row.get("attributes") or {}
-            out[attrs.get("name")] = row.get("id")
-        next_url = (page.get("links") or {}).get("next")
+            name = attrs.get("name")
+            if name:
+                out[name] = row.get("id")
+        path_or_url = (page.get("links") or {}).get("next")
     return out
 
 
