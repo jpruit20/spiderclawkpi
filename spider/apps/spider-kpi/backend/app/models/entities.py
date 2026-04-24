@@ -1556,6 +1556,70 @@ class FreshdeskCookCorrelation(TimestampMixin, Base):
     computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class KlaviyoProfile(TimestampMixin, Base):
+    """Mirror of a Klaviyo profile.
+
+    Populated by ``ingestion.connectors.klaviyo``. Agustin's app writes
+    per-user device state (``device_types``, ``device_firmware_versions``,
+    ``product_ownership``) plus phone platform context into Klaviyo on
+    every ``Opened App`` event; this table mirrors that so the dashboard
+    can join at the user level without punching a direct route between
+    the native app and the backend.
+    """
+    __tablename__ = "klaviyo_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    klaviyo_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(320), index=True)
+    phone_number: Mapped[Optional[str]] = mapped_column(String(32))
+    first_name: Mapped[Optional[str]] = mapped_column(String(128))
+    last_name: Mapped[Optional[str]] = mapped_column(String(128))
+
+    device_types: Mapped[list[str]] = mapped_column(ARRAY(String(64)), default=list, nullable=False)
+    device_firmware_versions: Mapped[list[str]] = mapped_column(ARRAY(String(32)), default=list, nullable=False)
+    product_ownership: Mapped[Optional[str]] = mapped_column(String(128))
+
+    phone_os: Mapped[Optional[str]] = mapped_column(String(16))
+    phone_model: Mapped[Optional[str]] = mapped_column(String(64))
+    phone_os_version: Mapped[Optional[str]] = mapped_column(String(32))
+    phone_brand: Mapped[Optional[str]] = mapped_column(String(64))
+    app_version: Mapped[Optional[str]] = mapped_column(String(32))
+    expected_next_order_date: Mapped[Optional[str]] = mapped_column(String(32))
+
+    raw_properties: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    klaviyo_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    klaviyo_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    last_event_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class KlaviyoEvent(TimestampMixin, Base):
+    """Mirror of a Klaviyo metric event (firehose).
+
+    Keyed by ``klaviyo_event_id``; sync is idempotent via
+    ``ON CONFLICT DO NOTHING``. Properties are stored as JSONB because
+    Klaviyo event schemas vary by metric (Opened App has app build +
+    device model; Placed Order has full Shopify line items).
+    """
+    __tablename__ = "klaviyo_events"
+    __table_args__ = (
+        Index("ix_klaviyo_events_metric_datetime", "metric_name", "event_datetime"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    klaviyo_event_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    metric_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    metric_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    klaviyo_profile_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(320), index=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    event_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    properties: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class AIFeedback(TimestampMixin, Base):
     """One reaction per (user, AI-generated artifact). Closes the loop on
     whether the dashboard's AI outputs actually landed.

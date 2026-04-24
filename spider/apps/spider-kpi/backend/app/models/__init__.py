@@ -45,6 +45,8 @@ from app.models.entities import (
     IssueSignal,
     KPIDaily,
     KPIIntraday,
+    KlaviyoEvent,
+    KlaviyoProfile,
     LoreEvent,
     NotificationSend,
     Recommendation,

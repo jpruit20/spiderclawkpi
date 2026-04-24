@@ -17,6 +17,7 @@ from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.clickup import sync_clickup
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import sync_ga4
+from app.ingestion.connectors.klaviyo import sync_klaviyo
 from app.ingestion.connectors.shopify import sync_shopify_orders
 from app.ingestion.connectors.slack import sync_slack
 from app.ingestion.connectors.triplewhale import sync_triplewhale
@@ -181,6 +182,24 @@ def run_syncs() -> None:
         )
         if slack_due and not _already_running(db, "slack"):
             any_success = _successful_result(sync_slack(db)) or any_success
+        # Klaviyo is the app-side intermediary (see connectors/klaviyo.py
+        # docstring). Cadence matches the configured poll interval —
+        # defaults to 60 min. First run after credentials land will
+        # scan back 30 days of Opened App / First Cooking Session
+        # events and profiles; subsequent runs are incremental.
+        latest_klaviyo_run = db.execute(
+            select(SourceSyncRun)
+            .where(SourceSyncRun.source_name == "klaviyo")
+            .order_by(desc(SourceSyncRun.started_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        klaviyo_due = (
+            latest_klaviyo_run is None
+            or latest_klaviyo_run.started_at is None
+            or latest_klaviyo_run.started_at <= datetime.now(timezone.utc) - timedelta(minutes=settings.klaviyo_sync_interval_minutes)
+        )
+        if klaviyo_due and not _already_running(db, "klaviyo"):
+            any_success = _successful_result(sync_klaviyo(db)) or any_success
         latest_youtube_run = db.execute(
             select(SourceSyncRun)
             .where(SourceSyncRun.source_name == "youtube")

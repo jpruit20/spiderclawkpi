@@ -32,6 +32,7 @@ SOURCE_TYPES = {
     "freshdesk": "connector",
     "aws_telemetry": "connector",
     "aws_telemetry_stream": "connector",
+    "klaviyo": "connector",
     "decision-engine": "compute",
 }
 

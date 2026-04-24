@@ -132,6 +132,22 @@ class Settings(BaseSettings):
     freshdesk_api_key: Optional[str] = None
     freshdesk_api_user: Optional[str] = None
 
+    # Klaviyo (Spider Grills account — public key XEp4CM). Agustin wires
+    # the native app to this account via the Klaviyo Mobile SDK; the
+    # dashboard reads it as an intermediary so we get user-level device
+    # ownership, app engagement, and Shopify line-item context keyed to
+    # profiles without punching a direct app→dashboard route.
+    klaviyo_api_key: Optional[str] = None
+    klaviyo_api_revision: str = "2024-10-15"
+    klaviyo_sync_interval_minutes: int = 60
+    # Metric names we pull events for. Profile properties carry the
+    # steady-state device/app info; this list is for time-series event
+    # ingest (used by DAU/MAU, first-cook lifecycle, and cross-referencing
+    # Shopify order items against telemetry).
+    klaviyo_event_metrics: list[str] = Field(
+        default_factory=lambda: ["Opened App", "First Cooking Session", "Placed Order"],
+    )
+
     # ClickUp (Spider Grills workspace)
     clickup_api_token: Optional[str] = None
     clickup_team_id: Optional[str] = None
