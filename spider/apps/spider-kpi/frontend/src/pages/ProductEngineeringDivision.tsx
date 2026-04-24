@@ -55,14 +55,26 @@ type SubView = 'fleet' | 'voice' | 'roadmap'
 /* ------------------------------------------------------------------ */
 /*  Model name mapping                                                */
 /* ------------------------------------------------------------------ */
+// Display-name map. With pickDistribution() preferring the pre-classified
+// product_family_distribution, the common keys are now the family names
+// ("Weber Kettle", "Huntsman", "Giant Huntsman", "Unknown") — those pass
+// through unchanged. The raw-grill_type legacy keys are still handled so
+// the fallback path on older rows still renders readable labels.
 const MODEL_NAME_MAP: Record<string, string> = {
-  'W:K:22:1:V': '22" Weber Kettle (Venom)',
-  'Kettle 22': '22" Weber Kettle (Venom)',
-  'kettle_22': '22" Weber Kettle (Venom)',
-  'Kettle22': '22" Weber Kettle (Venom)',
-  'W:K:22': '22" Weber Kettle',
+  'Weber Kettle': 'Weber Kettle',
   'Huntsman': 'Huntsman',
   'Giant Huntsman': 'Giant Huntsman',
+  'Unknown': 'Unknown',
+  // Legacy raw-grill_type fallback. Mapped to the product family they
+  // represent when product_family_distribution is not available.
+  // Note: W:K:22:1:V is ambiguous (both Huntsman and Weber Kettle ship
+  // with it), so we intentionally surface it by its raw name — if a
+  // chart still shows this, the row hasn't been backfilled yet.
+  'Kettle 22': 'Weber Kettle',
+  'kettle_22': 'Weber Kettle',
+  'Kettle22': 'Weber Kettle',
+  'W:K:22': 'Weber Kettle',
+  'W:K:22:1:V': 'JOEHY V1 (unclassified)',
 }
 
 function displayModelName(raw: string): string {
@@ -143,10 +155,19 @@ function buildPeakHours(historyRows: TelemetryHistoryDailyRow[]) {
   return Array.from({ length: 24 }, (_, i) => ({ hour: `${String(i).padStart(2, '0')}:00 ET`, events: etTotals[i] || 0 }))
 }
 
+/** Prefer the pre-classified product-family distribution; fall back to the
+ *  raw grill_type histogram only when the new field is missing or empty
+ *  (happens on legacy backfill rows that haven't been re-keyed yet). */
+function pickDistribution(row: TelemetryHistoryDailyRow): Record<string, number> {
+  const fam = row.product_family_distribution
+  if (fam && Object.keys(fam).length > 0) return fam
+  return row.model_distribution || {}
+}
+
 function buildModelBreakdown(historyRows: TelemetryHistoryDailyRow[]) {
   const totals: Record<string, number> = {}
   for (const row of historyRows) {
-    for (const [model, count] of Object.entries(row.model_distribution || {})) {
+    for (const [model, count] of Object.entries(pickDistribution(row))) {
       totals[model] = (totals[model] || 0) + (count as number)
     }
   }
@@ -161,7 +182,7 @@ function buildModelStackedSeries(historyRows: TelemetryHistoryDailyRow[]): { row
   if (!historyRows.length) return { rows: [], keys: [] }
   const totals: Record<string, number> = {}
   for (const row of historyRows) {
-    for (const [raw, count] of Object.entries(row.model_distribution || {})) {
+    for (const [raw, count] of Object.entries(pickDistribution(row))) {
       const name = displayModelName(raw)
       totals[name] = (totals[name] || 0) + (count as number)
     }
@@ -173,7 +194,7 @@ function buildModelStackedSeries(historyRows: TelemetryHistoryDailyRow[]): { row
     .map(([k]) => k)
   const rows = historyRows.map(row => {
     const perModel: Record<string, number> = {}
-    for (const [raw, count] of Object.entries(row.model_distribution || {})) {
+    for (const [raw, count] of Object.entries(pickDistribution(row))) {
       const name = displayModelName(raw)
       if (!keys.includes(name)) continue
       perModel[name] = (perModel[name] || 0) + (count as number)
@@ -1303,8 +1324,11 @@ export function ProductEngineeringDivision() {
                     </ResponsiveContainer>
                   </div>
                   <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
-                    Derived from <code>telemetry_history_daily.model_distribution</code>. Kettle22 / W:K:22:1:V / kettle_22 are merged under one display name.
-                    Areas are overlayed with 30% fill — legend toggle lets you isolate a single model.
+                    Derived from <code>telemetry_history_daily.product_family_distribution</code> — events classified by
+                    the shadow <code>heat.t2.max</code> factory value (700 → Huntsman, 550 → Weber Kettle) so JOEHY V1 devices
+                    on the shared <code>W:K:22:1:V</code> AWS model split correctly between families. Alpha/beta cohorts
+                    (01.01.9x) are held out.
+                    Areas are overlayed with 30% fill — legend toggle lets you isolate a single family.
                   </p>
                 </section>
               )}

@@ -857,6 +857,12 @@ class TelemetryHistoryDaily(TimestampMixin, Base):
     error_events: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     firmware_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     model_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Pre-classified product-family event counts. Populated alongside
+    # model_distribution by materialize_daily.py — this is what UI
+    # charts should key on because W:K:22:1:V (the JOEHY V1 AWS model)
+    # is split here by shadow heat.t2.max into Weber Kettle vs Huntsman
+    # rather than lumped together as in the raw grill_type histogram.
+    product_family_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     avg_cook_temp: Mapped[Optional[float]] = mapped_column(Float)
     peak_hour_distribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     # Cook analysis columns (materialized from derived sessions)

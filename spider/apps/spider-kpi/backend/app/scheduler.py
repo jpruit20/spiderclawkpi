@@ -288,6 +288,49 @@ def run_aggregate_cache_rebuild_job() -> None:
         db.close()
 
 
+def run_taxonomy_cache_warmer_job() -> None:
+    """Keep the product-taxonomy builders hot.
+
+    ``build_huntsman_device_ids``, ``build_t2_max_by_device``, and
+    ``build_test_cohort_device_ids`` each scan millions of rows on a
+    cold cache (measured 2026-04-24: 21 s, 16 s, 25 s respectively —
+    ~63 s combined), and every fleet/firmware/charcoal endpoint
+    depends on them. Without a warmer the 5-min TTL guarantees that
+    one unlucky request every five minutes eats the full cold path
+    and trips nginx's 60 s timeout (observed as
+    ``/api/fleet/size: Request timed out`` on the Product Engineering
+    page).
+
+    These return sets of device_ids (small; no leak risk like the
+    cohort burn pool), so we can safely refresh at a sub-TTL cadence.
+    Runs at boot +10 s and every 4 min.
+    """
+    db = SessionLocal()
+    try:
+        from app.services.product_taxonomy import (
+            build_huntsman_device_ids,
+            build_t2_max_by_device,
+            build_test_cohort_device_ids,
+        )
+        import time as _time
+        import logging as _log
+        log = _log.getLogger(__name__)
+        for label, fn in (
+            ("huntsman_device_ids", build_huntsman_device_ids),
+            ("t2_max_by_device", build_t2_max_by_device),
+            ("test_cohort_device_ids", build_test_cohort_device_ids),
+        ):
+            t0 = _time.monotonic()
+            try:
+                out = fn(db, force=True)
+                log.info("taxonomy warmer: %s refreshed in %.1fs (n=%s)", label, _time.monotonic() - t0, len(out))
+            except Exception:
+                log.exception("taxonomy warmer: %s refresh failed", label)
+                db.rollback()
+    finally:
+        db.close()
+
+
 def run_stream_session_builder_job() -> None:
     """Hourly: build TelemetrySession rows from live stream events.
 
@@ -480,6 +523,21 @@ def build_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
     scheduler.add_job(run_stream_session_builder_job, "interval", minutes=10, id="stream-session-builder", replace_existing=True, max_instances=1, coalesce=True)
+    # Taxonomy cache warmer — keeps the expensive huntsman_ids /
+    # t2_max_by_device / test_cohort_ids builders hot so
+    # fleet/firmware/charcoal endpoints never pay the full 60 s
+    # cold-cache path. Small memory footprint (sets of device_ids),
+    # so sub-TTL cadence is safe.
+    scheduler.add_job(
+        run_taxonomy_cache_warmer_job,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
+        id="taxonomy-cache-warmup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(run_taxonomy_cache_warmer_job, "interval", minutes=4, id="taxonomy-cache-refresh", replace_existing=True, max_instances=1, coalesce=True)
     # Tier 2 cache: rebuild every 15 min. The first run happens
     # ~15 min after boot; endpoints fall back to synchronous
     # build_if_missing before then so the first request on a fresh
