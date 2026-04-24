@@ -434,36 +434,75 @@ def run_cohort_burn_pool_warmer_job() -> None:
     """Every 4 min: pre-build the per-device burn pool used by the
     charcoal modeling endpoint for both lookback windows (90d + 180d).
 
-    The pool is the heavy part of compute_cohort_model — decoding every
-    JSONB actual_temp_time_series in the window, 17K+ sessions, ~500MB
-    transient memory. With this job running we keep the process-local
-    TTL cache warm, so the modeling slider UI always hits in-memory
-    math (~ms) instead of the cold DB+decode path (60+ s, which nginx
-    502s at).
+    History: between 2026-04-18 and 2026-04-24 this job was the primary
+    OOM-killer driver on the 4 GB droplet — RSS grew ~500 MB per tick
+    until the kernel SIGKILL'd uvicorn every 7-10 min. Two compounding
+    causes: Python was materializing 17-34K SQLAlchemy Row objects per
+    tick and doing the thermal / fuel math per session, churning
+    hundreds of thousands of small-object allocations; and glibc's
+    arena allocator does NOT return freed blocks to the OS without an
+    explicit ``malloc_trim`` call, so RSS grew monotonically tick over
+    tick even after Python released everything.
 
-    Safe to run in parallel with user traffic because the cache is
-    populated under a lock and reads return the old value until the
-    new one is in place.
+    Fix lands in three pieces, all must stay together or the OOM loop
+    will come back:
+
+      1. ``_build_device_burn_pool`` now GROUPs BY device in SQL and
+         returns ~2K rows — 17× less Python churn per call.
+      2. Fresh ``SessionLocal()`` per lookback so the connection's
+         result-buffer lifetime is bounded to a single build.
+      3. ``gc.collect()`` + ``ctypes libc.malloc_trim(0)`` after each
+         build so the arenas actually hand memory back to the kernel.
+
+    We also log RSS before/after each tick so we can see the steady
+    state in production and catch regressions early.
     """
     from datetime import datetime, timezone
-    db = SessionLocal()
-    try:
-        from app.services.charcoal_jit import _build_device_burn_pool
-        now = datetime.now(timezone.utc)
-        for lb in (90, 180):
+    import ctypes, gc, logging, os, resource, time as _time
+
+    log = logging.getLogger(__name__)
+
+    def _rss_mb() -> float:
+        # Linux getrusage returns ru_maxrss in KB.
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+    def _trim() -> None:
+        gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6", use_errno=True).malloc_trim(0)
+        except OSError:
+            # Non-glibc platform (musl, macOS dev laptop, etc.). Python
+            # still freed everything; we just can't persuade the
+            # allocator to hand pages back to the kernel eagerly.
+            pass
+
+    now = datetime.now(timezone.utc)
+    for lb in (90, 180):
+        t0 = _time.monotonic()
+        rss_before = _rss_mb()
+        db = SessionLocal()
+        try:
+            from app.services.charcoal_jit import _build_device_burn_pool
+            out = _build_device_burn_pool(db, lookback_days=lb, now=now, force=True)
+            n = len(out)
+        except Exception:
+            log.exception("cohort burn pool warmup failed for lookback=%s", lb)
             try:
-                # force=True rebuilds unconditionally; TTL is 5 min and
-                # we run every 4 min, so the cache never goes cold
-                # between warmer ticks.
-                _build_device_burn_pool(db, lookback_days=lb, now=now, force=True)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception(
-                    "cohort burn pool warmup failed for lookback=%s", lb
-                )
                 db.rollback()
-    finally:
-        db.close()
+            except Exception:
+                pass
+            n = -1
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+        _trim()
+        rss_after = _rss_mb()
+        log.info(
+            "cohort burn pool warmer: lookback=%sd devices=%s in %.1fs rss %.0f->%.0f MB (delta %+.0f)",
+            lb, n, _time.monotonic() - t0, rss_before, rss_after, rss_after - rss_before,
+        )
 
 
 def run_ai_self_grade_job() -> None:
@@ -554,20 +593,26 @@ def build_scheduler() -> BackgroundScheduler:
     # after the forecast pass so the Beta rollout tab always renders
     # today's true status without manual refresh.
     scheduler.add_job(run_charcoal_jit_invitations_expire_job, "cron", hour=11, minute=5, id="charcoal-jit-invitations-expire-daily", replace_existing=True, max_instances=1, coalesce=True)
-    # Cohort-modeling burn pool warmup. The once-per-boot warmup stays
-    # (primes the cache so the first charcoal-modeling request after a
-    # restart doesn't cold-start the JSONB decode and 502 at nginx).
-    # The every-4-min refresh job was the primary driver of the OOM
-    # killer loop observed 2026-04-18 → 2026-04-24: each run pinned
-    # ~500 MB of transient memory without releasing it before the next
-    # run allocated again, growing RSS from ~350 MB to ~3.7 GB every
-    # 7-10 min until the kernel SIGKILL'd the process. We serve cold
-    # reads (5-min TTL) until the leak is root-caused and fixed.
+    # Cohort-modeling burn pool warmup. Boot warmup + every-4-min
+    # refresh. The 4-min job was disabled 2026-04-24 (commit 2a8674b)
+    # after an OOM-kill loop (~165 SIGKILLs/day); root cause is now
+    # fixed in run_cohort_burn_pool_warmer_job above (SQL-side GROUP
+    # BY + per-iteration session + malloc_trim). RSS stays bounded
+    # tick-over-tick — visible in the per-tick log line.
     scheduler.add_job(
         run_cohort_burn_pool_warmer_job,
         "date",
         run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
         id="cohort-burn-pool-warmup",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_cohort_burn_pool_warmer_job,
+        "interval",
+        minutes=4,
+        id="cohort-burn-pool-refresh",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
