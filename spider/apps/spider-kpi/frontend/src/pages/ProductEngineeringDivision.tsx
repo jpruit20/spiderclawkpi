@@ -24,6 +24,7 @@ import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { AppUsersCard } from '../components/AppUsersCard'
+import { KlaviyoOwnershipBreakdownCard } from '../components/KlaviyoOwnershipBreakdownCard'
 import { LifetimeFleetCard } from '../components/LifetimeFleetCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { BaselineBand } from '../components/BaselineBand'
@@ -1027,6 +1028,13 @@ export function ProductEngineeringDivision() {
                   controllers phoning home; this counts actual app
                   opens on a mobile device). */}
               <AppUsersCard />
+
+              {/* Giant-Huntsman-aware ownership split, derived from
+                  Klaviyo Placed Order line-items. AWS-side telemetry
+                  can't differentiate Giant Huntsman from standard
+                  Huntsman; this card does, via Shopify product names
+                  mirrored into Klaviyo. */}
+              <KlaviyoOwnershipBreakdownCard />
 
               {/* Visual gauge dashboard — glanceable fleet health.
                   Benchmarks: cook success 69% median (28-month baseline),

@@ -28,6 +28,7 @@ import { CompareMode as Mode } from '../lib/compare'
 import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 import { DivisionHero } from '../components/DivisionHero'
+import { KlaviyoMarketingCard } from '../components/KlaviyoMarketingCard'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -603,6 +604,12 @@ export function MarketingDivision() {
       {!loading && !error ? (
         <>
           <TruthLegend />
+
+          {/* Klaviyo funnel — signup → install → first cook → order.
+              Surfaces the post-ingest mirror of the Klaviyo account,
+              so marketing can see the funnel without bouncing between
+              Klaviyo, Shopify, and the dashboard. */}
+          <KlaviyoMarketingCard />
 
           {/* ---- KPI tiles (car-dashboard style: big number, color state,
                  trend arrow, optional sparkline) ---- */}

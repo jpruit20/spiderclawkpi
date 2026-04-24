@@ -1115,6 +1115,20 @@ export const api = {
   },
   klaviyoSyncStatus: (signal?: AbortSignal) =>
     request<KlaviyoSyncStatus>(`/api/klaviyo/sync-status`, { signal }),
+  klaviyoMarketingOverview: (days: number = 30, signal?: AbortSignal) =>
+    request<KlaviyoMarketingOverview>(`/api/klaviyo/marketing-overview?days=${days}`, { signal }),
+}
+
+export interface KlaviyoMarketingOverview {
+  generated_at: string
+  window_days: number
+  total_profiles: number
+  app_profiles: number
+  app_install_rate_pct: number
+  signups: Array<{ date: string; count: number }>
+  first_cooks: Array<{ date: string; events: number; unique_profiles: number }>
+  orders: Array<{ date: string; events: number; unique_profiles: number }>
+  product_ownership: Array<{ ownership: string; count: number; pct: number }>
 }
 
 export interface KlaviyoAppEngagement {
@@ -1139,8 +1153,11 @@ export interface KlaviyoAppProfileSummary {
 
 export interface KlaviyoProductOwnership {
   generated_at: string
-  total_profiles_with_ownership: number
-  breakdown: Array<{ ownership: string; count: number; pct: number }>
+  tagged_ownership: {
+    total_profiles: number
+    breakdown: Array<{ ownership: string; count: number; pct: number }>
+  }
+  from_orders: Array<{ family: string; unique_profiles: number }>
 }
 
 export interface KlaviyoCustomerLookup {

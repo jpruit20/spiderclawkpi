@@ -9,6 +9,7 @@ import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
 import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
+import { KlaviyoCustomerLookupCard } from '../components/KlaviyoCustomerLookupCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { CXCutoverBanner } from '../components/CXCutoverBanner'
 import { DivisionHero } from '../components/DivisionHero'
@@ -739,6 +740,11 @@ export function CustomerExperienceDivision() {
             variant="compact"
             subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
           />
+
+          {/* Klaviyo customer lookup — paste an email to see their
+              grill, firmware, app recency, and recent events. Replaces
+              the Freshdesk→Klaviyo→Shopify copy/paste for triage. */}
+          <KlaviyoCustomerLookupCard />
 
           {/* Performance Metrics as a visual tile grid. Each tile is a
               car-gauge: big number, state color, 7-day trend arrow.

@@ -180,14 +180,21 @@ def app_profile_summary(
 def product_ownership_breakdown(
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    """Distribution of the Klaviyo ``Product Ownership`` label.
+    """Distribution of grill ownership derived from Klaviyo.
 
-    Complements the telemetry-side Kettle/Huntsman classification:
-    telemetry reflects the Venom controller's shadow; ownership
-    reflects what the user actually bought from Shopify, including
-    Giant Huntsman vs standard Huntsman splits that AWS can't see.
+    Two independent signals are reported so they can be reconciled:
+
+    * **tagged_ownership** — the Klaviyo ``Product Ownership`` label
+      that Klaviyo itself maintains (e.g. "Huntsman Owners"). Coarse,
+      doesn't split Giant Huntsman.
+
+    * **from_orders** — derived from ``Placed Order`` event line-items
+      (which mirror Shopify), so ``Giant Huntsman™`` and
+      ``HUNTSMAN - PRE ORDER`` variants get counted separately. This
+      is what the dashboard should trust when splitting Huntsman vs
+      Giant Huntsman, because AWS-side telemetry can't tell them apart.
     """
-    rows = db.execute(
+    tagged_rows = db.execute(
         select(
             KlaviyoProfile.product_ownership,
             func.count().label("n"),
@@ -196,14 +203,61 @@ def product_ownership_breakdown(
         .group_by(KlaviyoProfile.product_ownership)
         .order_by(func.count().desc())
     ).all()
-    total = sum(int(r.n) for r in rows) or 1
+    tagged_total = sum(int(r.n) for r in tagged_rows) or 1
+
+    # Derive per-family ownership from Placed Order event line-items.
+    # Each event's ``properties.Items`` is a list of product titles that
+    # match verbatim against Shopify product names. We count DISTINCT
+    # profiles (not orders) because one customer can have multiple
+    # orders of the same family.
+    # Product-title matchers (lowercased). Order matters: Giant
+    # Huntsman must be checked BEFORE Huntsman so the substring
+    # "huntsman" doesn't eat the giant-huntsman signal first.
+    family_rules = [
+        ("Giant Huntsman", ["giant huntsman"]),
+        ("Huntsman", ["the huntsman", "huntsman - pre order", " huntsman "]),
+        ("Kettle (Venom)", ["venom"]),
+        ("Webcraft", ["webcraft"]),
+    ]
+
+    # Pull the set of (profile_id, items_text) pairs for Placed Order
+    # events. Cast jsonb → text once so we can substring-match cheaply.
+    rows = db.execute(text("""
+        SELECT DISTINCT
+            klaviyo_profile_id,
+            LOWER(COALESCE(properties->>'Items', properties::text)) AS items_blob
+        FROM klaviyo_events
+        WHERE metric_name = 'Placed Order'
+          AND klaviyo_profile_id IS NOT NULL
+    """)).all()
+
+    per_family: dict[str, set[str]] = {name: set() for name, _ in family_rules}
+    for pid, blob in rows:
+        if not blob:
+            continue
+        for name, needles in family_rules:
+            if any(n in blob for n in needles):
+                per_family[name].add(pid)
+                # A profile that bought Giant Huntsman is NOT also
+                # bucketed under plain Huntsman — we want crisp counts.
+                if name == "Giant Huntsman":
+                    break
+
+    from_orders = [
+        {"family": name, "unique_profiles": len(per_family[name])}
+        for name, _ in family_rules
+    ]
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "total_profiles_with_ownership": total,
-        "breakdown": [
-            {"ownership": r.product_ownership, "count": int(r.n), "pct": round(int(r.n) / total * 100.0, 1)}
-            for r in rows
-        ],
+        "tagged_ownership": {
+            "total_profiles": tagged_total,
+            "breakdown": [
+                {"ownership": r.product_ownership, "count": int(r.n), "pct": round(int(r.n) / tagged_total * 100.0, 1)}
+                for r in tagged_rows
+            ],
+        },
+        "from_orders": from_orders,
     }
 
 
@@ -276,6 +330,102 @@ def customer_lookup(
                 "properties": e.properties or {},
             }
             for e in events
+        ],
+    }
+
+
+@router.get("/marketing-overview")
+def marketing_overview(
+    days: int = Query(30, ge=7, le=365),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Marketing-funnel view stitched from the mirrored Klaviyo data.
+
+    Four rollups built from ``klaviyo_profiles`` and ``klaviyo_events``:
+
+    * Signup timeseries — daily new profiles (``klaviyo_created_at``).
+    * First-cook timeseries — daily First Cooking Session events; the
+      downstream signal that installs are converting into real usage.
+    * App engagement (DAU/MAU carry-through from the engagement
+      endpoint) so the Marketing page has a standalone view.
+    * Product Ownership breakdown — who buys what, which informs
+      post-purchase flow performance.
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    signup_rows = db.execute(text("""
+        SELECT
+            (klaviyo_created_at AT TIME ZONE 'America/New_York')::date AS business_date,
+            COUNT(*) AS n
+        FROM klaviyo_profiles
+        WHERE klaviyo_created_at >= :since
+        GROUP BY 1 ORDER BY 1
+    """), {"since": since}).all()
+
+    first_cook_rows = db.execute(text("""
+        SELECT
+            (event_datetime AT TIME ZONE 'America/New_York')::date AS business_date,
+            COUNT(*) AS n,
+            COUNT(DISTINCT klaviyo_profile_id) AS unique_profiles
+        FROM klaviyo_events
+        WHERE metric_name = 'First Cooking Session'
+          AND event_datetime >= :since
+        GROUP BY 1 ORDER BY 1
+    """), {"since": since}).all()
+
+    order_rows = db.execute(text("""
+        SELECT
+            (event_datetime AT TIME ZONE 'America/New_York')::date AS business_date,
+            COUNT(*) AS n,
+            COUNT(DISTINCT klaviyo_profile_id) AS unique_profiles
+        FROM klaviyo_events
+        WHERE metric_name = 'Placed Order'
+          AND event_datetime >= :since
+        GROUP BY 1 ORDER BY 1
+    """), {"since": since}).all()
+
+    ownership_rows = db.execute(
+        select(
+            KlaviyoProfile.product_ownership,
+            func.count().label("n"),
+        )
+        .where(KlaviyoProfile.product_ownership.isnot(None))
+        .group_by(KlaviyoProfile.product_ownership)
+        .order_by(func.count().desc())
+    ).all()
+    ownership_total = sum(int(r.n) for r in ownership_rows) or 1
+
+    total_profiles = db.execute(select(func.count()).select_from(KlaviyoProfile)).scalar() or 0
+    total_app_profiles = db.execute(
+        select(func.count()).select_from(KlaviyoProfile).where(
+            (KlaviyoProfile.app_version.isnot(None))
+            | (KlaviyoProfile.phone_os.isnot(None))
+            | (func.array_length(KlaviyoProfile.device_types, 1).isnot(None))
+        )
+    ).scalar() or 0
+
+    return {
+        "generated_at": now.isoformat(),
+        "window_days": days,
+        "total_profiles": int(total_profiles),
+        "app_profiles": int(total_app_profiles),
+        "app_install_rate_pct": round(int(total_app_profiles) / int(total_profiles) * 100.0, 1) if total_profiles else 0.0,
+        "signups": [
+            {"date": r.business_date.isoformat(), "count": int(r.n)}
+            for r in signup_rows
+        ],
+        "first_cooks": [
+            {"date": r.business_date.isoformat(), "events": int(r.n), "unique_profiles": int(r.unique_profiles or 0)}
+            for r in first_cook_rows
+        ],
+        "orders": [
+            {"date": r.business_date.isoformat(), "events": int(r.n), "unique_profiles": int(r.unique_profiles or 0)}
+            for r in order_rows
+        ],
+        "product_ownership": [
+            {"ownership": r.product_ownership, "count": int(r.n), "pct": round(int(r.n) / ownership_total * 100.0, 1)}
+            for r in ownership_rows
         ],
     }
 
