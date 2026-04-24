@@ -50,6 +50,14 @@ class AuthUser(TimestampMixin, Base):
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    # 'admin' | 'editor' | 'viewer'. See app.services.access_control for
+    # the canonical role set and how they're used.
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default='viewer', index=True)
+    # Optional route-prefix allowlist. ``None`` = the role's default scope
+    # (admin/editor see everything; viewer sees everything viewer-safe).
+    # A list like ``["/division/product-engineering"]`` restricts the
+    # account to routes whose pathname starts with one of those prefixes.
+    page_scope: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
 
 

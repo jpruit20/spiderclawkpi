@@ -2,6 +2,13 @@ export interface AuthUserSummary {
   id: string
   email: string
   is_admin: boolean
+  /** 'admin' | 'editor' | 'viewer'. Older backends may omit this; treat
+   *  missing as editor (the pre-role default for domain-allowed users). */
+  role?: 'admin' | 'editor' | 'viewer'
+  /** Optional route-prefix allowlist. null/undefined = no restriction.
+   *  Example: ['/division/product-engineering'] locks the account to
+   *  routes whose pathname starts with that prefix. */
+  page_scope?: string[] | null
   ai_divisions?: string[]
   ai_enabled?: boolean
 }

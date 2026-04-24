@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '../components/AuthGate'
+import { isViewer } from '../lib/access'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
@@ -344,6 +346,11 @@ function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; 
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 export function ProductEngineeringDivision() {
+  // Viewer accounts (e.g. external collaborators) only see Fleet Health.
+  // Voice of Customer and Innovation Radar surface internal ticket data
+  // + market signals that shouldn't be outside the company.
+  const { user } = useAuth()
+  const viewerOnly = isViewer(user)
   const [view, setView] = useState<SubView>('fleet')
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [githubIssues, setGithubIssues] = useState<GithubIssuesResponse | null>(null)
@@ -780,11 +787,14 @@ export function ProductEngineeringDivision() {
             rightMeta={
               <>
                 <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2 }}>
-                  {([
-                    { key: 'fleet' as SubView, label: 'Fleet Health' },
-                    { key: 'voice' as SubView, label: 'Voice of Customer' },
-                    { key: 'roadmap' as SubView, label: 'Innovation Radar' },
-                  ]).map(tab => (
+                  {(viewerOnly
+                    ? [{ key: 'fleet' as SubView, label: 'Fleet Health' }]
+                    : [
+                        { key: 'fleet' as SubView, label: 'Fleet Health' },
+                        { key: 'voice' as SubView, label: 'Voice of Customer' },
+                        { key: 'roadmap' as SubView, label: 'Innovation Radar' },
+                      ]
+                  ).map(tab => (
                     <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
                   ))}
                   <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>

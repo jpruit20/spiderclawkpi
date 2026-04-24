@@ -1,8 +1,9 @@
 import { Suspense, lazy } from 'react'
-import { Navigate, Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthGate, useAuth } from './components/AuthGate'
+import { defaultAllowedPath, pathInScope } from './lib/access'
 
 const LORE_LEDGER_OWNER_EMAIL = 'joseph@spidergrills.com'
 
@@ -10,6 +11,22 @@ function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   if ((user?.email ?? '').toLowerCase() !== LORE_LEDGER_OWNER_EMAIL) {
     return <Navigate to="/" replace />
+  }
+  return <>{children}</>
+}
+
+/**
+ * Redirect any route outside the current user's page_scope back to the
+ * first page they're allowed to see. Admins/editors with null scope
+ * pass through unchanged. Invited viewers with a scope list
+ * (e.g. /division/product-engineering) can't navigate anywhere else,
+ * even by pasting a URL.
+ */
+function ScopeGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  const { pathname } = useLocation()
+  if (!pathInScope(user, pathname)) {
+    return <Navigate to={defaultAllowedPath(user)} replace />
   }
   return <>{children}</>
 }
@@ -47,6 +64,7 @@ export function App() {
   return (
     <AuthGate>
       <Layout>
+        <ScopeGuard>
         <Routes>
         <Route path="/" element={withBoundary('Command Center', <CommandCenter />)} />
         <Route path="/division/customer-experience" element={withBoundary('Customer Experience Division', <CustomerExperienceDivision />)} />
@@ -79,6 +97,7 @@ export function App() {
         <Route path="/analysis/firmware-model" element={withBoundary('Firmware Model Analysis', <TelemetryAnalysisPage />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </ScopeGuard>
       </Layout>
     </AuthGate>
   )

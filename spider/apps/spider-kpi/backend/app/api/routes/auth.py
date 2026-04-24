@@ -16,6 +16,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import AuthUser, AuthVerificationChallenge
+from app.services.access_control import (
+    default_page_scope_for_new_user,
+    default_role_for_new_user,
+    email_allowed_to_signup,
+)
 from app.services.auth import (
     email_domain_allowed,
     extract_email_domain,
@@ -117,6 +122,7 @@ def _session_payload(user: AuthUser, expires_at: int) -> dict[str, Any]:
         "sub": user.id,
         "email": user.email,
         "is_admin": bool(user.is_admin),
+        "role": getattr(user, "role", None) or ("admin" if user.is_admin else "editor"),
         "exp": expires_at,
     }
 
@@ -126,12 +132,23 @@ def serialize_user(user: AuthUser | None) -> dict[str, Any] | None:
         return None
     from app.services.ai_scoping import get_user_divisions
     ai_divisions = get_user_divisions(user.email, bool(user.is_admin))
+    role = getattr(user, "role", None) or ("admin" if user.is_admin else "editor")
+    page_scope = getattr(user, "page_scope", None) or None
+    # Viewers don't get AI-assistant access — the chat surface is an edit
+    # affordance (posts to the backend) and there's no read-only version.
+    ai_enabled = bool(
+        getattr(settings, "ai_assistant_enabled", False)
+        and ai_divisions
+        and role != "viewer"
+    )
     return {
         "id": user.id,
         "email": user.email,
         "is_admin": bool(user.is_admin),
+        "role": role,
+        "page_scope": page_scope,
         "ai_divisions": ai_divisions,
-        "ai_enabled": bool(getattr(settings, "ai_assistant_enabled", False) and ai_divisions),
+        "ai_enabled": ai_enabled,
     }
 
 
@@ -233,8 +250,9 @@ def auth_signup(payload: SignupRequest, request: Request, db: Session = Depends(
     email = _validated_email(payload.email)
     _guard_rate_limit(request, email)
 
-    # Domain restriction
-    if not email_domain_allowed(email, settings.allowed_signup_domains):
+    # Domain restriction — with an explicit per-email invite override for
+    # external collaborators listed in INVITED_USERS (access_control.py).
+    if not email_allowed_to_signup(email, settings.allowed_signup_domains):
         _record_failed_attempt(request, email)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -259,15 +277,23 @@ def auth_signup(payload: SignupRequest, request: Request, db: Session = Depends(
         _clear_failed_attempts(request, email)
         return {"ok": True, "detail": "If that email is eligible, a verification link has been sent. Check your inbox."}
 
-    # Create new user (unverified)
+    # Create new user (unverified). First-ever account boots as admin;
+    # everyone else gets their role + page_scope from access_control
+    # (invited externals → viewer with scope; domain-allowed teammates →
+    # editor with no scope restriction).
     user_count = int(db.execute(select(func.count()).select_from(AuthUser)).scalar() or 0)
+    is_first_user = (user_count == 0)
+    role = default_role_for_new_user(email, is_first_user=is_first_user)
+    page_scope = default_page_scope_for_new_user(email)
     user = AuthUser(
         email=email,
         email_domain=extract_email_domain(email),
         password_hash=hash_password(payload.password),
         email_verified=False,
         is_active=True,
-        is_admin=(user_count == 0),
+        is_admin=is_first_user,
+        role=role,
+        page_scope=page_scope,
     )
     db.add(user)
     db.commit()
