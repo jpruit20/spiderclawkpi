@@ -930,7 +930,7 @@ def fleet_control_health(
     sort: str = Query("gap_abs", pattern="^(gap_abs|gap|target|intensity|firmware|sample_ts|state|cook_elapsed|product)$"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     state: Optional[str] = Query(None),
-    product: Optional[str] = Query(None, description="Filter by product family: 'Weber Kettle', 'Huntsman', 'Unknown' (Giant Huntsman is currently folded into Huntsman)"),
+    product: Optional[str] = Query(None, description="Filter by product family: 'Kettle', 'Huntsman', 'Unknown' (Giant Huntsman is currently folded into Huntsman)"),
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=1, le=100),
     db: Session = Depends(db_session),

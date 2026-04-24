@@ -371,7 +371,7 @@ def backfill_legacy_product_family(conn, family_map: dict[str, str], test_cohort
     # the device_family_map. Only JOEHY V1 devices count; V2 devices
     # already report their family directly in grill_type so don't
     # feed into the ratio.
-    joehy_families = [f for did, f in family_map.items() if f in ("Huntsman", "Weber Kettle")]
+    joehy_families = [f for did, f in family_map.items() if f in ("Huntsman", "Kettle")]
     total_joehy = len(joehy_families) or 1
     huntsman_ratio = joehy_families.count("Huntsman") / total_joehy
     print(
@@ -414,13 +414,13 @@ def backfill_legacy_product_family(conn, family_map: dict[str, str], test_cohort
                 elif lower in ("giant huntsman", "giant_huntsman"):
                     family = "Huntsman"  # consolidated for now
                 elif lower in ("kettle", "kettle22"):
-                    family = "Weber Kettle"
+                    family = "Kettle"
                 elif raw_model == JOEHY_MODEL:
                     # Split using current fleet ratio.
                     hunts = round(count * huntsman_ratio)
                     kettle = count - hunts
                     family_counts["Huntsman"] = family_counts.get("Huntsman", 0) + hunts
-                    family_counts["Weber Kettle"] = family_counts.get("Weber Kettle", 0) + kettle
+                    family_counts["Kettle"] = family_counts.get("Kettle", 0) + kettle
                     continue
                 else:
                     family = FAMILY_UNKNOWN

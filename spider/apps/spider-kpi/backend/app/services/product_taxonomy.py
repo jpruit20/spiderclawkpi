@@ -81,7 +81,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-FAMILY_WEBER_KETTLE = "Weber Kettle"
+# 2026-04-24: Joseph confirmed the canonical taxonomy is three grill
+# types — Kettle, Huntsman, Giant Huntsman — with no "Weber" prefix
+# (trademark avoidance) and no raw AWS model strings surfacing in the
+# UI. The constant name keeps ``FAMILY_WEBER_KETTLE`` for call-site
+# stability across the codebase, but the emitted string is "Kettle".
+FAMILY_WEBER_KETTLE = "Kettle"
 FAMILY_HUNTSMAN = "Huntsman"
 FAMILY_GIANT_HUNTSMAN = "Giant Huntsman"
 FAMILY_UNKNOWN = "Unknown"

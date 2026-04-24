@@ -1073,7 +1073,7 @@ function OverviewTab() {
               ) : null}
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-              Classified via <code>heat.t2.max</code> shadow (700 = Huntsman, 550 = Weber Kettle — the factory-wired high-temp ceiling),{' '}
+              Classified via <code>heat.t2.max</code> shadow (700 = Huntsman, 550 = Kettle — the factory-wired high-temp ceiling),{' '}
               falling back to firmware history for devices missing the signal. Giant Huntsman is currently folded into Huntsman until the app integration gives us a differentiable signal.
               {metrics.include_testers ? (
                 <> Alpha/beta-cohort devices (01.01.9x + manually-enrolled testers) are <strong>included</strong> on this page.</>

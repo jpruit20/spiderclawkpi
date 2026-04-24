@@ -1440,7 +1440,7 @@ function EnrollmentTab() {
    into Spider Grills' margin math here.
    ═══════════════════════════════════════════════════════════════════ */
 
-const FAMILY_OPTIONS = ['Weber Kettle', 'Huntsman', 'Unknown'] as const
+const FAMILY_OPTIONS = ['Kettle', 'Huntsman', 'Unknown'] as const
 const HORIZON_OPTIONS = [6, 12, 24] as const
 const LOOKBACK_OPTIONS = [30, 60, 90, 180] as const
 // Percentile floors for targeting heavy users. 0 = target all eligible devices;
@@ -1915,7 +1915,7 @@ function ModelingResult({ result }: { result: CharcoalCohortModelResponse }) {
    BETA ROLLOUT TAB — invitation batches (M1)
    ═══════════════════════════════════════════════════════════════════ */
 
-const BETA_FAMILY_OPTIONS = ['Weber Kettle', 'Huntsman', 'Unknown'] as const
+const BETA_FAMILY_OPTIONS = ['Kettle', 'Huntsman', 'Unknown'] as const
 const BETA_LOOKBACK_OPTIONS = [30, 60, 90, 180] as const
 const BETA_PERCENTILE_OPTIONS = [0, 50, 75, 90] as const
 const BETA_PERCENTILE_LABELS: Record<number, string> = {

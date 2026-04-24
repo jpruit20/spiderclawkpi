@@ -25,14 +25,14 @@ import { fmtInt } from '../lib/format'
  */
 
 const FAMILIES: Array<keyof FleetFamilyBreakdown> = [
-  'Weber Kettle',
+  'Kettle',
   'Huntsman',
   'Giant Huntsman',
   'Unknown',
 ]
 
 const FAMILY_COLORS: Record<string, string> = {
-  'Weber Kettle': '#6ea8ff',
+  'Kettle': '#6ea8ff',
   'Huntsman': '#ffb257',
   'Giant Huntsman': '#ec4899',
   'Unknown': '#9fb0d4',
@@ -63,7 +63,7 @@ export function LifetimeFleetCard() {
       ? { total: lifetime.shopify_units.total, by_family: lifetime.shopify_units.by_family, note: lifetime.shopify_units.note, unavailable: false }
       : { total: lifetime.amazon_units.total, by_family: lifetime.amazon_units.by_family, note: lifetime.amazon_units.note, unavailable: lifetime.amazon_units.total === null }
 
-  const sourceBy = sourceData.by_family || { 'Weber Kettle': 0, 'Huntsman': 0, 'Giant Huntsman': 0, 'Unknown': 0 }
+  const sourceBy = sourceData.by_family || { 'Kettle': 0, 'Huntsman': 0, 'Giant Huntsman': 0, 'Unknown': 0 }
   const activeBy = size.active_24mo.by_family
 
   return (
@@ -167,7 +167,7 @@ export function LifetimeFleetCard() {
                 const life = sourceData.unavailable ? 0 : (sourceBy[fam] ?? 0)
                 const aws = lifetime.aws_registered.by_family[fam] ?? 0
                 // Always keep the core three; only hide when truly empty.
-                if (fam === 'Weber Kettle' || fam === 'Huntsman' || fam === 'Unknown') return true
+                if (fam === 'Kettle' || fam === 'Huntsman' || fam === 'Giant Huntsman' || fam === 'Unknown') return true
                 return act + life + aws > 0
               })
               .map(fam => {

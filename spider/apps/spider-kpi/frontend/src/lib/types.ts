@@ -407,10 +407,10 @@ export interface TelemetryHistoryDailyRow {
   error_events: number
   firmware_distribution: Record<string, number>
   model_distribution: Record<string, number>
-  /** Pre-classified event counts by product family ("Weber Kettle", "Huntsman",
+  /** Pre-classified event counts by product family ("Kettle", "Huntsman",
    *  "Giant Huntsman", "Unknown"). This is what charts should key on —
    *  model_distribution lumps W:K:22:1:V across 1,800+ JOEHY V1 devices (both
-   *  Huntsman and Weber Kettle hardware) because AWS can't tell them apart;
+   *  Huntsman and Kettle hardware) because AWS can't tell them apart;
    *  product_family_distribution splits them using the factory-wired
    *  heat.t2.max shadow value. Legacy rows (pre-2026-04-09) back-filled by
    *  re-keying model_distribution through the fleet-wide current ratio. */

@@ -40,7 +40,7 @@ export const DEFAULT_FUEL_ENERGY: FuelEnergy = {
  * convective losses through the vents, and exhaust stack account for
  * the rest.
  *
- *   Weber Kettle:  ~0.55–0.65 depending on vent discipline
+ *   Kettle:        ~0.55–0.65 depending on vent discipline
  *   Ceramic kamado: 0.75–0.85 (insulation, sealed combustion)
  *   Offset smoker:  0.40–0.55 (leaky, long stack run)
  *

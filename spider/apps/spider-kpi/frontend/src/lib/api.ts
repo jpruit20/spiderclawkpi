@@ -1758,7 +1758,7 @@ export interface CharcoalFleetFilters {
 }
 
 export interface FleetFamilyBreakdown {
-  'Weber Kettle': number
+  'Kettle': number
   'Huntsman': number
   'Giant Huntsman': number
   'Unknown': number

@@ -55,26 +55,28 @@ type SubView = 'fleet' | 'voice' | 'roadmap'
 /* ------------------------------------------------------------------ */
 /*  Model name mapping                                                */
 /* ------------------------------------------------------------------ */
-// Display-name map. With pickDistribution() preferring the pre-classified
-// product_family_distribution, the common keys are now the family names
-// ("Weber Kettle", "Huntsman", "Giant Huntsman", "Unknown") — those pass
-// through unchanged. The raw-grill_type legacy keys are still handled so
-// the fallback path on older rows still renders readable labels.
+// Display-name map. The canonical taxonomy is three grill types —
+// Kettle, Huntsman, Giant Huntsman — with "Unknown" for anything that
+// can't be classified. pickDistribution() prefers the pre-classified
+// product_family_distribution (emitted with these exact family names),
+// so in steady state the raw-grill_type legacy keys below are never
+// hit. They exist purely to catch fallback reads from old rows that
+// haven't been backfilled yet — all collapse to the canonical label.
 const MODEL_NAME_MAP: Record<string, string> = {
-  'Weber Kettle': 'Weber Kettle',
+  'Kettle': 'Kettle',
   'Huntsman': 'Huntsman',
   'Giant Huntsman': 'Giant Huntsman',
   'Unknown': 'Unknown',
-  // Legacy raw-grill_type fallback. Mapped to the product family they
-  // represent when product_family_distribution is not available.
-  // Note: W:K:22:1:V is ambiguous (both Huntsman and Weber Kettle ship
-  // with it), so we intentionally surface it by its raw name — if a
-  // chart still shows this, the row hasn't been backfilled yet.
-  'Kettle 22': 'Weber Kettle',
-  'kettle_22': 'Weber Kettle',
-  'Kettle22': 'Weber Kettle',
-  'W:K:22': 'Weber Kettle',
-  'W:K:22:1:V': 'JOEHY V1 (unclassified)',
+  // Back-compat: rows written under the old "Weber Kettle" label still
+  // render correctly after the 2026-04-24 rename.
+  'Weber Kettle': 'Kettle',
+  // Legacy raw-grill_type fallback — collapses to Kettle by default so
+  // charts never surface raw AWS model strings.
+  'Kettle 22': 'Kettle',
+  'kettle_22': 'Kettle',
+  'Kettle22': 'Kettle',
+  'W:K:22': 'Kettle',
+  'W:K:22:1:V': 'Kettle',
 }
 
 function displayModelName(raw: string): string {
@@ -1325,9 +1327,8 @@ export function ProductEngineeringDivision() {
                   </div>
                   <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
                     Derived from <code>telemetry_history_daily.product_family_distribution</code> — events classified by
-                    the shadow <code>heat.t2.max</code> factory value (700 → Huntsman, 550 → Weber Kettle) so JOEHY V1 devices
-                    on the shared <code>W:K:22:1:V</code> AWS model split correctly between families. Alpha/beta cohorts
-                    (01.01.9x) are held out.
+                    the shadow <code>heat.t2.max</code> factory value (700 → Huntsman, 550 → Kettle), which is the
+                    source of truth for grill type. Alpha/beta cohorts (01.01.9x) are held out.
                     Areas are overlayed with 30% fill — legend toggle lets you isolate a single family.
                   </p>
                 </section>
