@@ -352,6 +352,7 @@ export function ProductEngineeringDivision() {
   const [cxSnapshot, setCxSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [appSide, setAppSide] = useState<AppSideFleetResponse | null>(null)
   const [fleetSize, setFleetSize] = useState<import('../lib/api').FleetSizeResponse | null>(null)
+  const [fleetLifetime, setFleetLifetime] = useState<import('../lib/api').FleetLifetimeResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -445,7 +446,7 @@ export function ProductEngineeringDivision() {
       setLoading(true)
       setError(null)
       try {
-        const [telData, issuesData, radarData, miData, cxData, appSideData, fleetData] = await Promise.all([
+        const [telData, issuesData, radarData, miData, cxData, appSideData, fleetData, lifetimeData] = await Promise.all([
           api.telemetrySummary(daysDiff, ctrl.signal, debouncedStart, debouncedEnd),
           api.engineeringIssues(ctrl.signal).catch(() => null),
           api.issues(ctrl.signal).catch(() => null),
@@ -453,6 +454,7 @@ export function ProductEngineeringDivision() {
           api.cxSnapshot(ctrl.signal).catch(() => null),
           api.appSideFleet(daysDiff, ctrl.signal, debouncedStart, debouncedEnd).catch(() => null),
           api.fleetSize(ctrl.signal).catch(() => null),
+          api.fleetLifetime(ctrl.signal).catch(() => null),
         ])
         if (!ctrl.signal.aborted) {
           setTelemetry(telData)
@@ -462,6 +464,7 @@ export function ProductEngineeringDivision() {
           setCxSnapshot(cxData)
           setAppSide(appSideData)
           setFleetSize(fleetData)
+          setFleetLifetime(lifetimeData)
         }
       } catch (err) {
         if (!ctrl.signal.aborted) setError(err instanceof ApiError ? err.message : 'Failed to load product data')
@@ -611,10 +614,15 @@ export function ProductEngineeringDivision() {
   // reference, not as the headline number.
   const probeFailureCount = probeFailure?.probe_failure_count ?? null
   const probeActiveDevices = probeFailure?.active_devices_in_window ?? 0
-  // Canonical: live 24-month active-fleet count from /api/fleet/size.
-  // Falls back to the executive payload's self-reported number, then
-  // (only if neither is loaded yet) to 0 — the UI should treat 0 as
-  // "loading" and show dashes, never the stale 13k placeholder.
+  // Canonical: lifetime AWS-registered fleet count from /api/fleet/lifetime
+  // — unique devices that have EVER phoned home. This is the "installed"
+  // denominator for the hero gauge ("of every deployed unit, how many are
+  // reporting right now?"). The previous 24-month rolling number
+  // undercounted older devices; the 13k placeholder was pure guess.
+  // /api/fleet/size.active_24mo still drives the cohort-normalization on
+  // the probe-failure panel below — that one wants an "active-window"
+  // denominator, not lifetime.
+  const installedBaseLifetime = fleetLifetime?.aws_registered.total ?? null
   const probeInstalledBase = fleetSize?.active_24mo.total
     ?? probeFailure?.installed_base_venoms
     ?? 0
@@ -736,10 +744,17 @@ export function ProductEngineeringDivision() {
           fingerprint; a user recognizes Product Engineering from the
           nested rings alone. */}
       {(() => {
-        const installedBase = probeInstalledBase || 13000
+        // Lifetime AWS-registered count is the "Installed" number — every
+        // unit ever provisioned. `null` while /api/fleet/lifetime is still
+        // loading (or unreachable); the gauge renders "—" in that case
+        // rather than inventing a 13k placeholder. Ring progress ratios
+        // fall back to 0 when the denominator isn't known yet, which
+        // renders the rings dormant until real data arrives.
+        const installedBase = installedBaseLifetime
+        const installedBaseForRings = installedBase ?? 0
         const devicesHeadline = devicesReporting || activeCooks
-        const ring24hProgress = installedBase > 0 ? devices24h / installedBase : 0
-        const ringNowProgress = installedBase > 0 ? activeCooks / installedBase : 0
+        const ring24hProgress = installedBaseForRings > 0 ? devices24h / installedBaseForRings : 0
+        const ringNowProgress = installedBaseForRings > 0 ? activeCooks / installedBaseForRings : 0
         const stabilityState: 'good' | 'warn' | 'bad' | 'neutral' =
           stabilityScore == null ? 'neutral'
           : stabilityScore >= 0.85 ? 'good'
@@ -797,7 +812,7 @@ export function ProductEngineeringDivision() {
               progressSecondary: Math.min(1, ring24hProgress),
               progressInner: Math.min(1, ringNowProgress),
               layers: [
-                { label: 'Installed', value: fmtInt(installedBase) },
+                { label: 'Installed', value: installedBase != null ? fmtInt(installedBase) : '—' },
                 { label: 'Reporting 24h', value: fmtInt(devices24h) },
                 { label: 'Cooking now', value: fmtInt(activeCooks) },
               ],
