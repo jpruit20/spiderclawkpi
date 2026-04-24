@@ -208,6 +208,11 @@ export function LifetimeFleetCard() {
         <strong>Why the sources disagree:</strong> a buyer can purchase a grill and never provision it (Shopify sees the sale, AWS never sees the device);
         conversely an original owner can re-pair the grill with a new user account and AWS registers two separate <code>device_id</code> hashes for one physical unit.
         Dormant = registered lifetime on AWS but no telemetry in the last 24 months — these devices exist but aren't being used.
+        {size.test_cohort && size.test_cohort.total > 0 ? (
+          <>
+            {' '}<strong>{fmtInt(size.test_cohort.total)}</strong> alpha/beta tester devices are held out of the active-24mo figures above and surfaced in the Firmware section instead — keeping experimental firmware builds from skewing general-fleet metrics.
+          </>
+        ) : null}
       </div>
     </section>
   )

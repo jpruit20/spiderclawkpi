@@ -462,9 +462,24 @@ def build_scheduler() -> BackgroundScheduler:
     # what's actually important this week (active DECI decisions,
     # recent incidents, 28-day KPI momentum).
     scheduler.add_job(run_weekly_gauge_selection_job, "cron", day_of_week="mon", hour=10, minute=0, id="weekly-gauge-selection", replace_existing=True, max_instances=1, coalesce=True)
-    # Hourly stream-based session builder. Fills the gap left by the
-    # dead DynamoDB scan path; runs in place of the stalled connector.
-    scheduler.add_job(run_stream_session_builder_job, "interval", minutes=60, id="stream-session-builder", replace_existing=True, max_instances=1, coalesce=True)
+    # Stream-based session builder. Fills the gap left by the dead
+    # DynamoDB scan path. Fires 30 s after boot (so fresh processes get
+    # at least one tick even if they get OOM-killed before the first
+    # interval elapses) then every 10 min — the short interval is a
+    # hedge against the process instability that kept stalling the old
+    # 60-min cadence between 2026-04-18 and 2026-04-24. The builder is
+    # idempotent (ON CONFLICT on source_event_id) so running it this
+    # often costs a cheap DISTINCT-device scan most of the time.
+    scheduler.add_job(
+        run_stream_session_builder_job,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=30),
+        id="stream-session-builder-boot",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(run_stream_session_builder_job, "interval", minutes=10, id="stream-session-builder", replace_existing=True, max_instances=1, coalesce=True)
     # Tier 2 cache: rebuild every 15 min. The first run happens
     # ~15 min after boot; endpoints fall back to synchronous
     # build_if_missing before then so the first request on a fresh
@@ -481,24 +496,20 @@ def build_scheduler() -> BackgroundScheduler:
     # after the forecast pass so the Beta rollout tab always renders
     # today's true status without manual refresh.
     scheduler.add_job(run_charcoal_jit_invitations_expire_job, "cron", hour=11, minute=5, id="charcoal-jit-invitations-expire-daily", replace_existing=True, max_instances=1, coalesce=True)
-    # Keep the cohort-modeling burn pool hot. Without this, the first
-    # user to hit /api/charcoal/modeling/cohort after a cache miss pays
-    # ~60–120 s of JSONB decode and the page 502s at nginx's timeout.
-    # Fires 15 s after boot (one-shot warmup) then every 4 min.
+    # Cohort-modeling burn pool warmup. The once-per-boot warmup stays
+    # (primes the cache so the first charcoal-modeling request after a
+    # restart doesn't cold-start the JSONB decode and 502 at nginx).
+    # The every-4-min refresh job was the primary driver of the OOM
+    # killer loop observed 2026-04-18 → 2026-04-24: each run pinned
+    # ~500 MB of transient memory without releasing it before the next
+    # run allocated again, growing RSS from ~350 MB to ~3.7 GB every
+    # 7-10 min until the kernel SIGKILL'd the process. We serve cold
+    # reads (5-min TTL) until the leak is root-caused and fixed.
     scheduler.add_job(
         run_cohort_burn_pool_warmer_job,
         "date",
         run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
         id="cohort-burn-pool-warmup",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_cohort_burn_pool_warmer_job,
-        "interval",
-        minutes=4,
-        id="cohort-burn-pool-refresh",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

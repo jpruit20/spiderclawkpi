@@ -914,13 +914,14 @@ export const api = {
   firmwareOverview: (signal?: AbortSignal) =>
     request<FirmwareOverview>('/api/firmware/overview', { signal }),
   firmwareOverviewMetrics: (
-    params: { start?: string; end?: string; firmware_version?: string },
+    params: { start?: string; end?: string; firmware_version?: string; include_testers?: boolean },
     signal?: AbortSignal,
   ) => {
     const q = new URLSearchParams()
     if (params.start) q.set('start', params.start)
     if (params.end) q.set('end', params.end)
     if (params.firmware_version) q.set('firmware_version', params.firmware_version)
+    if (params.include_testers) q.set('include_testers', 'true')
     const qs = q.toString()
     return request<FirmwareOverviewMetrics>(
       `/api/firmware/overview/metrics${qs ? `?${qs}` : ''}`,
@@ -1770,6 +1771,20 @@ export interface FleetSizeResponse {
     total: number
     by_family: FleetFamilyBreakdown
   }
+  /** Devices enrolled in firmware alpha/beta testing — excluded from
+   * `active_24mo` so experimental builds don't skew Fleet Health.
+   * Surfaced separately for the Firmware Hub. */
+  test_cohort?: {
+    total: number
+    by_family: FleetFamilyBreakdown
+    note: string
+  }
+  /** Active fleet count including testers. Use only when the caller
+   * explicitly wants "everyone, including alpha/beta" (Firmware Hub
+   * reconciliation views). Default displays read active_24mo.total. */
+  active_24mo_including_testers?: {
+    total: number
+  }
   definition: string
 }
 
@@ -2028,6 +2043,13 @@ export interface FirmwareOverviewMetrics {
   firmware_distribution: Array<{ firmware_version: string; devices: number; pct: number }>
   product_distribution: Array<{ product: string; devices: number; pct: number }>
   active_devices_window: number
+  /** Number of alpha/beta-cohort devices held out of the distributions above.
+   *  0 when include_testers=true (or cache-first default, which was built with
+   *  testers excluded). Used to label the "X testers held out" footer. */
+  test_cohort_excluded?: number
+  /** True when this payload includes alpha/beta firmware testers in the
+   *  distributions (Firmware Hub asks for this). Default False on Fleet Health. */
+  include_testers?: boolean
   cache_info?: {
     key: string
     computed_at: string | null

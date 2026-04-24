@@ -25,7 +25,11 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import CharcoalJITSubscription, PartnerProduct, ShopifyOrderEvent, TelemetrySession
-from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
+from app.services.product_taxonomy import (
+    build_huntsman_device_ids,
+    build_t2_max_by_device,
+    classify_product,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +131,7 @@ def _build_device_burn_pool(
     """), {"cutoff": cutoff}).all()
 
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
 
     # device_id → (lump_sum, briq_sum, count, latest_meta). Python
     # only ever sees per-session scalars now, not raw JSONB arrays.
@@ -165,6 +170,7 @@ def _build_device_burn_pool(
             b["grill"], b["fw"],
             device_id=dev,
             huntsman_device_ids=huntsman_ids,
+            t2_max=t2_max_map.get(dev),
         )
         pool.append({
             "device_id": dev,

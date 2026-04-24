@@ -33,6 +33,8 @@ from app.api.deps import db_session, require_dashboard_session
 from app.services.product_taxonomy import (
     ALL_FAMILIES,
     build_huntsman_device_ids,
+    build_t2_max_by_device,
+    build_test_cohort_device_ids,
     classify_product,
     classify_shopify_line_item,
 )
@@ -68,14 +70,15 @@ def _bucket_by_family(
     rows: list[tuple[str, Optional[str], Optional[str]]],
     *,
     huntsman_device_ids: Optional[set[str]] = None,
+    t2_max_by_device: Optional[dict[str, int]] = None,
 ) -> dict[str, int]:
     """rows is [(device_id, grill_type, firmware_version), ...] — one
     per device, latest-observed. Returns {family: count}.
 
-    When ``huntsman_device_ids`` is supplied (the recommended path),
-    classification uses per-device firmware history so JOEHY units that
-    OTA'd past 01.01.33 still bucket into Huntsman rather than being
-    misread as Weber Kettle from their current firmware alone.
+    When ``t2_max_by_device`` is supplied (the strongest V1 signal),
+    classification prefers the factory-wired shadow value. When
+    ``huntsman_device_ids`` is supplied, classification falls back to
+    firmware history so ghost devices still bucket correctly.
     """
     counts: dict[str, int] = {f: 0 for f in ALL_FAMILIES}
     for device_id, grill_type, firmware in rows:
@@ -84,6 +87,7 @@ def _bucket_by_family(
             firmware,
             device_id=device_id,
             huntsman_device_ids=huntsman_device_ids,
+            t2_max=(t2_max_by_device or {}).get(device_id),
         )
         counts[family] = counts.get(family, 0) + 1
     return counts
@@ -124,29 +128,68 @@ def _distinct_device_latest(
 def fleet_size(db: Session = Depends(db_session)) -> dict[str, Any]:
     """Canonical fleet-size number for the dashboard.
 
-    Returns active_24mo (unique devices with telemetry in the last 24
-    months), with a per-product-family breakdown. Every place that
-    previously defaulted to ``13000`` should read from here.
+    Returns ``active_24mo`` (unique devices with telemetry in the last
+    24 months), with a per-product-family breakdown. Alpha + beta
+    firmware-test cohorts are excluded from the headline number (they
+    skew Fleet Health); the ``test_cohort_size`` field separately
+    reports how many devices were held out so the Firmware Hub can
+    reconcile.
+
+    Every place that previously defaulted to ``13000`` should read from
+    here.
     """
     cached = _cache_get("size")
     if cached is not None:
         return cached
     since = datetime.now(timezone.utc) - timedelta(days=365 * 2)
-    rows = _distinct_device_latest(db, since=since)
+    all_rows = _distinct_device_latest(db, since=since)
     huntsman_ids = build_huntsman_device_ids(db)
-    by_family = _bucket_by_family(rows, huntsman_device_ids=huntsman_ids)
+    t2_max_map = build_t2_max_by_device(db)
+    test_ids = build_test_cohort_device_ids(db)
+
+    # Split into general fleet vs test cohort. General-fleet counters
+    # are what the headline number reports; test cohort is surfaced
+    # separately so it doesn't vanish.
+    general_rows = [r for r in all_rows if r[0] not in test_ids]
+    test_rows = [r for r in all_rows if r[0] in test_ids]
+
+    by_family = _bucket_by_family(
+        general_rows,
+        huntsman_device_ids=huntsman_ids,
+        t2_max_by_device=t2_max_map,
+    )
+    by_family_test = _bucket_by_family(
+        test_rows,
+        huntsman_device_ids=huntsman_ids,
+        t2_max_by_device=t2_max_map,
+    )
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window_days": 730,
         "active_24mo": {
-            "total": len(rows),
+            "total": len(general_rows),
             "by_family": by_family,
+        },
+        "test_cohort": {
+            "total": len(test_rows),
+            "by_family": by_family_test,
+            "note": (
+                "Devices enrolled in firmware alpha or beta testing "
+                "(01.01.9x band, BetaCohortMember, or alpha/beta "
+                "FirmwareDeployLog). Excluded from active_24mo so "
+                "their experimental firmware doesn't skew fleet "
+                "health; surfaced here for the Firmware Hub."
+            ),
+        },
+        "active_24mo_including_testers": {
+            "total": len(all_rows),
         },
         "definition": (
             "Active fleet = unique devices that phoned home via "
-            "telemetry in the last 24 months. Product family derived "
-            "from each device's most-recent (grill_type, firmware_version) "
-            "observation."
+            "telemetry in the last 24 months, excluding alpha/beta "
+            "firmware testers. Product family on V1 JOEHY hardware is "
+            "derived from the shadow heat.t2.max value (authoritative) "
+            "with firmware-history fallback for ghost devices."
         ),
     }
     _cache_put("size", payload)
@@ -178,7 +221,24 @@ def fleet_lifetime(db: Session = Depends(db_session)) -> dict[str, Any]:
         return cached
     rows_all_time = _distinct_device_latest(db, since=None)
     huntsman_ids = build_huntsman_device_ids(db)
-    aws_by_family = _bucket_by_family(rows_all_time, huntsman_device_ids=huntsman_ids)
+    t2_max_map = build_t2_max_by_device(db)
+    test_ids = build_test_cohort_device_ids(db)
+    # Lifetime AWS count is "have we ever provisioned this serial?",
+    # which includes testers — so we don't drop them from the total,
+    # but we DO drop them when the caller asks for a "production
+    # fleet only" view (by_family stays on the full set; the test_cohort
+    # hold-out is surfaced separately for reconciliation).
+    aws_rows_general = [r for r in rows_all_time if r[0] not in test_ids]
+    aws_by_family = _bucket_by_family(
+        aws_rows_general,
+        huntsman_device_ids=huntsman_ids,
+        t2_max_by_device=t2_max_map,
+    )
+    aws_by_family_full = _bucket_by_family(
+        rows_all_time,
+        huntsman_device_ids=huntsman_ids,
+        t2_max_by_device=t2_max_map,
+    )
 
     # Shopify line_items — extended on the connector 2026-04-21, so most
     # historic snapshots don't yet have them. Count what we have and
@@ -219,9 +279,17 @@ def fleet_lifetime(db: Session = Depends(db_session)) -> dict[str, Any]:
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "aws_registered": {
-            "total": len(rows_all_time),
+            "total": len(aws_rows_general),
             "by_family": aws_by_family,
-            "note": "Every device that has ever phoned home. Authoritative for provisioned units.",
+            "total_including_testers": len(rows_all_time),
+            "by_family_including_testers": aws_by_family_full,
+            "test_cohort_size": len(rows_all_time) - len(aws_rows_general),
+            "note": (
+                "Every device that has ever phoned home, excluding "
+                "alpha/beta firmware testers. Authoritative for "
+                "provisioned production units. Tester count is "
+                "reported separately."
+            ),
         },
         "shopify_units": {
             "total": shopify_total,

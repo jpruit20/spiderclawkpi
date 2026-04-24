@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 from app.models import TelemetrySession, TelemetryStreamEvent
 from app.services import aggregate_cache
 from app.services.cx_snapshot import build_customer_experience_snapshot
-from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
+from app.services.product_taxonomy import (
+    build_huntsman_device_ids,
+    build_t2_max_by_device,
+    build_test_cohort_device_ids,
+    classify_product,
+)
 
 
 # ── cx_snapshot — full Customer Experience snapshot payload ────────────
@@ -81,28 +86,13 @@ def _build_firmware_metrics_7d(db: Session) -> dict[str, Any]:
     latest_session_ts = db.execute(select(func.max(TelemetrySession.session_start))).scalar()
     sessions_stale = sessions == 0 and latest_session_ts is not None and latest_session_ts < start_dt
 
-    combined_rows = db.execute(
-        select(
-            TelemetryStreamEvent.grill_type,
-            TelemetryStreamEvent.firmware_version,
-            func.count(func.distinct(TelemetryStreamEvent.device_id)).label("devices"),
-        )
-        .where(
-            TelemetryStreamEvent.sample_timestamp >= start_dt,
-            TelemetryStreamEvent.sample_timestamp < end_dt,
-        )
-        .group_by(TelemetryStreamEvent.grill_type, TelemetryStreamEvent.firmware_version)
-    ).all()
-
-    firmware_counts: dict[str | None, int] = {}
-    for grill_type_val, fw_val, n in combined_rows:
-        n_int = int(n or 0)
-        firmware_counts[fw_val] = firmware_counts.get(fw_val, 0) + n_int
-
     # Canonical per-device classification for product distribution —
     # see firmware.py::overview_metrics for the rationale. The grouped
     # query above can't feed the history-aware classifier because it
-    # loses device identity.
+    # loses device identity. Fleet Health excludes alpha/beta testers
+    # (they skew firmware_distribution and product_distribution with
+    # experimental builds); the Firmware Hub endpoint includes them
+    # via its own include_testers=True path.
     per_device_rows = db.execute(text("""
         SELECT DISTINCT ON (device_id)
             device_id, grill_type, firmware_version
@@ -114,14 +104,23 @@ def _build_firmware_metrics_7d(db: Session) -> dict[str, Any]:
         ORDER BY device_id, sample_timestamp DESC
     """), {"start_dt": start_dt, "end_dt": end_dt}).all()
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
+    test_ids = build_test_cohort_device_ids(db)
     product_counts: dict[str, int] = {}
+    firmware_counts: dict[str | None, int] = {}
+    test_cohort_count = 0
     for device_id, grill_type_val, fw_val in per_device_rows:
+        if device_id in test_ids:
+            test_cohort_count += 1
+            continue
         family = classify_product(
             grill_type_val, fw_val,
             device_id=device_id,
             huntsman_device_ids=huntsman_ids,
+            t2_max=t2_max_map.get(device_id),
         )
         product_counts[family] = product_counts.get(family, 0) + 1
+        firmware_counts[fw_val] = firmware_counts.get(fw_val, 0) + 1
 
     dist_total = sum(firmware_counts.values())
     firmware_distribution = [
@@ -158,6 +157,8 @@ def _build_firmware_metrics_7d(db: Session) -> dict[str, Any]:
         "firmware_distribution": firmware_distribution,
         "product_distribution": product_distribution,
         "active_devices_window": dist_total,
+        "test_cohort_excluded": test_cohort_count,
+        "include_testers": False,
     }
 
 

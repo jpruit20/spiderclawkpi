@@ -31,6 +31,7 @@ from app.services.product_taxonomy import (
     FAMILY_HUNTSMAN,
     FAMILY_WEBER_KETTLE,
     build_huntsman_device_ids,
+    build_t2_max_by_device,
     classify_product,
 )
 
@@ -73,12 +74,16 @@ def _summarize_session(
     s: TelemetrySession,
     *,
     huntsman_device_ids: Optional[set[str]] = None,
+    t2_max_by_device: Optional[dict[str, int]] = None,
 ) -> dict[str, Any]:
     """Compact per-session payload the charcoal model consumes.
 
     When ``huntsman_device_ids`` is passed, the classifier uses the
     device's full firmware history so a JOEHY unit that OTA'd past
-    01.01.33 still shows as Huntsman (not Weber Kettle).
+    01.01.33 still shows as Huntsman (not Weber Kettle). When
+    ``t2_max_by_device`` is passed, the authoritative shadow signal
+    (heat.t2.max — 700 for Huntsman, 550 for Weber Kettle) takes
+    priority over firmware heuristics.
     """
     avg_actual = _avg_from_series(s.actual_temp_time_series)
     hours = (s.session_duration_seconds or 0) / 3600.0
@@ -99,6 +104,7 @@ def _summarize_session(
             s.firmware_version,
             device_id=s.device_id,
             huntsman_device_ids=huntsman_device_ids,
+            t2_max=(t2_max_by_device or {}).get(s.device_id) if s.device_id else None,
         ),
     }
 
@@ -142,11 +148,15 @@ def device_sessions(
     ).scalars().all()
 
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
     return {
         "mac": normalized,
         "device_id_count": len(device_ids),
         "window_days": days,
-        "sessions": [_summarize_session(s, huntsman_device_ids=huntsman_ids) for s in rows],
+        "sessions": [
+            _summarize_session(s, huntsman_device_ids=huntsman_ids, t2_max_by_device=t2_max_map)
+            for s in rows
+        ],
     }
 
 
@@ -243,6 +253,7 @@ def fleet_aggregate(
     """), params).all()}
 
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
     per_device: list[dict[str, Any]] = []
     for r in per_device_rows:
         device_id, sessions, cook_hours, avg_target, avg_temp_proxy, last_seen, first_seen = r
@@ -251,6 +262,7 @@ def fleet_aggregate(
             meta_grill, meta_fw,
             device_id=device_id,
             huntsman_device_ids=huntsman_ids,
+            t2_max=t2_max_map.get(device_id),
         )
         if product_family and family != product_family:
             continue

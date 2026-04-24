@@ -355,6 +355,21 @@ export function ProductEngineeringDivision() {
   const [cxSnapshot, setCxSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [appSide, setAppSide] = useState<AppSideFleetResponse | null>(null)
   const [fleetSize, setFleetSize] = useState<import('../lib/api').FleetSizeResponse | null>(null)
+  // Last-known fleet total from the previous successful load. Persisted
+  // in localStorage so the concentric-ring hero renders a REAL number
+  // on first paint (instead of the old 13,000 placeholder) while the
+  // live /api/fleet/size call is in flight. Overwritten as soon as
+  // fresh data arrives — this is just "what did we know last time?"
+  const [lastKnownFleetTotal, setLastKnownFleetTotal] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem('spider_kpi.last_fleet_total')
+      if (!raw) return null
+      const n = Number.parseInt(raw, 10)
+      return Number.isFinite(n) && n > 0 ? n : null
+    } catch {
+      return null
+    }
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -475,6 +490,22 @@ export function ProductEngineeringDivision() {
     void load()
     return () => ctrl.abort()
   }, [daysDiff, debouncedStart, debouncedEnd])
+
+  // Persist the fleet total once a fresh /api/fleet/size response lands so
+  // subsequent page loads can paint a real number on first render instead
+  // of flashing the placeholder. Uses active_24mo.total because that's the
+  // number the concentric-ring hero displays as "installed base".
+  useEffect(() => {
+    const t = fleetSize?.active_24mo?.total
+    if (typeof t === 'number' && t > 0) {
+      try {
+        localStorage.setItem('spider_kpi.last_fleet_total', String(t))
+      } catch {
+        /* storage disabled — fall back to in-memory state */
+      }
+      setLastKnownFleetTotal(t)
+    }
+  }, [fleetSize])
 
   const loadClusterDetail = useCallback(async (theme: string) => {
     setClusterDetailLoading(true)
@@ -739,7 +770,13 @@ export function ProductEngineeringDivision() {
           fingerprint; a user recognizes Product Engineering from the
           nested rings alone. */}
       {(() => {
-        const installedBase = probeInstalledBase || 13000
+        // Fleet total resolution order:
+        //   1. Live /api/fleet/size response (probeInstalledBase)
+        //   2. Last-known total from previous session (localStorage) — so the
+        //      hero renders a real number on first paint instead of a stale
+        //      13k placeholder while the /size call is in flight
+        //   3. 0 — UI treats this as "loading" and shows dashes
+        const installedBase = probeInstalledBase || lastKnownFleetTotal || 0
         const devicesHeadline = devicesReporting || activeCooks
         const ring24hProgress = installedBase > 0 ? devices24h / installedBase : 0
         const ringNowProgress = installedBase > 0 ? activeCooks / installedBase : 0
@@ -764,7 +801,11 @@ export function ProductEngineeringDivision() {
             accentColorSoft="var(--blue)"
             signature="concentric"
             title="Product Development Hub"
-            subtitle={`${streamBacked ? 'Live' : 'Degraded'} · Updated ${formatFreshness(collection?.newest_sample_timestamp_seen)} · ${fmtInt(devicesHeadline)} devices reporting`}
+            subtitle={`${streamBacked ? 'Live' : 'Degraded'} · Updated ${formatFreshness(collection?.newest_sample_timestamp_seen)} · ${fmtInt(devicesHeadline)} devices reporting${
+              fleetSize?.test_cohort && fleetSize.test_cohort.total > 0
+                ? ` · ${fmtInt(fleetSize.test_cohort.total)} alpha/beta held out`
+                : ''
+            }`}
             rightMeta={
               <>
                 <div style={{ display: 'flex', gap: 4, background: 'var(--panel-2)', borderRadius: 8, padding: 2 }}>

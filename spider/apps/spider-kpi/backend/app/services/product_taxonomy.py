@@ -1,30 +1,35 @@
 """Map raw AWS device ``grill_type`` strings to a human product family.
 
 As of 2026-04-22 the fleet has three visible product lines (four including
-Unknown), and *firmware history* — not just the latest-reported firmware
-on the device shadow — is what tells us which JOEHY V1 controllers are
-Huntsman vs Weber Kettle.
+Unknown), and the *device shadow itself* carries the hardware signal we
+need to distinguish Huntsman from Weber Kettle on V1 JOEHY controllers.
 
-## Hardware generations + firmware bands
+## Hardware generations + how we tell them apart
 
 * **V1 (JOEHY, ``W:K:22:1:V``)** — firmware ``0.0.x`` through ``01.01.35``.
   The AWS ``grill_type`` is always ``W:K:22:1:V`` on this hardware, so it
-  is useless for distinguishing Huntsman from Weber Kettle; we have to
-  look at which firmware flavour the factory flashed:
-    * Factory-flashed ``01.01.33`` → Huntsman (ships with the 0-700°F
-      range enabled at build time).
-    * Factory-flashed ``01.01.34`` (and later) → Weber Kettle (ships
-      with ``highTemp_enable=false``; flag can be flipped OTA to enable
-      700°F mode on-device, but the hardware is still the Weber Kettle).
-  **The catch:** Huntsman units factory-flashed on ``01.01.33`` get OTA'd
-  up to newer V1 firmware once Joehy ships a point release. Once they're
-  on ``01.01.34+``, the latest-observed firmware no longer tells us the
-  grill family. We therefore look at the full *firmware history* for each
-  device (from ``telemetry_sessions``): **if a device has EVER reported
-  running 01.01.33, it is Huntsman hardware forever.** The opposite
-  direction (a Weber Kettle that got rolled back to 01.01.33) has never
-  happened in the field — that firmware won't run on a Weber Kettle
-  because the screw-terminal count / fan drive differs.
+  is useless for distinguishing Huntsman from Weber Kettle. We have two
+  identifiers to fall back on, in strict priority order:
+
+  1. **Shadow ``heat.t2.max``** — the factory-wired high-temp ceiling.
+     Huntsman ships with ``max=700`` (0-700°F range enabled at build
+     time). Weber Kettle ships with ``max=550``. This value is
+     **stable across firmware OTAs** — a Huntsman that gets OTA'd from
+     01.01.33 to 01.01.34 keeps ``max=700`` in its shadow. This is the
+     authoritative V1 signal; fleet audit on 2026-04-22 confirmed
+     100% separation across 1,820 active JOEHY devices (774 at 700,
+     1,046 at 550, zero cross-contamination).
+  2. **Firmware history** (fallback for devices with no shadow payload
+     cached — e.g. ghost devices that have session history but no
+     recent stream events). If a device has EVER reported running
+     ``01.01.33``, treat it as Huntsman. The opposite direction (a
+     Weber Kettle rolled back to 01.01.33) has never happened in the
+     field — that firmware won't run on a Weber Kettle because the
+     screw-terminal count / fan drive differs.
+  3. **Current firmware** (last-ditch fallback for single-device
+     endpoints where history isn't passed in). ``01.01.33`` → Huntsman,
+     anything else → Weber Kettle. This is the weakest signal because
+     it misses OTA'd Huntsman units.
 
 * **V2 (ADN)** — firmware ``01.01.64`` through ``01.01.99`` (current
   alpha band is 01.01.90-99). V2 firmware reports ``grill_type`` as
@@ -113,6 +118,15 @@ JOEHY_MODEL = "W:K:22:1:V"
 # Huntsman-only V1 point releases can be added without touching logic.
 JOEHY_HUNTSMAN_FIRMWARE = frozenset({"01.01.33"})
 
+# The factory-wired high-temp ceiling in the device shadow. This is the
+# authoritative Huntsman-vs-Kettle signal on V1 JOEHY hardware and is
+# stable across firmware OTAs. Values observed in the field (audit
+# 2026-04-22): 700 → Huntsman (774 devs), 550 → Weber Kettle (1,046 devs),
+# plus a handful of dev/miswired units at 287 / 371 which we treat as
+# the default (Weber Kettle) because they lack the Huntsman factory flash.
+T2_MAX_HUNTSMAN = 700
+T2_MAX_WEBER_KETTLE = 550
+
 
 def _norm_fw(fw: Optional[str]) -> str:
     """Firmware strings arrive in several shapes (``'vers: "01.01.33"'``,
@@ -144,6 +158,7 @@ def classify_product(
     *,
     device_id: Optional[str] = None,
     huntsman_device_ids: Optional[set[str]] = None,
+    t2_max: Optional[int] = None,
 ) -> str:
     """Return the product family label for a device.
 
@@ -152,17 +167,22 @@ def classify_product(
             V1 JOEHY; ``Huntsman`` / ``Kettle`` / ``Kettle22`` for V2
             ADN; deprecated tokens collapse to Unknown).
         firmware_version: The latest-observed firmware version for the
-            device. Only consulted when the hardware is V1 JOEHY (where
-            firmware carries the Huntsman-vs-Kettle distinction).
+            device. Weakest V1 signal; only consulted if ``t2_max`` and
+            ``huntsman_device_ids`` are unavailable.
         device_id: Optional device identifier. When provided along with
-            ``huntsman_device_ids``, we use the full firmware history
-            for the device to catch Huntsman units that OTA'd past
-            01.01.33 and would otherwise look like Weber Kettle in the
-            latest-only view.
+            ``huntsman_device_ids``, we use the device's firmware
+            history to catch Huntsman units whose shadow payload isn't
+            in the current row set.
         huntsman_device_ids: The set of device_ids that have ever
             reported running a Huntsman firmware. Build via
             :func:`build_huntsman_device_ids` and pass to every call
-            in a batch.
+            in a batch. Used as the secondary V1 signal (after
+            ``t2_max``) so ghost devices with session history but no
+            recent stream payloads still classify correctly.
+        t2_max: The shadow ``heat.t2.max`` value (factory-wired
+            high-temp ceiling). 700 → Huntsman, 550 → Weber Kettle.
+            This is the authoritative V1 signal and is checked first —
+            it is stable across firmware OTAs.
 
     Case-insensitive on the family names ("kettle" == "Kettle"), but
     preserves the exact ``W:K:22:1:V`` match for the JOEHY path.
@@ -184,21 +204,51 @@ def classify_product(
     if low in ("kettle", "kettle22"):
         return FAMILY_WEBER_KETTLE
 
-    # ── V1 JOEHY hardware — firmware history tells the story ─────────
+    # ── V1 JOEHY hardware — three-tier signal, strongest first ───────
     if raw == JOEHY_MODEL:
-        # 1. Prefer device history: if the device EVER ran Huntsman
-        #    firmware, it's Huntsman hardware even if it's since
-        #    been OTA'd to a later V1 release.
+        # 1. AUTHORITATIVE: shadow heat.t2.max. 700 → Huntsman, 550 →
+        #    Weber Kettle. Stable across OTAs (factory-wired hardware
+        #    range). Caller is responsible for reading this off the
+        #    latest raw_payload before calling us.
+        if t2_max == T2_MAX_HUNTSMAN:
+            return FAMILY_HUNTSMAN
+        if t2_max == T2_MAX_WEBER_KETTLE:
+            return FAMILY_WEBER_KETTLE
+        # 2. Firmware history — catches ghost devices that haven't
+        #    produced a recent raw_payload but did have a 01.01.33
+        #    session in the past. Also catches OTA'd Huntsman units
+        #    whose shadow wasn't passed in.
         if device_id and huntsman_device_ids is not None and device_id in huntsman_device_ids:
             return FAMILY_HUNTSMAN
-        # 2. Fall back to current firmware — handles the case where
-        #    history wasn't passed in (single-device endpoint) or the
-        #    device is currently still on 01.01.33.
+        # 3. Weakest: current firmware alone. Misses OTA'd Huntsman, but
+        #    useful for single-device endpoints where history wasn't
+        #    precomputed.
         if _is_huntsman_firmware(firmware_version):
             return FAMILY_HUNTSMAN
         return FAMILY_WEBER_KETTLE
 
     return FAMILY_UNKNOWN
+
+
+def extract_t2_max(raw_payload: Optional[dict]) -> Optional[int]:
+    """Pull the shadow ``heat.t2.max`` value out of a raw_payload.
+
+    Returns the integer max if present, otherwise None. Shape:
+    ``raw_payload["device_data"]["reported"]["heat"]["t2"]["max"]``.
+
+    Tolerates missing intermediate keys and non-dict values.
+    """
+    if not isinstance(raw_payload, dict):
+        return None
+    try:
+        reported = (raw_payload.get("device_data") or {}).get("reported") or {}
+        t2 = ((reported.get("heat") or {}).get("t2")) or {}
+        v = t2.get("max")
+        if v is None:
+            return None
+        return int(v)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 # ── Huntsman-history helper (cached) ─────────────────────────────────
@@ -273,6 +323,192 @@ def build_huntsman_device_ids(db: Session, *, force: bool = False) -> set[str]:
     with _huntsman_cache_lock:
         _huntsman_cache = (now, frozenset(huntsman_ids))
     return huntsman_ids
+
+
+# ── t2.max-by-device (cached) ────────────────────────────────────────
+#
+# The authoritative V1 discriminator lives in the shadow payload's
+# ``heat.t2.max``. Reading it per-device in a loop would be
+# O(devices) round-trips; one DISTINCT ON query pulls the whole
+# fleet at once, then every callsite intersects against the batch.
+
+_T2MAX_CACHE_TTL_SECONDS = 300
+_t2max_cache: tuple[float, dict[str, int]] | None = None
+_t2max_cache_lock = threading.Lock()
+
+
+def build_t2_max_by_device(db: Session, *, force: bool = False) -> dict[str, int]:
+    """Return ``{device_id: latest heat.t2.max}`` for every JOEHY device
+    with a recent raw_payload.
+
+    Pulled in a single DISTINCT ON pass over ``telemetry_stream_events``
+    so the caller can classify the whole fleet without re-reading
+    individual payloads. 5-minute TTL cache matches
+    :func:`build_huntsman_device_ids`.
+
+    Devices with no raw_payload (ghost devices) are absent from the
+    returned dict; callers should fall through to firmware-history
+    classification for those.
+    """
+    global _t2max_cache
+    now = _time.time()
+    if not force:
+        with _t2max_cache_lock:
+            if _t2max_cache is not None:
+                ts, payload = _t2max_cache
+                if now - ts < _T2MAX_CACHE_TTL_SECONDS:
+                    return dict(payload)
+
+    out: dict[str, int] = {}
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (device_id)
+                device_id,
+                (raw_payload->'device_data'->'reported'->'heat'->'t2'->>'max')::int AS t2max
+            FROM telemetry_stream_events
+            WHERE grill_type = :gm
+              AND raw_payload IS NOT NULL
+              AND device_id IS NOT NULL
+              AND device_id NOT LIKE 'mac:%%'
+            ORDER BY device_id, sample_timestamp DESC
+        """), {"gm": JOEHY_MODEL}).all()
+        for did, v in rows:
+            if did is not None and v is not None:
+                try:
+                    out[did] = int(v)
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        # Stream-event table may not exist in every environment;
+        # fall back to empty dict so callers drop to firmware history.
+        pass
+
+    with _t2max_cache_lock:
+        _t2max_cache = (now, dict(out))
+    return out
+
+
+# ── Test-cohort exclusion (alpha / beta firmware testers) ────────────
+#
+# Devices enrolled in firmware alpha or beta programs skew every
+# general-fleet metric — they're on experimental builds, their
+# disconnect rates are noisy, their cook styles are dev-only. Fleet
+# Health, product_distribution, firmware_distribution, and all other
+# "how is the real fleet doing?" views exclude them by default.
+# Firmware Hub is the only page that *wants* to see them and reads
+# them directly from the cohort tables.
+#
+# Three overlapping sources of truth (we union all three):
+#   1. BetaCohortMember rows in an active state
+#   2. FirmwareDeployLog rows with cohort in (alpha, beta) that
+#      reached the device (succeeded / in_flight / pending)
+#   3. Any device currently reporting firmware matching ``01.01.9x``
+#      — per Joseph 2026-04-22 that band is the active alpha
+
+# Firmware versions in this band are considered alpha test builds.
+# Regex matches normalized strings only — _norm_fw() should be applied
+# first if the raw value might carry a ``vers:`` prefix or quotes.
+import re as _re
+ALPHA_FIRMWARE_REGEX = _re.compile(r"^01\.01\.9\d$")
+
+_TEST_COHORT_CACHE_TTL_SECONDS = 300
+_test_cohort_cache: tuple[float, frozenset[str]] | None = None
+_test_cohort_cache_lock = threading.Lock()
+
+
+def _is_alpha_firmware(fw: Optional[str]) -> bool:
+    """True if this firmware-version string is in the 01.01.9x alpha band."""
+    return bool(ALPHA_FIRMWARE_REGEX.match(_norm_fw(fw)))
+
+
+def build_test_cohort_device_ids(db: Session, *, force: bool = False) -> set[str]:
+    """Return the set of device_ids currently participating in firmware
+    alpha or beta testing.
+
+    General-fleet views exclude these. Firmware Hub + beta-program
+    pages read them directly and are unaffected.
+
+    Three sources unioned: ``BetaCohortMember`` (active states),
+    ``FirmwareDeployLog`` with cohort in (alpha/beta) in an in-flight
+    or succeeded state, and any device whose latest observed firmware
+    matches the alpha band (``01.01.9x``).
+    """
+    global _test_cohort_cache
+    now = _time.time()
+    if not force:
+        with _test_cohort_cache_lock:
+            if _test_cohort_cache is not None:
+                ts, payload = _test_cohort_cache
+                if now - ts < _TEST_COHORT_CACHE_TTL_SECONDS:
+                    return set(payload)
+
+    ids: set[str] = set()
+
+    # 1. BetaCohortMember — anyone who's been invited, opted in, or
+    #    had an OTA pushed. Explicitly excludes 'declined' and
+    #    'excluded' states (those are out of the cohort).
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT device_id FROM beta_cohort_members
+            WHERE device_id IS NOT NULL
+              AND state NOT IN ('declined', 'excluded')
+        """)).all()
+        for (did,) in rows:
+            if did:
+                ids.add(did)
+    except Exception:
+        pass
+
+    # 2. FirmwareDeployLog — every alpha/beta deploy attempt that
+    #    reached the device (or is in flight).
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT device_id FROM firmware_deploy_log
+            WHERE device_id IS NOT NULL
+              AND cohort IN ('alpha', 'beta')
+              AND status IN ('pending', 'in_flight', 'succeeded')
+        """)).all()
+        for (did,) in rows:
+            if did:
+                ids.add(did)
+    except Exception:
+        pass
+
+    # 3. Any device currently on 01.01.9x firmware — per Joseph
+    #    2026-04-22, that band is live alpha. Pulled from stream events
+    #    (most current) with session-table fallback.
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (device_id)
+                device_id, firmware_version
+            FROM telemetry_stream_events
+            WHERE device_id IS NOT NULL
+              AND device_id NOT LIKE 'mac:%%'
+            ORDER BY device_id, sample_timestamp DESC
+        """)).all()
+        for did, fw in rows:
+            if did and _is_alpha_firmware(fw):
+                ids.add(did)
+    except Exception:
+        pass
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (device_id)
+                device_id, firmware_version
+            FROM telemetry_sessions
+            WHERE device_id IS NOT NULL
+              AND device_id NOT LIKE 'mac:%%'
+            ORDER BY device_id, session_start DESC
+        """)).all()
+        for did, fw in rows:
+            if did and _is_alpha_firmware(fw):
+                ids.add(did)
+    except Exception:
+        pass
+
+    with _test_cohort_cache_lock:
+        _test_cohort_cache = (now, frozenset(ids))
+    return ids
 
 
 def classify_shopify_line_item(title: Optional[str]) -> str:

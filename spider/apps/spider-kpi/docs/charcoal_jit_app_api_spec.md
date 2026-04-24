@@ -1,6 +1,6 @@
 # Charcoal JIT — App-side API spec (M1)
 
-**Audience:** Agustin (Spider Grills app lead)
+**Audience:** Agustin
 **Status:** Ready for implementation — backend endpoints live on
 `kpi.spidergrills.com` as of 2026-04-22.
 **Scope:** The M1 private beta — 50 invitations, top-25% power users,

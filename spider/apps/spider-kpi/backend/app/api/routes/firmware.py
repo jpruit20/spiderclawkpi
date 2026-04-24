@@ -662,15 +662,22 @@ def overview_metrics(
     start: str | None = Query(default=None, description="ISO date or datetime (UTC). Default: end - 7d."),
     end: str | None = Query(default=None, description="ISO date or datetime (UTC). Default: now."),
     firmware_version: str | None = Query(default=None),
+    include_testers: bool = Query(default=False, description="Include alpha/beta firmware testers in the distributions. Default False — Fleet Health excludes them by default."),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
+    from app.services.product_taxonomy import (
+        build_huntsman_device_ids,
+        build_t2_max_by_device,
+        build_test_cohort_device_ids,
+        classify_product,
+    )
 
     # Cache-first on the default 7-day view (the one the Product
     # Engineering page hits on every load). Custom windows or firmware
     # filters skip this and go straight to live compute + the tiny TTL
-    # cache further down.
-    if start is None and end is None and firmware_version is None:
+    # cache further down. Opt-in "include testers" also bypasses the
+    # cache — that's a Firmware-Hub surface, not Fleet Health.
+    if start is None and end is None and firmware_version is None and not include_testers:
         from app.services import aggregate_cache
         import app.services.cache_builders  # noqa: F401 — registers builders
         from app.services.cache_builders import FIRMWARE_METRICS_7D_KEY
@@ -777,14 +784,28 @@ def overview_metrics(
         ORDER BY device_id, sample_timestamp DESC
     """), {"start_dt": start_dt, "end_dt": end_dt}).all()
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
+    test_ids = set() if include_testers else build_test_cohort_device_ids(db)
     product_counts: dict[str, int] = {}
+    test_cohort_count = 0
+    # Rebuild firmware_counts on the filtered set so test-cohort
+    # firmwares don't show up in the Fleet Health distribution.
+    firmware_counts_filtered: dict[str | None, int] = {}
     for device_id, grill_type_val, fw_val in per_device_rows:
+        if device_id in test_ids:
+            test_cohort_count += 1
+            continue
         family = classify_product(
             grill_type_val, fw_val,
             device_id=device_id,
             huntsman_device_ids=huntsman_ids,
+            t2_max=t2_max_map.get(device_id),
         )
         product_counts[family] = product_counts.get(family, 0) + 1
+        firmware_counts_filtered[fw_val] = firmware_counts_filtered.get(fw_val, 0) + 1
+    # Swap in the filtered firmware distribution when testers are out.
+    if not include_testers:
+        firmware_counts = firmware_counts_filtered
 
     dist_total = sum(firmware_counts.values())
     firmware_distribution = [
@@ -820,7 +841,9 @@ def overview_metrics(
         "disconnect_rate_per_session": disconnect_rate_per_session,
         "firmware_distribution": firmware_distribution,
         "product_distribution": product_distribution,
-        "active_devices_window": dist_total,
+        "active_devices_window": sum(product_counts.values()),
+        "test_cohort_excluded": 0 if include_testers else test_cohort_count,
+        "include_testers": include_testers,
     }
 
 
@@ -924,10 +947,15 @@ def fleet_control_health(
     140°F in this engagement window) and ``cook_elapsed_seconds`` so the
     UI can distinguish "engaged with real fire" from "engaged, no heat yet."
     """
-    from app.services.product_taxonomy import build_huntsman_device_ids, classify_product
+    from app.services.product_taxonomy import (
+        build_huntsman_device_ids,
+        build_t2_max_by_device,
+        classify_product,
+    )
 
     now = datetime.now(timezone.utc)
     huntsman_ids = build_huntsman_device_ids(db)
+    t2_max_map = build_t2_max_by_device(db)
     # 30 min window — any longer risks pulling a multi-million-row
     # stream slab into memory on the app server. The live-fire onset is
     # still useful within this window: a cook that's been running for
@@ -967,6 +995,7 @@ def fleet_control_health(
             grill_type, latest.firmware_version,
             device_id=device_id,
             huntsman_device_ids=huntsman_ids,
+            t2_max=t2_max_map.get(device_id),
         )
         product_tallies[product_family] = product_tallies.get(product_family, 0) + 1
         # target_set_at: scan the event window backward to find the most

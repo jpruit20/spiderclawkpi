@@ -925,8 +925,12 @@ function OverviewTab() {
   useEffect(() => {
     const ctl = new AbortController()
     setLoading(true)
+    // include_testers=true: this is the Firmware Hub, so alpha/beta-cohort
+    // devices belong in the distributions (they're the whole point of the
+    // page). Fleet Health and the Product Engineering view hold testers
+    // out by default so experimental builds don't skew general-fleet data.
     api.firmwareOverviewMetrics(
-      { start, end, firmware_version: firmwareFilter || undefined },
+      { start, end, firmware_version: firmwareFilter || undefined, include_testers: true },
       ctl.signal,
     )
       .then(d => { setMetrics(d); setError(null) })
@@ -1047,9 +1051,33 @@ function OverviewTab() {
           </section>
 
           <section className="card">
-            <div className="card-title">Product family — active in window</div>
+            <div className="card-title">
+              Product family — active in window
+              {metrics.include_testers ? (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: 'var(--panel-2)',
+                    color: 'var(--muted)',
+                    verticalAlign: 'middle',
+                  }}
+                >
+                  incl. alpha/beta
+                </span>
+              ) : null}
+            </div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-              AWS <code>grill_type</code> + firmware history rolled up into product families. Weber Kettle covers Kettle 22 / Kettle 26 / Webcraft (JOEHY <code>W:K:22:1:V</code> that never ran 01.01.33, plus ADN V2 Kettle builds). Huntsman covers any JOEHY device that has EVER reported 01.01.33 (so factory-Huntsman units that have since OTA'd past it still classify correctly) plus ADN V2 Huntsman builds. Giant Huntsman is currently folded into Huntsman until the app integration gives us a differentiable signal.
+              Classified via <code>heat.t2.max</code> shadow (700 = Huntsman, 550 = Weber Kettle — the factory-wired high-temp ceiling),{' '}
+              falling back to firmware history for devices missing the signal. Giant Huntsman is currently folded into Huntsman until the app integration gives us a differentiable signal.
+              {metrics.include_testers ? (
+                <> Alpha/beta-cohort devices (01.01.9x + manually-enrolled testers) are <strong>included</strong> on this page.</>
+              ) : null}
             </div>
             {metrics.product_distribution && metrics.product_distribution.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
