@@ -67,6 +67,14 @@ async def lifespan(app: FastAPI):
         )
     if ga4_errors:
         raise RuntimeError(f"{settings.ga4_invalid_message()} Details: {'; '.join(ga4_errors)}")
+    # RSS watchdog — logs process RSS every 60 s so the cohort burn pool
+    # OOM hunt has continuous visibility in the spider-kpi journal. Set
+    # SPIDER_KPI_TRACEMALLOC=1 to enable forensic dumps when RSS spikes.
+    try:
+        from app.services.rss_watchdog import start_rss_watchdog
+        start_rss_watchdog()
+    except Exception:
+        logger.exception("failed to start rss_watchdog — continuing without")
     scheduler.start()
     try:
         yield
