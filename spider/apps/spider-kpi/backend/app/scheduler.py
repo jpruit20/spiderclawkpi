@@ -612,26 +612,21 @@ def build_scheduler() -> BackgroundScheduler:
     # after the forecast pass so the Beta rollout tab always renders
     # today's true status without manual refresh.
     scheduler.add_job(run_charcoal_jit_invitations_expire_job, "cron", hour=11, minute=5, id="charcoal-jit-invitations-expire-daily", replace_existing=True, max_instances=1, coalesce=True)
-    # Cohort-modeling burn pool warmup. Boot warmup + every-4-min
-    # refresh. The 4-min job was disabled 2026-04-24 (commit 2a8674b)
-    # after an OOM-kill loop (~165 SIGKILLs/day); root cause is now
-    # fixed in run_cohort_burn_pool_warmer_job above (SQL-side GROUP
-    # BY + per-iteration session + malloc_trim). RSS stays bounded
-    # tick-over-tick — visible in the per-tick log line.
+    # Cohort-modeling burn pool warmup. The 4-min interval is DISABLED
+    # again as of 2026-04-25 — the SQL-GROUP-BY + malloc_trim attempt
+    # in 94f07d8 did NOT eliminate the OOM loop (24 kills observed in
+    # ~3.5 hours after redeploy, identical 7-10 min cadence; warmer
+    # was being OOM-killed mid-execution before reaching its post-tick
+    # log line, so a SINGLE call exceeds the 4 GB budget). Real root
+    # cause is still unknown — needs tracemalloc/memray on a single
+    # _build_device_burn_pool call before the interval can come back.
+    # The startup one-shot stays so the first user request after a
+    # restart hits a hot cache.
     scheduler.add_job(
         run_cohort_burn_pool_warmer_job,
         "date",
         run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
         id="cohort-burn-pool-warmup",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_cohort_burn_pool_warmer_job,
-        "interval",
-        minutes=4,
-        id="cohort-burn-pool-refresh",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
