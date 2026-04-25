@@ -115,7 +115,9 @@ def _watchdog_loop(
                 if path:
                     logger.warning("rss_watchdog: rss=%.0f MB — dumped tracemalloc to %s", rss, path)
                 last_dump_band = band
-            logger.info("rss_watchdog: rss=%.0f MB%s", rss, " (tracemalloc on)" if tracemalloc_on else "")
+            # Log at WARNING so the OOM-hunt log shows up in journals
+            # whose root level is WARNING (most prod configs). Cheap.
+            logger.warning("rss_watchdog: rss=%.0f MB%s", rss, " (tracemalloc on)" if tracemalloc_on else "")
         except Exception:
             # Never let the watchdog kill itself — keep ticking.
             logger.exception("rss_watchdog tick failed")
@@ -160,7 +162,7 @@ def start_rss_watchdog() -> None:
         daemon=True,
     )
     t.start()
-    logger.info(
+    logger.warning(
         "rss_watchdog: started (interval=%ds, tracemalloc=%s)",
         interval, "on" if tracemalloc_on else "off",
     )
