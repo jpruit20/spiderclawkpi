@@ -133,6 +133,64 @@ def _run_sharepoint(db) -> None:
     sync_sharepoint(db)
 
 
+def _run_sharepoint_intelligence(db) -> None:
+    """Post-ingest semantic-layer pass: classify any newly-ingested
+    docs (path/filename heuristics, fast), then download + parse any
+    BOM/CBOM/price-list spreadsheets that haven't been extracted yet,
+    then refresh the canonical-source picks for every (data_type,
+    product, division) scope.
+
+    Cheap unless many new BOMs landed — extraction is rate-limited by
+    Graph API, ~1-3s per Excel file. The classifier is the bulk-UPDATE
+    path so a 1000-row delta finishes in <2s. Gate due via
+    sharepoint_intelligence_sync_interval_minutes (default = same as
+    sharepoint sync so they run in lockstep)."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    interval = getattr(settings, "sharepoint_intelligence_sync_interval_minutes", None) or settings.sharepoint_sync_interval_minutes
+    if not _gate_due(db, "sharepoint_intelligence", interval):
+        return
+    if _gate_already_running(db, "sharepoint_intelligence"):
+        return
+
+    from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+    upsert_source_config(db, "sharepoint_intelligence", configured=True, enabled=True, sync_mode="poll")
+    run = start_sync_run(db, "sharepoint_intelligence", "scheduled")
+    try:
+        from app.services.sharepoint_classify import classify_documents
+        from app.services.sharepoint_bom_extractor import extract_all_bom_documents
+        from app.services.sharepoint_canonical import resolve_canonical
+
+        # 1. Classify any new/unclassified docs (idempotent, bulk UPDATE)
+        classify_counts = classify_documents(db)
+
+        # 2. Extract BOM lines for any active BOM/CBOM/price_list that
+        #    doesn't have a successful extraction run yet
+        extract_counts = extract_all_bom_documents(db)
+
+        # 3. Refresh canonical picks. Cheap (small fanout).
+        PRODUCTS = ["Huntsman", "Giant Huntsman", "Venom", "Webcraft", "Giant Webcraft"]
+        DIVISIONS = ["pe", "manufacturing", "operations", None]
+        DATA_TYPES = ["cogs", "bom", "vendor_list", "design_spec", "drawing"]
+        canonical_picks = 0
+        for dt in DATA_TYPES:
+            for prod in PRODUCTS:
+                for div in DIVISIONS:
+                    if resolve_canonical(db, data_type=dt, spider_product=prod, dashboard_division=div, auto_persist=True):
+                        canonical_picks += 1
+
+        records = (classify_counts.get("updated", 0) or 0) + (extract_counts.get("lines", 0) or 0)
+        finish_sync_run(
+            db,
+            run,
+            status="success",
+            records_processed=records,
+        )
+    except Exception as exc:
+        finish_sync_run(db, run, status="failed", error_message=str(exc)[:500])
+        raise
+
+
 def _run_klaviyo(db) -> None:
     """Klaviyo profiles + events sync. Cheap-to-medium (~50-200 MB
     transient depending on backfill window). Lives in its own
@@ -262,6 +320,7 @@ TARGETS = {
     "ga4": _run_ga4,
     "klaviyo": _run_klaviyo,
     "sharepoint": _run_sharepoint,
+    "sharepoint_intelligence": _run_sharepoint_intelligence,
     "aws_telemetry": _run_aws_telemetry,
     "clarity": _run_clarity,
     "reddit": _run_reddit,

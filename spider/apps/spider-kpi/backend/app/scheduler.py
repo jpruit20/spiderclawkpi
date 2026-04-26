@@ -113,6 +113,11 @@ def run_syncs() -> None:
     # consumers read it) is preserved.
     targets = [
         "shopify", "triplewhale", "freshdesk", "ga4", "klaviyo", "sharepoint",
+        # sharepoint_intelligence runs immediately after sharepoint so any
+        # newly-ingested doc gets classified + BOM-extracted in the same
+        # sweep. Cheap (~bulk UPDATE on classify, ~1-3s/file on extract);
+        # gates itself via sharepoint_intelligence_sync_interval_minutes.
+        "sharepoint_intelligence",
         "aws_telemetry",
         "clarity", "reddit", "amazon", "clickup", "slack",
         "youtube", "youtube_lore",
