@@ -214,10 +214,17 @@ def analyze_corpus(
     spider_product: Optional[str] = None,
     limit: Optional[int] = None,
     force: bool = False,
+    parallelism: int = 8,
 ) -> dict[str, int]:
-    """Walk every doc that has fresh content but no fresh analysis."""
+    """Walk every doc that has fresh content but no fresh analysis.
+    Parallelizes Claude calls because the work is HTTP-latency-bound,
+    not CPU. Each worker uses its own DB session to avoid SQLAlchemy
+    session-thread-affinity issues."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from app.db.session import SessionLocal
+
     q = (
-        select(SharepointDocument)
+        select(SharepointDocument.id)
         .join(SharepointFileContent, SharepointFileContent.document_id == SharepointDocument.id)
         .where(
             SharepointFileContent.extraction_status == "ok",
@@ -230,20 +237,42 @@ def analyze_corpus(
     if limit:
         q = q.limit(limit)
 
-    docs = db.execute(q).scalars().all()
+    doc_ids = [row[0] for row in db.execute(q).all()]
     counts = {"seen": 0, "ok": 0, "cached": 0, "failed": 0, "skipped": 0, "input_tokens": 0, "output_tokens": 0}
-    for doc in docs:
-        counts["seen"] += 1
-        result = analyze_document(db, doc, force=force)
-        s = result.get("status")
-        if s == "ok":
-            counts["ok"] += 1
-            counts["input_tokens"] += result.get("input_tokens") or 0
-            counts["output_tokens"] += result.get("output_tokens") or 0
-        elif s == "cached":
-            counts["cached"] += 1
-        elif s == "skipped":
-            counts["skipped"] += 1
-        else:
-            counts["failed"] += 1
+
+    def _worker(doc_id: int) -> dict[str, Any]:
+        # Fresh session per task — Claude call is the long-running part
+        s = SessionLocal()
+        try:
+            d = s.get(SharepointDocument, doc_id)
+            if d is None:
+                return {"status": "skipped", "reason": "doc disappeared"}
+            return analyze_document(s, d, force=force)
+        finally:
+            s.close()
+
+    with ThreadPoolExecutor(max_workers=parallelism) as ex:
+        futures = [ex.submit(_worker, did) for did in doc_ids]
+        for fut in as_completed(futures):
+            counts["seen"] += 1
+            try:
+                result = fut.result()
+            except Exception as exc:
+                logger.warning("worker errored: %s", exc)
+                counts["failed"] += 1
+                continue
+            s = result.get("status")
+            if s == "ok":
+                counts["ok"] += 1
+                counts["input_tokens"] += result.get("input_tokens") or 0
+                counts["output_tokens"] += result.get("output_tokens") or 0
+            elif s == "cached":
+                counts["cached"] += 1
+            elif s == "skipped":
+                counts["skipped"] += 1
+            else:
+                counts["failed"] += 1
+            # Periodic progress log
+            if counts["seen"] % 25 == 0:
+                logger.info("analyze_corpus progress: %s", counts)
     return counts
