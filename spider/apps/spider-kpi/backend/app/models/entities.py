@@ -1698,6 +1698,80 @@ class SharepointDocument(TimestampMixin, Base):
     dashboard_division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
     raw_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Semantic layer (populated by app/services/sharepoint_classify.py)
+    archive_status: Mapped[Optional[str]] = mapped_column(String(16), index=True)
+    semantic_type: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    parsed_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class SharepointBomLine(Base):
+    """One row per part extracted from a BOM Excel file. The dashboard's
+    COGS rollup queries this; the source-of-truth file lives at
+    ``document_id`` so users can click through."""
+    __tablename__ = "sharepoint_bom_lines"
+    __table_args__ = (
+        Index("ix_sharepoint_bom_lines_doc_part", "document_id", "part_number"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(Integer, ForeignKey("sharepoint_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    line_no: Mapped[Optional[int]] = mapped_column(Integer)
+    part_number: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    qty: Mapped[Optional[float]] = mapped_column(Numeric(14, 4))
+    unit: Mapped[Optional[str]] = mapped_column(String(32))
+    unit_cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(14, 4))
+    total_cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(14, 4))
+    currency_raw: Mapped[Optional[str]] = mapped_column(String(8))
+    raw_row_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SharepointCanonicalSource(Base):
+    """Per ``(data_type, spider_product, dashboard_division)`` the file
+    that's the source of truth. Auto-chosen by services/
+    sharepoint_canonical.py (newest non-archived BOM) unless a user has
+    pinned an override.
+
+    ``data_type`` examples: cogs, bom, vendor_list, design_spec, drawing.
+    """
+    __tablename__ = "sharepoint_canonical_sources"
+    __table_args__ = (
+        UniqueConstraint("data_type", "spider_product", "dashboard_division", name="uq_canonical_source_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    data_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    spider_product: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    dashboard_division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    document_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("sharepoint_documents.id", ondelete="SET NULL"))
+    auto_chosen: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    override_user: Mapped[Optional[str]] = mapped_column(String(255))
+    override_note: Mapped[Optional[str]] = mapped_column(Text)
+    override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class SharepointExtractionRun(Base):
+    """Append-only log of "we tried to extract X from this file".
+    Supports re-running a single failed file and tracking parser
+    regressions across versions."""
+    __tablename__ = "sharepoint_extraction_runs"
+    __table_args__ = (
+        Index("ix_sharepoint_extraction_runs_doc_kind_ran", "document_id", "kind", "ran_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(Integer, ForeignKey("sharepoint_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    parser_version: Mapped[Optional[str]] = mapped_column(String(32))
+    lines_extracted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class SharepointListItem(TimestampMixin, Base):
