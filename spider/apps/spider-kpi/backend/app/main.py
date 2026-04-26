@@ -25,6 +25,7 @@ from app.api.routes.firmware_deploy import router as firmware_deploy_router
 from app.api.routes.deci import router as deci_router
 from app.api.routes.email import router as email_router
 from app.api.routes.health import router as health_router
+from app.api.routes.integrations import router as integrations_router
 from app.api.routes.klaviyo import router as klaviyo_router
 from app.api.routes.lore import router as lore_router
 from app.api.routes.marketing import router as marketing_router
@@ -103,6 +104,7 @@ async def add_security_headers(request, call_next):
 
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(integrations_router)
 app.include_router(overview_router)
 app.include_router(personal_intelligence_router)
 app.include_router(admin_router)

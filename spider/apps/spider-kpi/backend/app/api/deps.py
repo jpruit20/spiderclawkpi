@@ -30,3 +30,37 @@ def require_dashboard_session(request: Request) -> None:
     token = request.cookies.get(COOKIE_NAME)
     if not verify_session_token(token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Dashboard session required")
+
+
+def require_dashboard_or_service_token(
+    request: Request,
+    x_app_password: str | None = Header(default=None, alias="X-App-Password"),
+) -> None:
+    """Combined auth — accepts either a valid dashboard session cookie
+    OR a valid X-App-Password header. Used on routes another internal
+    service (e.g. Shelob) needs to read server-to-server.
+
+    APP_PASSWORD is already an admin-equivalent secret (require_auth
+    uses it for /api/admin/*), so accepting it on telemetry-aggregate
+    routes doesn't widen the blast radius — same secret, same trust
+    level. Browser sessions keep working as before.
+
+    SCOPED USE ONLY: apply to read-only telemetry-aggregate routes
+    other services legitimately need. Do NOT use on write paths or on
+    CX/marketing/admin surfaces that should stay dashboard-only.
+    """
+    if settings.auth_disabled:
+        return
+    if (
+        x_app_password
+        and settings.app_password
+        and settings.app_password != "change-me"
+        and x_app_password == settings.app_password
+    ):
+        return
+    token = request.cookies.get(COOKIE_NAME)
+    if not verify_session_token(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Dashboard session or X-App-Password required",
+        )
