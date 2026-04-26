@@ -325,6 +325,28 @@ def _persist_status(
     return {"status": status, "id": existing.id, "error": error}
 
 
+def _scrub_text(s: str) -> str:
+    """PostgreSQL TEXT can't store NUL bytes. Strip them and other
+    rare control chars that show up in some PDF/CJK extraction. Keep
+    \\n and \\t which are legal."""
+    if not s:
+        return s
+    return s.replace("\x00", "").replace("\ufeff", "")
+
+
+def _scrub_structure(obj):
+    """Recursively strip NULs from any string value inside structure
+    JSON (Excel cells, sheet names, etc.) so JSONB persistence
+    doesn't choke on PDF/CJK NULs that leak into row values."""
+    if isinstance(obj, str):
+        return _scrub_text(obj)
+    if isinstance(obj, list):
+        return [_scrub_structure(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _scrub_structure(v) for k, v in obj.items()}
+    return obj
+
+
 def _persist_content(
     db: Session,
     doc: SharepointDocument,
@@ -334,6 +356,8 @@ def _persist_content(
     sha: str,
     byte_size: int,
 ) -> dict[str, Any]:
+    text = _scrub_text(text)
+    structure = _scrub_structure(structure)
     existing = db.execute(
         select(SharepointFileContent).where(SharepointFileContent.document_id == doc.id)
     ).scalar_one_or_none()

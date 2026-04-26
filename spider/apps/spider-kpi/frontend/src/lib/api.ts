@@ -1193,6 +1193,27 @@ export const api = {
       body: JSON.stringify(payload),
       signal,
     }),
+  // SharePoint deep analysis (Phase 2)
+  sharepointProductNarrative: (spider_product: string, signal?: AbortSignal) =>
+    request<SharepointProductNarrative>(
+      `/api/sharepoint/intelligence/product-narrative?spider_product=${encodeURIComponent(spider_product)}`,
+      { signal },
+    ),
+  sharepointFileAnalyses: (
+    opts: { spider_product?: string; division?: string; semantic_type?: string },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.spider_product) q.set('spider_product', opts.spider_product)
+    if (opts.division) q.set('division', opts.division)
+    if (opts.semantic_type) q.set('semantic_type', opts.semantic_type)
+    return request<SharepointFileAnalysesResponse>(
+      `/api/sharepoint/intelligence/file-analyses?${q.toString()}`,
+      { signal },
+    )
+  },
+  sharepointAnalysisStatus: (signal?: AbortSignal) =>
+    request<SharepointAnalysisStatusResponse>(`/api/sharepoint/intelligence/analysis-status`, { signal }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1605,6 +1626,87 @@ export interface SharepointSetCanonicalResponse {
   override_user: string | null
   override_at: string | null
   source_file: SharepointDocSummary | null
+}
+
+export interface SharepointProductNarrative {
+  generated_at: string
+  spider_product: string
+  available: boolean
+  reason?: string
+  narrative_md?: string
+  cogs_summary?: {
+    canonical_total_usd: number | null
+    canonical_line_count: number | null
+    canonical_document_id: number | null
+    confidence: string
+    notes: string | null
+  }
+  design_status?: {
+    latest_revision: string | null
+    latest_revision_document_id: number | null
+    active_workstreams: string[]
+    notable_iterations: string[]
+  }
+  vendor_summary?: {
+    top_vendors: Array<{ name: string; mentions: number; documents_seen: number; role: string | null }>
+    total_unique: number
+  }
+  data_quality_issues?: Array<{
+    severity: string
+    issue: string
+    affected_document_ids: number[]
+    suggested_fix: string | null
+  }>
+  citations?: Array<{ claim: string; document_id: number }>
+  citation_docs?: Record<string, SharepointDocSummary>
+  files_analyzed?: number
+  model_used?: string
+  synthesized_at?: string | null
+}
+
+export interface SharepointFileAnalysisRow {
+  document: SharepointDocSummary
+  purpose: string | null
+  key_facts: Array<{
+    kind: string
+    summary: string
+    detail: string | null
+    source_location: string | null
+  }>
+  related_part_numbers: string[]
+  related_vendors: string[]
+  cost_data: {
+    total_cost_usd: number | null
+    line_count: number | null
+    currency_observed: string | null
+    cost_completeness: string
+    notes: string | null
+  }
+  design_data: {
+    revision_label: string | null
+    assemblies_named: string[]
+    materials_named: string[]
+    dimensions_summary: string | null
+  }
+  decisions: string[]
+  data_quality_flags: string[]
+  analyzed_at: string | null
+}
+
+export interface SharepointFileAnalysesResponse {
+  generated_at: string
+  filters: { spider_product: string | null; division: string | null; semantic_type: string | null }
+  files: SharepointFileAnalysisRow[]
+}
+
+export interface SharepointAnalysisStatusResponse {
+  generated_at: string
+  files_with_content: number
+  files_with_analysis: number
+  products_with_synthesis: number
+  last_content_extracted_at: string | null
+  last_analysis_at: string | null
+  last_synthesis_at: string | null
 }
 
 export interface KlaviyoSyncStatus {
