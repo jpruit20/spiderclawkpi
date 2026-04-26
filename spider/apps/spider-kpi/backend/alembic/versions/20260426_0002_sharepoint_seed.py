@@ -50,15 +50,13 @@ SITES = [
 
 
 def upgrade() -> None:
-    now = datetime.now(timezone.utc).isoformat()
-
     op.execute(sa.text("""
         INSERT INTO microsoft_tenants (tenant_id, display_name, primary_domain, enabled, notes, created_at, updated_at)
         VALUES (:tid, 'Align Machine Works, LLC', 'alignmachineworks.com', TRUE,
                 'Seeded 2026-04-26. Spider Grills product cards. Sites.Selected grants applied via scripts/grant_sharepoint_sites.py.',
-                :now, :now)
+                NOW(), NOW())
         ON CONFLICT (tenant_id) DO NOTHING
-    """).bindparams(tid=AMW_TENANT_ID, now=now))
+    """).bindparams(tid=AMW_TENANT_ID))
 
     for site_path, product in SITES:
         op.execute(sa.text("""
@@ -67,10 +65,10 @@ def upgrade() -> None:
                 default_division, enabled, granted_at, created_at, updated_at
             ) VALUES (
                 :tid, :sp, 'alignmachineworks.sharepoint.com', :prod,
-                NULL, TRUE, :now, :now, :now
+                NULL, TRUE, NOW(), NOW(), NOW()
             )
             ON CONFLICT (tenant_id, site_path) DO NOTHING
-        """).bindparams(tid=AMW_TENANT_ID, sp=site_path, prod=product, now=now))
+        """).bindparams(tid=AMW_TENANT_ID, sp=site_path, prod=product))
 
 
 def downgrade() -> None:
