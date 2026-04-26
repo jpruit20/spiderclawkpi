@@ -7,6 +7,7 @@ import { EmailPulseCard } from '../components/EmailPulseCard'
 import { DivisionHero } from '../components/DivisionHero'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
+import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { Link } from 'react-router-dom'
 
@@ -107,6 +108,7 @@ export function OperationsDivision() {
       {/* SharePoint Project Management activity — POs, quotations,
           master trackers, vendor specs from AMW's per-product
           sites. */}
+      <SharepointIntelligenceCard division="operations" />
       <SharepointActivityCard division="operations" />
 
       {/* Order aging — Conor's 2026-04-21 ask. Lives here as a real ops

@@ -1147,6 +1147,52 @@ export const api = {
   },
   sharepointByProduct: (signal?: AbortSignal) =>
     request<SharepointByProduct>(`/api/sharepoint/by-product`, { signal }),
+  // SharePoint intelligence layer
+  sharepointActiveArchive: (
+    opts: { division?: string; spider_product?: string },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.division) q.set('division', opts.division)
+    if (opts.spider_product) q.set('spider_product', opts.spider_product)
+    return request<SharepointActiveArchive>(`/api/sharepoint/intelligence/active-archive?${q.toString()}`, { signal })
+  },
+  sharepointCogs: (
+    opts: { spider_product: string; division?: string },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    q.set('spider_product', opts.spider_product)
+    if (opts.division) q.set('division', opts.division)
+    return request<SharepointCogsResponse>(`/api/sharepoint/intelligence/cogs?${q.toString()}`, { signal })
+  },
+  sharepointVendors: (spider_product: string | undefined, signal?: AbortSignal) => {
+    const q = new URLSearchParams()
+    if (spider_product) q.set('spider_product', spider_product)
+    return request<SharepointVendorDirectory>(`/api/sharepoint/intelligence/vendors?${q.toString()}`, { signal })
+  },
+  sharepointRevisions: (spider_product: string, semantic_type: string = 'bom', signal?: AbortSignal) =>
+    request<SharepointRevisions>(
+      `/api/sharepoint/intelligence/revisions?spider_product=${encodeURIComponent(spider_product)}&semantic_type=${encodeURIComponent(semantic_type)}`,
+      { signal },
+    ),
+  sharepointExtractionStatus: (signal?: AbortSignal) =>
+    request<SharepointExtractionStatus>(`/api/sharepoint/extraction-status`, { signal }),
+  sharepointCanonicalSources: (data_type: string | undefined, signal?: AbortSignal) => {
+    const q = new URLSearchParams()
+    if (data_type) q.set('data_type', data_type)
+    return request<SharepointCanonicalSourcesResponse>(`/api/sharepoint/canonical-sources?${q.toString()}`, { signal })
+  },
+  sharepointSetCanonical: (
+    payload: { data_type: string; spider_product?: string | null; dashboard_division?: string | null; document_id: number | null; note?: string | null },
+    signal?: AbortSignal,
+  ) =>
+    request<SharepointSetCanonicalResponse>(`/api/sharepoint/canonical-sources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1451,6 +1497,114 @@ export interface SharepointByProduct {
     list_items: number
     last_modified: string | null
   }>
+}
+
+// SharePoint intelligence layer
+
+export interface SharepointDocSummary {
+  id: number
+  name: string
+  path: string
+  web_url: string | null
+  spider_product: string | null
+  dashboard_division: string | null
+  top_level_folder: string | null
+  modified_at: string | null
+  modified_by_email: string | null
+  semantic_type: string | null
+  archive_status: string | null
+  sku_code: string | null
+  revision_letter: string | null
+  doc_date: string | null
+  assembly_name: string | null
+}
+
+export interface SharepointActiveArchive {
+  generated_at: string
+  filters: { division: string | null; spider_product: string | null }
+  by_status: Record<string, number>
+  by_semantic_type: Array<{ semantic_type: string; active: number; archived: number; total: number }>
+}
+
+export interface SharepointBomLineOut {
+  line_no: number | null
+  part_number: string | null
+  description: string | null
+  vendor_name: string | null
+  qty: number | null
+  unit: string | null
+  unit_cost_usd: number | null
+  total_cost_usd: number | null
+  currency_raw: string | null
+}
+
+export interface SharepointCogsResponse {
+  generated_at: string
+  spider_product: string
+  dashboard_division: string | null
+  source_file: SharepointDocSummary | null
+  source_pin_state: {
+    auto_chosen: boolean
+    override_user: string | null
+    override_at: string | null
+    override_note: string | null
+  }
+  rollup: {
+    total_cost_usd: number
+    line_count: number
+    vendor_count: number
+    vendors: Array<{ vendor: string; cost: number; lines: number }>
+  }
+  lines: SharepointBomLineOut[]
+}
+
+export interface SharepointVendorDirectory {
+  generated_at: string
+  spider_product: string | null
+  vendors: Array<{ vendor: string; line_count: number; doc_count: number; total_cost_usd: number }>
+}
+
+export interface SharepointRevisions {
+  generated_at: string
+  spider_product: string
+  semantic_type: string
+  by_assembly: Array<{ assembly_name: string; revisions: SharepointDocSummary[] }>
+}
+
+export interface SharepointExtractionStatus {
+  generated_at: string
+  active_bom_docs: number
+  extracted_successfully: number
+  extraction_failures: number
+  bom_lines_total: number
+  last_extraction_at: string | null
+}
+
+export interface SharepointCanonicalSourceRow {
+  id: number
+  data_type: string
+  spider_product: string | null
+  dashboard_division: string | null
+  auto_chosen: boolean
+  override_user: string | null
+  override_at: string | null
+  override_note: string | null
+  source_file: SharepointDocSummary | null
+}
+
+export interface SharepointCanonicalSourcesResponse {
+  generated_at: string
+  supported_data_types: string[]
+  rows: SharepointCanonicalSourceRow[]
+}
+
+export interface SharepointSetCanonicalResponse {
+  status: string
+  scope: { data_type: string; spider_product: string | null; dashboard_division: string | null }
+  auto_chosen: boolean
+  override_user: string | null
+  override_at: string | null
+  source_file: SharepointDocSummary | null
 }
 
 export interface KlaviyoSyncStatus {

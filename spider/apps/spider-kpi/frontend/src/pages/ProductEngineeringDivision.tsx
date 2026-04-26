@@ -26,6 +26,7 @@ import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { AudienceSegmentationCard } from '../components/AudienceSegmentationCard'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
+import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
 import { AppFunnelCard } from '../components/AppFunnelCard'
 import { AppLiveFeedCard } from '../components/AppLiveFeedCard'
@@ -1033,6 +1034,7 @@ export function ProductEngineeringDivision() {
               {/* SharePoint engineering activity — pulled from AMW's
                   per-product sites. Files modified in the
                   Engineering folder across all 5 product cards. */}
+              <SharepointIntelligenceCard division="pe" />
               <SharepointActivityCard division="pe" />
 
               {/* Fleet composition — canonical 24mo active count +

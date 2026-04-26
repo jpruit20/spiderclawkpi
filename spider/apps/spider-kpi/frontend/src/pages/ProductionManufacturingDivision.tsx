@@ -2,6 +2,7 @@ import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 import { DivisionHero } from '../components/DivisionHero'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
+import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 
 export function ProductionManufacturingDivision() {
   return (
@@ -58,6 +59,7 @@ export function ProductionManufacturingDivision() {
           sites' "Production and QC" folders. First real manufacturing
           data on this page; production output / yield / defect feeds
           remain blocked below until MES integration lands. */}
+      <SharepointIntelligenceCard division="manufacturing" />
       <SharepointActivityCard division="manufacturing" />
 
       <BlockedDivisionPage
