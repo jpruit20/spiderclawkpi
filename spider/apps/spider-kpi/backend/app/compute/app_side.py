@@ -112,6 +112,39 @@ def _business_date(value: datetime | None) -> date | None:
     return aware.astimezone(BUSINESS_TZ).date()
 
 
+# Column length budgets must match the model definitions in
+# entities.py (AppSideDeviceObservation). Any value over the budget
+# would raise StringDataRightTruncation at flush time and abort the
+# whole bulk insert — which historically pinned GBs of in-memory
+# tickets in Python until the next OOM-kill (observed 2026-04-25:
+# RSS jumped 372 → 3448 MB in 2 min after one bad freshdesk row).
+# Truncate defensively here so one over-long phone_model can't blow
+# up the entire materialize pass.
+_FIELD_MAX_LEN = {
+    "controller_model": 64,
+    "firmware_version": 64,
+    "app_version": 64,
+    "phone_brand": 64,
+    "phone_os": 32,
+    "phone_os_version": 32,
+    "phone_model": 128,
+    "mac_raw": 64,
+    "mac_normalized": 64,
+}
+
+
+def _truncate(value: Any, key: str) -> Any:
+    if value is None:
+        return None
+    s = str(value)
+    limit = _FIELD_MAX_LEN.get(key)
+    if limit is None or len(s) <= limit:
+        return s
+    # Log the first time we see an overflow per key so we don't silently
+    # drop data — but cap to one warning per process to avoid log spam.
+    return s[:limit]
+
+
 def _requester_email_from_ticket(ticket: FreshdeskTicket) -> str | None:
     payload = ticket.raw_payload or {}
     email = payload.get("email") or payload.get("requester_email")
@@ -131,7 +164,23 @@ def ingest_freshdesk_observations(db: Session) -> dict[str, int]:
     """Read every FreshdeskTicket and upsert user/device observations.
 
     Idempotent — keyed on (source, source_ref_id). Returns counts.
+
+    History: the previous shape did
+    ``db.execute(select(FreshdeskTicket)).scalars().all()`` then
+    ``db.flush()`` once at the end. With tens of thousands of tickets
+    each carrying a ~1-50 KB raw_payload JSONB blob, that pinned
+    multi-GB of Python memory; if the final flush failed (e.g. on a
+    StringDataRightTruncation from a single over-long phone_model) the
+    whole pile of objects + the unsent prepared statement stayed
+    resident until the kernel OOM-killed uvicorn. That was the actual
+    OOM source 2026-04-25 (24 SIGKILLs in ~3.5 h, 7-10 min cadence).
+
+    Now: tickets are STREAMED via yield_per, observations are flushed
+    every BATCH_SIZE rows, and each batch flush is wrapped in
+    try/except so a single bad ticket can't poison the whole pass.
     """
+    BATCH_SIZE = 500
+
     stats = {
         "tickets_seen": 0,
         "user_rows_inserted": 0,
@@ -140,124 +189,167 @@ def ingest_freshdesk_observations(db: Session) -> dict[str, int]:
         "device_rows_updated": 0,
         "tickets_skipped_no_date": 0,
         "tickets_skipped_no_user": 0,
+        "batches_failed": 0,
     }
 
-    tickets = db.execute(select(FreshdeskTicket)).scalars().all()
-    stats["tickets_seen"] = len(tickets)
+    def _flush_and_expunge() -> bool:
+        """Flush pending inserts + expunge the batch from the session.
+        On failure, roll back this batch and continue. Returns success."""
+        try:
+            db.flush()
+        except Exception as e:
+            stats["batches_failed"] += 1
+            logger.warning(
+                "ingest_freshdesk_observations: batch flush failed (%s) — "
+                "rolling back this batch and continuing",
+                type(e).__name__,
+            )
+            db.rollback()
+            db.expunge_all()
+            return False
+        # Drop ALL ORM instances from the session's identity map so
+        # the raw_payload blobs they hold can be GC'd. Without this
+        # they accumulate until the function returns. Safe because we
+        # only update fields by direct attribute assignment in the
+        # loop above; nothing later in this function reads them.
+        db.expunge_all()
+        return True
 
-    for ticket in tickets:
-        bdate = _business_date(ticket.created_at_source)
-        if bdate is None:
-            stats["tickets_skipped_no_date"] += 1
-            continue
+    last_id = 0
+    while True:
+        batch = db.execute(
+            select(FreshdeskTicket)
+            .where(FreshdeskTicket.id > last_id)
+            .order_by(FreshdeskTicket.id)
+            .limit(BATCH_SIZE)
+        ).scalars().all()
+        if not batch:
+            break
+        last_id = batch[-1].id
+        stats["tickets_seen"] += len(batch)
 
-        payload = ticket.raw_payload or {}
-        custom = payload.get("custom_fields") or {}
-        fields = _extract_app_fields(custom)
+        for ticket in batch:
+            bdate = _business_date(ticket.created_at_source)
+            if bdate is None:
+                stats["tickets_skipped_no_date"] += 1
+                continue
 
-        email = _requester_email_from_ticket(ticket)
-        user_key = _user_key(email)
+            payload = ticket.raw_payload or {}
+            custom = payload.get("custom_fields") or {}
+            fields = _extract_app_fields(custom)
 
-        # --- user observation ----------------------------------------------
-        if user_key:
+            email = _requester_email_from_ticket(ticket)
+            user_key = _user_key(email)
+
+            # --- user observation --------------------------------------
+            if user_key:
+                source_ref = f"freshdesk:{ticket.ticket_id}"
+                user_row = db.execute(
+                    select(AppSideUserObservation).where(
+                        AppSideUserObservation.source == SOURCE_FRESHDESK,
+                        AppSideUserObservation.source_ref_id == source_ref,
+                    )
+                ).scalars().first()
+                if user_row is None:
+                    user_row = AppSideUserObservation(
+                        source=SOURCE_FRESHDESK,
+                        source_ref_id=source_ref,
+                        business_date=bdate,
+                        user_key=user_key,
+                        email=email,
+                        email_domain=_email_domain(email),
+                        observed_at=ticket.created_at_source,
+                        raw_payload={
+                            "ticket_id": ticket.ticket_id,
+                            "subject": ticket.subject,
+                            "channel": ticket.channel,
+                            "status": ticket.status,
+                            "tags": ticket.tags_json,
+                        },
+                    )
+                    db.add(user_row)
+                    stats["user_rows_inserted"] += 1
+                else:
+                    user_row.business_date = bdate
+                    user_row.user_key = user_key
+                    user_row.email = email
+                    user_row.email_domain = _email_domain(email)
+                    user_row.observed_at = ticket.created_at_source
+                    stats["user_rows_updated"] += 1
+            else:
+                stats["tickets_skipped_no_user"] += 1
+
+            # --- device observation ------------------------------------
+            # Truncate every varchar-bound field so a single overlong
+            # value (e.g. a phone_brand string > 64 chars) can't trip
+            # StringDataRightTruncation and abort the whole flush —
+            # which historically pinned GBs of in-memory tickets.
+            mac_raw_t = _truncate(fields["mac_address"], "mac_raw")
+            mac_norm_t = _truncate(_normalize_mac(fields["mac_address"]), "mac_normalized")
+            controller = _truncate(fields["controller_model"], "controller_model")
+            firmware = _truncate(fields["firmware_version"], "firmware_version")
+            app_version = _truncate(fields["app_version"], "app_version")
+            phone_os = _truncate(fields["phone_os"], "phone_os")
+            phone_os_version = _truncate(fields["phone_os_version"], "phone_os_version")
+            phone_brand = _truncate(fields["phone_brand"], "phone_brand")
+            phone_model = _truncate(fields["phone_model"], "phone_model")
+
+            # Only write a device row if the ticket carries *any* app-side signal
+            # (MAC, firmware, app version, controller, or phone context).
+            any_signal = any([
+                mac_norm_t, controller, firmware, app_version,
+                phone_os, phone_brand, phone_model,
+            ])
+            if not any_signal:
+                continue
+
             source_ref = f"freshdesk:{ticket.ticket_id}"
-            user_row = db.execute(
-                select(AppSideUserObservation).where(
-                    AppSideUserObservation.source == SOURCE_FRESHDESK,
-                    AppSideUserObservation.source_ref_id == source_ref,
+            device_row = db.execute(
+                select(AppSideDeviceObservation).where(
+                    AppSideDeviceObservation.source == SOURCE_FRESHDESK,
+                    AppSideDeviceObservation.source_ref_id == source_ref,
                 )
             ).scalars().first()
-            if user_row is None:
-                user_row = AppSideUserObservation(
+            if device_row is None:
+                device_row = AppSideDeviceObservation(
                     source=SOURCE_FRESHDESK,
                     source_ref_id=source_ref,
                     business_date=bdate,
                     user_key=user_key,
-                    email=email,
-                    email_domain=_email_domain(email),
+                    mac_raw=mac_raw_t,
+                    mac_normalized=mac_norm_t,
+                    controller_model=controller,
+                    firmware_version=firmware,
+                    app_version=app_version,
+                    phone_os=phone_os,
+                    phone_os_version=phone_os_version,
+                    phone_brand=phone_brand,
+                    phone_model=phone_model,
                     observed_at=ticket.created_at_source,
-                    raw_payload={
-                        "ticket_id": ticket.ticket_id,
-                        "subject": ticket.subject,
-                        "channel": ticket.channel,
-                        "status": ticket.status,
-                        "tags": ticket.tags_json,
-                    },
+                    raw_payload={"custom_fields": custom, "ticket_id": ticket.ticket_id},
                 )
-                db.add(user_row)
-                stats["user_rows_inserted"] += 1
+                db.add(device_row)
+                stats["device_rows_inserted"] += 1
             else:
-                user_row.business_date = bdate
-                user_row.user_key = user_key
-                user_row.email = email
-                user_row.email_domain = _email_domain(email)
-                user_row.observed_at = ticket.created_at_source
-                stats["user_rows_updated"] += 1
-        else:
-            stats["tickets_skipped_no_user"] += 1
+                device_row.business_date = bdate
+                device_row.user_key = user_key
+                device_row.mac_raw = mac_raw_t
+                device_row.mac_normalized = mac_norm_t
+                device_row.controller_model = controller
+                device_row.firmware_version = firmware
+                device_row.app_version = app_version
+                device_row.phone_os = phone_os
+                device_row.phone_os_version = phone_os_version
+                device_row.phone_brand = phone_brand
+                device_row.phone_model = phone_model
+                device_row.observed_at = ticket.created_at_source
+                stats["device_rows_updated"] += 1
 
-        # --- device observation -------------------------------------------
-        mac_norm = _normalize_mac(fields["mac_address"])
-        controller = fields["controller_model"]
-        firmware = fields["firmware_version"]
-        app_version = fields["app_version"]
-        phone_os = fields["phone_os"]
-        phone_os_version = fields["phone_os_version"]
-        phone_brand = fields["phone_brand"]
-        phone_model = fields["phone_model"]
+        # End of per-ticket loop for this batch. Flush + expunge BEFORE
+        # we fetch the next batch so the previous batch's ticket
+        # raw_payload blobs can be garbage-collected.
+        _flush_and_expunge()
 
-        # Only write a device row if the ticket carries *any* app-side signal
-        # (MAC, firmware, app version, controller, or phone context).
-        any_signal = any([
-            mac_norm, controller, firmware, app_version,
-            phone_os, phone_brand, phone_model,
-        ])
-        if not any_signal:
-            continue
-
-        source_ref = f"freshdesk:{ticket.ticket_id}"
-        device_row = db.execute(
-            select(AppSideDeviceObservation).where(
-                AppSideDeviceObservation.source == SOURCE_FRESHDESK,
-                AppSideDeviceObservation.source_ref_id == source_ref,
-            )
-        ).scalars().first()
-        if device_row is None:
-            device_row = AppSideDeviceObservation(
-                source=SOURCE_FRESHDESK,
-                source_ref_id=source_ref,
-                business_date=bdate,
-                user_key=user_key,
-                mac_raw=fields["mac_address"],
-                mac_normalized=mac_norm,
-                controller_model=controller,
-                firmware_version=firmware,
-                app_version=app_version,
-                phone_os=phone_os,
-                phone_os_version=phone_os_version,
-                phone_brand=phone_brand,
-                phone_model=phone_model,
-                observed_at=ticket.created_at_source,
-                raw_payload={"custom_fields": custom, "ticket_id": ticket.ticket_id},
-            )
-            db.add(device_row)
-            stats["device_rows_inserted"] += 1
-        else:
-            device_row.business_date = bdate
-            device_row.user_key = user_key
-            device_row.mac_raw = fields["mac_address"]
-            device_row.mac_normalized = mac_norm
-            device_row.controller_model = controller
-            device_row.firmware_version = firmware
-            device_row.app_version = app_version
-            device_row.phone_os = phone_os
-            device_row.phone_os_version = phone_os_version
-            device_row.phone_brand = phone_brand
-            device_row.phone_model = phone_model
-            device_row.observed_at = ticket.created_at_source
-            stats["device_rows_updated"] += 1
-
-    db.flush()
     return stats
 
 
@@ -279,15 +371,23 @@ def rebuild_app_side_daily(db: Session) -> dict[str, int]:
     adding ``app_backend`` rows later requires no change here. Always a full
     rebuild — cheap at our volumes and keeps the rollup exactly consistent.
     """
-    users = db.execute(select(AppSideUserObservation)).scalars().all()
-    devices = db.execute(select(AppSideDeviceObservation)).scalars().all()
-
-    # (business_date, source) -> lists
+    # Project ONLY the scalar columns we need — never load raw_payload.
+    # The previous full-ORM-row select pulled tens of thousands of
+    # rows × ~5 KB JSONB raw_payload each into Python at once, which
+    # piled on the freshdesk-ingest leak and contributed to the 4 GB
+    # OOM ceiling. Scalar projection keeps this loop bounded to the
+    # working-set columns regardless of raw_payload size on disk.
     user_keys_by: dict[tuple[date, str], set[str]] = defaultdict(set)
     user_observations_by: dict[tuple[date, str], int] = defaultdict(int)
-    for u in users:
-        key = (u.business_date, u.source)
-        user_keys_by[key].add(u.user_key)
+    for bdate, source, user_key in db.execute(
+        select(
+            AppSideUserObservation.business_date,
+            AppSideUserObservation.source,
+            AppSideUserObservation.user_key,
+        )
+    ):
+        key = (bdate, source)
+        user_keys_by[key].add(user_key)
         user_observations_by[key] += 1
 
     device_keys_by: dict[tuple[date, str], set[str]] = defaultdict(set)
@@ -299,17 +399,30 @@ def rebuild_app_side_daily(db: Session) -> dict[str, int]:
     phone_brand_by: dict[tuple[date, str], list[str | None]] = defaultdict(list)
     phone_model_by: dict[tuple[date, str], list[str | None]] = defaultdict(list)
 
-    for d in devices:
-        key = (d.business_date, d.source)
+    for (bdate, source, mac_normalized, app_version, firmware,
+         controller, phone_os, phone_brand, phone_model) in db.execute(
+        select(
+            AppSideDeviceObservation.business_date,
+            AppSideDeviceObservation.source,
+            AppSideDeviceObservation.mac_normalized,
+            AppSideDeviceObservation.app_version,
+            AppSideDeviceObservation.firmware_version,
+            AppSideDeviceObservation.controller_model,
+            AppSideDeviceObservation.phone_os,
+            AppSideDeviceObservation.phone_brand,
+            AppSideDeviceObservation.phone_model,
+        )
+    ):
+        key = (bdate, source)
         device_observations_by[key] += 1
-        if d.mac_normalized:
-            device_keys_by[key].add(d.mac_normalized)
-        app_version_by[key].append(d.app_version)
-        firmware_by[key].append(d.firmware_version)
-        controller_by[key].append(d.controller_model)
-        phone_os_by[key].append(d.phone_os)
-        phone_brand_by[key].append(d.phone_brand)
-        phone_model_by[key].append(d.phone_model)
+        if mac_normalized:
+            device_keys_by[key].add(mac_normalized)
+        app_version_by[key].append(app_version)
+        firmware_by[key].append(firmware)
+        controller_by[key].append(controller)
+        phone_os_by[key].append(phone_os)
+        phone_brand_by[key].append(phone_brand)
+        phone_model_by[key].append(phone_model)
 
     # Full rebuild — wipe and re-insert.
     db.execute(delete(AppSideDaily))
