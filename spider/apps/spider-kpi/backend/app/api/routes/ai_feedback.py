@@ -182,15 +182,27 @@ def list_self_grades(
     }
 
 
+_SELF_GRADE_RUNNING = {"flag": False, "started_at": None, "last_result": None}
+
+
+# Static-path routes declared BEFORE the {grade_id} param route so
+# string paths like /self-grade/run-status resolve to the literal
+# handler instead of being parsed as a (failing) integer grade_id.
+@router.get("/self-grade/run-status")
+def run_self_grade_status() -> dict[str, Any]:
+    return {
+        "running": bool(_SELF_GRADE_RUNNING["flag"]),
+        "started_at": _SELF_GRADE_RUNNING["started_at"],
+        "last_result": _SELF_GRADE_RUNNING["last_result"],
+    }
+
+
 @router.get("/self-grade/{grade_id}")
 def get_self_grade(grade_id: int, db: Session = Depends(db_session)) -> dict[str, Any]:
     row = db.get(AISelfGrade, grade_id)
     if row is None:
         raise HTTPException(status_code=404, detail="self-grade not found")
     return _serialize_grade(row)
-
-
-_SELF_GRADE_RUNNING = {"flag": False, "started_at": None, "last_result": None}
 
 
 @router.post("/self-grade/run")
@@ -240,15 +252,6 @@ def run_self_grade(
         "status": "started",
         "started_at": _SELF_GRADE_RUNNING["started_at"],
         "note": "Opus 4.7 self-grade running in background (~2-3 min). Refresh the self-grade list to see the new row when it completes.",
-    }
-
-
-@router.get("/self-grade/run-status")
-def run_self_grade_status() -> dict[str, Any]:
-    return {
-        "running": bool(_SELF_GRADE_RUNNING["flag"]),
-        "started_at": _SELF_GRADE_RUNNING["started_at"],
-        "last_result": _SELF_GRADE_RUNNING["last_result"],
     }
 
 
