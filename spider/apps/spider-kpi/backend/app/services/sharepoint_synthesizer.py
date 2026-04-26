@@ -116,6 +116,65 @@ class ProductSynthesis(BaseModel):
     citations: List[Citation] = Field(default_factory=list)
 
 
+def _normalize_synthesis_payload(payload: dict) -> dict:
+    """Fix the common shape drifts Claude makes despite explicit examples.
+
+    Observed mistakes:
+    - vendor_summary returned as a list of vendors instead of an object
+      with top_vendors + total_unique.
+    - cogs_summary.breakdown items with cost_usd=null instead of being
+      omitted; we filter those.
+    - headline_metrics tone with extra whitespace or capitalization.
+    - timeline.kind values outside the expected set; normalize unknown
+      values to 'other'.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    # vendor_summary: list → object
+    vs = payload.get("vendor_summary")
+    if isinstance(vs, list):
+        payload["vendor_summary"] = {"top_vendors": vs, "total_unique": len(vs)}
+    elif isinstance(vs, dict) and "top_vendors" not in vs:
+        # Claude sometimes returns vendor_summary as a single vendor record
+        if "name" in vs:
+            payload["vendor_summary"] = {"top_vendors": [vs], "total_unique": 1}
+
+    # cogs_summary.breakdown: drop items with null/missing cost_usd
+    cs = payload.get("cogs_summary")
+    if isinstance(cs, dict):
+        bd = cs.get("breakdown")
+        if isinstance(bd, list):
+            cs["breakdown"] = [
+                b for b in bd
+                if isinstance(b, dict) and isinstance(b.get("cost_usd"), (int, float))
+            ]
+
+    # headline_metrics tone: normalize
+    hm = payload.get("headline_metrics")
+    if isinstance(hm, list):
+        for m in hm:
+            if isinstance(m, dict):
+                t = (m.get("tone") or "").strip().lower()
+                if t not in {"good", "warn", "bad", "neutral"}:
+                    m["tone"] = "neutral"
+
+    # timeline.kind: normalize unknowns to 'other'
+    tl = payload.get("timeline")
+    valid_kinds = {"revision", "decision", "shipment", "qc_event", "quote", "invoice", "other"}
+    if isinstance(tl, list):
+        for ev in tl:
+            if isinstance(ev, dict):
+                k = (ev.get("kind") or "").strip().lower()
+                if k not in valid_kinds:
+                    ev["kind"] = "other"
+                # date must be a string; if missing, set empty
+                if not isinstance(ev.get("date"), str):
+                    ev["date"] = ""
+
+    return payload
+
+
 SYSTEM_PROMPT = """You are the synthesis pass for Spider Grills' SharePoint corpus.
 
 You receive every analyzed file for one product (Huntsman / Giant Huntsman / Venom / Webcraft / Giant Webcraft) and produce one coherent picture for a founder/operator dashboard.
@@ -355,8 +414,11 @@ No markdown fence, no commentary, just the raw JSON object."""
     if raw_text.startswith("```"):
         raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text
         raw_text = raw_text.rsplit("```", 1)[0].strip()
+    # Normalize common shape drifts before strict validation
     try:
-        syn = ProductSynthesis.model_validate_json(raw_text)
+        payload = json.loads(raw_text)
+        payload = _normalize_synthesis_payload(payload)
+        syn = ProductSynthesis.model_validate(payload)
     except Exception as exc:
         logger.exception("synthesis JSON parse failed for %s", spider_product)
         return {"status": "failed", "error": f"json parse: {exc}"[:500], "raw_preview": raw_text[:500]}
