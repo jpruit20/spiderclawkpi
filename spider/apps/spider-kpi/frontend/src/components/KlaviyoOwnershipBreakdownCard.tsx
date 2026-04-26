@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { KlaviyoProductOwnership } from '../lib/api'
+import { SourceFreshnessChip } from './SourceFreshnessChip'
 
 /**
  * Giant Huntsman signal surfaced from Klaviyo Placed Order line-items.
@@ -58,7 +59,10 @@ export function KlaviyoOwnershipBreakdownCard() {
     <section className="card">
       <div className="venom-panel-head" style={{ alignItems: 'flex-start' }}>
         <div>
-          <strong>Ownership — from Shopify orders (via Klaviyo)</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong>Ownership — from Shopify orders (via Klaviyo)</strong>
+            <SourceFreshnessChip source="klaviyo" label="Klaviyo" />
+          </div>
           <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
             Unique customers per product family, derived from Placed Order line-items.
             The authoritative Giant Huntsman vs Huntsman split until the app reports device type directly.

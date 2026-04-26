@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { SharepointRecentChanges } from '../lib/api'
+import { SourceFreshnessChip } from './SourceFreshnessChip'
 
 /**
  * SharePoint activity feed scoped to a dashboard division.
@@ -112,7 +113,10 @@ export function SharepointActivityCard({ division, windowDays = 7 }: Props) {
     <section className="card">
       <div className="venom-panel-head" style={{ alignItems: 'flex-start' }}>
         <div>
-          <strong>{DIVISION_LABEL[division]} (SharePoint · AMW)</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong>{DIVISION_LABEL[division]} (SharePoint · AMW)</strong>
+            <SourceFreshnessChip source="sharepoint" label="SP" />
+          </div>
           <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
             Recent changes from the <code>{DIVISION_FOLDER[division]}</code> folder across the 5 Spider product cards.
             Last {windowDays} days · {data.documents.length} files · {data.list_items.length} list items.

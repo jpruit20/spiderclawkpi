@@ -709,6 +709,101 @@ def build_context(db: Session, lookback_days: int = 30) -> tuple[str, list[str]]
             )
         lines.append("")
 
+    # ── SHAREPOINT (AMW product cards) ──────────────────────────────
+    # Document + structured-list activity from the AMW Spider product
+    # cards. Each row is per-product × per-division, so Opus can spot
+    # things like "Webcraft engineering activity zero last 14 days
+    # while Webcraft tickets up 30%" or "Kienco logged 6 quotes for
+    # Giant Huntsman this week — vendor decision pending?".
+    try:
+        sp_rollup = db.execute(text("""
+            SELECT
+                spider_product,
+                dashboard_division,
+                COUNT(*) FILTER (WHERE modified_at_remote >= NOW() - INTERVAL '7 days') AS docs_7d,
+                COUNT(*) FILTER (WHERE modified_at_remote >= NOW() - INTERVAL '7 days' AND modified_at_remote < NOW() - INTERVAL '14 days') AS docs_prior_7d,
+                MAX(modified_at_remote) AS last_modified
+            FROM sharepoint_documents
+            WHERE is_folder = false
+              AND spider_product IS NOT NULL
+              AND dashboard_division IS NOT NULL
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """)).all()
+        if sp_rollup:
+            lines.append("## SHAREPOINT — AMW PRODUCT CARDS (last 7d activity)")
+            lines.append("  spider_product       division        docs_last_7d  docs_prior_7d  last_modified")
+            for r in sp_rollup:
+                last = r.last_modified.isoformat() if r.last_modified else "-"
+                lines.append(
+                    f"  {r.spider_product[:20]:20s} {(r.dashboard_division or '-'):14s}  "
+                    f"{int(r.docs_7d or 0):>11}  {int(r.docs_prior_7d or 0):>13}  {last}"
+                )
+            lines.append("")
+            sources.append("sharepoint_documents")
+
+        sp_recent_files = db.execute(text("""
+            SELECT spider_product, top_level_folder, name, modified_at_remote, modified_by_email
+            FROM sharepoint_documents
+            WHERE is_folder = false
+              AND modified_at_remote >= NOW() - INTERVAL '7 days'
+            ORDER BY modified_at_remote DESC
+            LIMIT 20
+        """)).all()
+        if sp_recent_files:
+            lines.append("  Top 20 most-recently-modified SharePoint files (last 7d):")
+            for r in sp_recent_files:
+                who = (r.modified_by_email or "").split("@")[0] or "?"
+                when = r.modified_at_remote.isoformat() if r.modified_at_remote else "?"
+                lines.append(f"      {when}  {r.spider_product or '-':16s} {r.top_level_folder or '-':22s} {r.name[:50]:50s} by {who}")
+            lines.append("")
+
+        sp_lists = db.execute(text("""
+            SELECT graph_list_name, spider_product, COUNT(*) n, MAX(modified_at_remote) last_mod
+            FROM sharepoint_list_items
+            WHERE modified_at_remote >= NOW() - INTERVAL '14 days'
+            GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10
+        """)).all()
+        if sp_lists:
+            lines.append("  Active SharePoint lists (14d):")
+            for r in sp_lists:
+                lines.append(f"      list={r.graph_list_name!r:40s} product={r.spider_product or '-':16s} updates={r.n} last={r.last_mod.isoformat() if r.last_mod else '?'}")
+            lines.append("")
+    except Exception:
+        # SharePoint tables may not exist yet on older deploys; fail silent.
+        pass
+
+    # ── KLAVIYO (audience + funnel signals) ──────────────────────────
+    # Lifetime app users + owners + recent engagement, so Opus can spot
+    # cross-source issues like "support ticket spike for users who
+    # opened the app this week + recent firmware OTA".
+    try:
+        from app.services.klaviyo_audience import audience_segmentation
+        ks = audience_segmentation(db)
+        lines.append("## KLAVIYO AUDIENCE")
+        lines.append(f"  - Total profiles: {ks['total_audience']:,} ({ks['non_owner_pct']}% are NOT owners — newsletter/giveaway/abandoned-cart)")
+        lines.append(f"  - Owners (3-signal union): {ks['owners']['total']:,} ({ks['owners']['pct_of_audience']}% of audience)")
+        lines.append(f"      via Placed Order: {ks['owners']['by_order']:,}  ·  via tag: {ks['owners']['by_klaviyo_tag']:,}  ·  via app device_types: {ks['owners']['by_device_types']:,}")
+        lines.append(f"  - App users lifetime: {ks['app_users']['lifetime']:,}  ·  active 30d: {ks['app_users']['active_30d']:,}")
+        lines.append(f"  - Connected devices (AWS): {ks['connected_devices']['lifetime']:,} lifetime  ·  {ks['connected_devices']['last_24mo']:,} last 24mo")
+        lines.append(f"  - Device:app-user ratio: {ks['device_to_app_user_ratio']} (households often have multiple devices on one app account)")
+        lines.append("")
+
+        kl_funnel = db.execute(text("""
+            SELECT metric_name, COUNT(*) AS events_7d, COUNT(DISTINCT klaviyo_profile_id) AS uniq_7d
+            FROM klaviyo_events
+            WHERE event_datetime >= NOW() - INTERVAL '7 days'
+            GROUP BY 1 ORDER BY 1
+        """)).all()
+        if kl_funnel:
+            lines.append("  Klaviyo events (last 7d):")
+            for r in kl_funnel:
+                lines.append(f"      {r.metric_name:30s} events={int(r.events_7d):,}  unique_profiles={int(r.uniq_7d):,}")
+            lines.append("")
+        sources.append("klaviyo_audience")
+    except Exception:
+        pass
+
     lines.append("=== END CONTEXT ===")
     return "\n".join(lines), sources
 
@@ -746,6 +841,10 @@ Your job is to surface **3-5 non-obvious observations** that a human reading one
 **Seasonal context:** The context now includes a SEASONAL CONTEXT section showing today's value for key metrics vs the prior-year baseline (p50 / percentile rank / verdict). Use this to distinguish "unusual" from "normal for this time of year". A -10% WoW drop that still sits at p70 of seasonal is not a meaningful regression; flag it only if WoW is down AND the seasonal rank also slipped.
 
 **Shadow-signal trends + firmware beta program:** The context includes a SHADOW-SIGNAL TRENDS section — fleet-wide counts of telemetry signatures that match specific firmware failure modes (probe_dropout, persistent_overshoot, wifi_disconnect, etc.), last 7d vs prior 7d. It also includes a FIRMWARE BETA PROGRAM section with recent release profiles, cohort state, and post-deploy verdict health. These are leading indicators: a 40% jump in `probe_dropout` firings often surfaces days before the corresponding Freshdesk tickets. When a shadow signal spikes, check whether a recent firmware release (in the LORE EVENTS or FIRMWARE BETA PROGRAM sections) could be the cause. When a beta release is mid-rollout and its verdict tally leans toward `still_failing` or `regression`, flag it as high-urgency.
+
+**SharePoint (AMW product cards):** The context includes a SHAREPOINT section with per-product × per-division document activity (Engineering / Production and QC / Project Management / General folders across the 5 Spider product cards). When you see a CX or telemetry signal for a specific product, cross-reference whether the AMW engineering or production team has been active there. A spike in Huntsman thermocouple tickets while Huntsman Engineering activity is zero for 14 days = engineering team is unaware of the field issue. A pile of fresh Kienco quotation files for Giant Huntsman = vendor decision pending; if Operations isn't pushing it forward, flag it.
+
+**Klaviyo audience:** The context includes a KLAVIYO AUDIENCE section showing the four populations the dashboard cares about: total Klaviyo profiles (~40k, mostly newsletter/giveaway non-owners), owners (3-signal union of bought-a-Spider-product / Klaviyo Product Ownership tag / app device_types set), lifetime app users, and connected devices. Use the right denominator. Cards lower down on the dashboard already use the right denominator per metric — when you cite a percentage, anchor it to the population it's actually measured against. Also: when you see a sales / Friendbuy / engagement signal, cross-check it against the audience composition.
 
 Be direct. Be terse. Be specific with numbers and dates."""
 

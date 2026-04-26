@@ -23,6 +23,10 @@ STALE_MINUTES_BY_SOURCE = {
     "aws_telemetry": 360,
     "aws_telemetry_stream": 30,
     "decision-engine": 180,
+    # Klaviyo + SharePoint poll once per day on the scheduler — give them
+    # a 36h freshness threshold so a single missed run doesn't page.
+    "klaviyo": 2160,
+    "sharepoint": 2160,
 }
 SOURCE_TYPES = {
     "shopify": "connector",

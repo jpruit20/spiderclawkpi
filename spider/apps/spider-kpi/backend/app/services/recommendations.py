@@ -452,6 +452,90 @@ def _rec_firmware_release_stalled(db: Session) -> list[dict[str, Any]]:
     return out
 
 
+def _rec_anomaly_for(metric_key: str, division: str, severity_floor: str = "moderate") -> Callable[[Session], list[dict[str, Any]]]:
+    """Build a generator that surfaces a recommendation when the named
+    metric's current 7-day average is statistically off from its
+    rolling 28-day baseline (z-score severity ≥ ``severity_floor``).
+
+    Closure pattern lets the same anomaly logic spawn one rec per
+    metric without N copy-paste functions. Each registered metric
+    gets a stable key so dedup works.
+    """
+    severity_rank = {"normal": 0, "mild": 1, "moderate": 2, "critical": 3}
+    floor = severity_rank.get(severity_floor, 2)
+
+    def generator(db: Session) -> list[dict[str, Any]]:
+        try:
+            from app.services.trend_analysis import (
+                detect_anomaly, kpi_daily_series, telemetry_history_daily_series, two_window_split,
+            )
+            from app.api.routes.trends import METRICS
+        except Exception:
+            return []
+        spec = METRICS.get(metric_key)
+        if not spec:
+            return []
+        try:
+            if spec["table"] == "kpi":
+                series = kpi_daily_series(db, spec["col"], days=35)
+            else:
+                series = telemetry_history_daily_series(db, spec["col"], days=35)
+        except Exception:
+            return []
+        if len(series) < 14:
+            return []
+        cur_7d, _ = two_window_split(series, current_window_days=7)
+        anomaly = detect_anomaly(cur_7d, series[:-7])
+        if severity_rank.get(anomaly.severity, 0) < floor:
+            return []
+        # Decide whether the anomaly is bad or good given the metric's
+        # up-is-good orientation. If telemetry_errors spiked above
+        # baseline, that's bad; if revenue dipped below baseline, also
+        # bad. Skip "good" anomalies — the recommendations engine is
+        # for actions, and a positive surprise doesn't need one.
+        bad_direction = (
+            (anomaly.direction == "above" and not spec["up_is_good"])
+            or (anomaly.direction == "below" and spec["up_is_good"])
+        )
+        if not bad_direction:
+            return []
+        sev_label = "warn" if anomaly.severity == "moderate" else "critical"
+        verb = "above" if anomaly.direction == "above" else "below"
+        return [{
+            "title": f"{spec['label']} is {anomaly.severity} ({verb} 28d baseline) — z={anomaly.z_score:+.1f}",
+            "severity": sev_label,
+            "evidence": (
+                f"7-day avg: {anomaly.current:.2f}. 28-day baseline mean: {anomaly.baseline_mean:.2f} "
+                f"(std {anomaly.baseline_std:.2f}, n={anomaly.n_observations})."
+            ),
+            "action": (
+                f"Open the {division.upper()} page and click into {spec['label']}'s underlying chart. "
+                f"Look for the breakpoint date and cross-reference with firmware releases, campaigns, "
+                f"or vendor changes in the LORE EVENTS feed."
+            ),
+            "impact": (
+                f"Anomaly detection catches regressions ~3-7 days earlier than "
+                f"single-threshold alerts. Recover this week, save the lagging "
+                f"indicators (CSAT, support volume) from following."
+            ),
+            "key": f"{division}.anomaly.{metric_key}",
+        }]
+    generator.__name__ = f"_rec_anomaly_{metric_key}"
+    return generator
+
+
+# Anomaly generators — one per metric, registered into the right
+# division below.
+_anomaly_pe_cook_success = _rec_anomaly_for("cook_success_rate", "pe")
+_anomaly_pe_telemetry_errors = _rec_anomaly_for("telemetry_errors", "pe")
+_anomaly_pe_telemetry_sessions = _rec_anomaly_for("telemetry_sessions", "pe")
+_anomaly_cx_tickets = _rec_anomaly_for("tickets_created", "cx")
+_anomaly_cx_csat = _rec_anomaly_for("csat", "cx")
+_anomaly_cx_first_response = _rec_anomaly_for("first_response_hours", "cx")
+_anomaly_marketing_revenue = _rec_anomaly_for("revenue", "marketing")
+_anomaly_marketing_orders = _rec_anomaly_for("orders", "marketing")
+
+
 def _rec_pe_engineering_stale(db: Session) -> list[dict[str, Any]]:
     """Flag products that haven't seen any engineering-folder file
     activity in 30+ days. Helps spot stalled product workstreams
@@ -551,16 +635,24 @@ _GENERATORS: dict[str, list[Callable[[Session], list[dict[str, Any]]]]] = {
         _rec_pe_disconnect_rate,
         _rec_pe_overshoot_rate,
         _rec_pe_engineering_stale,
+        _anomaly_pe_cook_success,
+        _anomaly_pe_telemetry_errors,
+        _anomaly_pe_telemetry_sessions,
     ],
     "cx": [
         _rec_cx_first_response_breach,
         _rec_cx_huntsman_ticket_spike,
         _rec_cx_backlog_growing,
+        _anomaly_cx_tickets,
+        _anomaly_cx_csat,
+        _anomaly_cx_first_response,
     ],
     "marketing": [
         _rec_marketing_friendbuy_attribution,
         _rec_marketing_unengaged_180d,
         _rec_marketing_unengaged_share,
+        _anomaly_marketing_revenue,
+        _anomaly_marketing_orders,
     ],
     "operations": [
         _rec_ops_order_aging,
