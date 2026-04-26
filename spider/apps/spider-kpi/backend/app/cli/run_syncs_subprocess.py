@@ -120,6 +120,23 @@ def _run_ga4(db) -> None:
     sync_ga4(db, days=7)
 
 
+def _run_klaviyo(db) -> None:
+    """Klaviyo profiles + events sync. Cheap-to-medium (~50-200 MB
+    transient depending on backfill window). Lives in its own
+    subprocess for the same memory-isolation reason as the others.
+    Self-gates due-checks via klaviyo_sync_interval_minutes (60 min
+    by default). 2026-04-26: was missing from this dispatch dict
+    entirely after the per-target refactor — the scheduler's targets
+    list was running it via the missing-target error path. Added."""
+    from app.core.config import get_settings
+    if not _gate_due(db, "klaviyo", get_settings().klaviyo_sync_interval_minutes):
+        return
+    if _gate_already_running(db, "klaviyo"):
+        return
+    from app.ingestion.connectors.klaviyo import sync_klaviyo
+    sync_klaviyo(db)
+
+
 def _run_aws_telemetry(db) -> None:
     """AWS telemetry + cook_rederivation. Heaviest connector
     (~815 MB held). Gets its own subprocess so its leak dies on exit."""
@@ -230,6 +247,7 @@ TARGETS = {
     "triplewhale": _run_triplewhale,
     "freshdesk": _run_freshdesk,
     "ga4": _run_ga4,
+    "klaviyo": _run_klaviyo,
     "aws_telemetry": _run_aws_telemetry,
     "clarity": _run_clarity,
     "reddit": _run_reddit,
