@@ -238,10 +238,13 @@ def classify_documents(
 
 
 def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
-    """Bulk UPDATE — one statement per batch via SQLAlchemy executemany."""
+    """Bulk UPDATE via Core (not ORM) — one prepared statement, many
+    parameter sets. Uses ``__table__`` to bypass SA 2.0's "ORM bulk by
+    PK" path which has stricter requirements on the parameter names."""
+    tbl = SharepointDocument.__table__
     stmt = (
-        update(SharepointDocument)
-        .where(SharepointDocument.id == sa_bindparam("_id"))
+        update(tbl)
+        .where(tbl.c.id == sa_bindparam("_id"))
         .values(
             archive_status=sa_bindparam("archive_status"),
             semantic_type=sa_bindparam("semantic_type"),
@@ -249,4 +252,4 @@ def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
             classified_at=sa_bindparam("classified_at"),
         )
     )
-    db.execute(stmt, payload, execution_options={"synchronize_session": None})
+    db.execute(stmt, payload)
