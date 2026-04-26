@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import ARRAY, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import ARRAY, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -1687,7 +1687,7 @@ class SharepointDocument(TimestampMixin, Base):
     path: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     is_folder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     top_level_folder: Mapped[Optional[str]] = mapped_column(String(255), index=True)
-    size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
     mime_type: Mapped[Optional[str]] = mapped_column(String(128))
     web_url: Mapped[Optional[str]] = mapped_column(String(2048))
     created_by_email: Mapped[Optional[str]] = mapped_column(String(255))

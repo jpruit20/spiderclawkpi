@@ -257,6 +257,7 @@ def _sync_site_documents(db: Session, tenant: MicrosoftTenant, site: SharepointS
     drives = _graph_get(token, f"/sites/{site.graph_site_id}/drives").get("value", [])
     inserted = 0
     seen = 0
+    failed = 0
     for drive in drives:
         drive_id = drive.get("id")
         if not drive_id:
@@ -276,9 +277,19 @@ def _sync_site_documents(db: Session, tenant: MicrosoftTenant, site: SharepointS
                 index_elements=["graph_drive_id", "graph_item_id"],
                 set_=update_cols,
             )
-            db.execute(stmt)
-            inserted += 1
-        db.commit()
+            # Per-row try/commit so a single bad row (e.g. a path that
+            # exceeds our column width) doesn't poison the whole site
+            # sync. Aborting the failed transaction and continuing.
+            try:
+                db.execute(stmt)
+                db.commit()
+                inserted += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning("sharepoint doc insert failed for %s: %s", row.get("name"), str(exc)[:200])
+                db.rollback()
+    if failed:
+        logger.warning("sharepoint: %s/%s docs failed to insert for %s", failed, seen, site.site_path)
     return inserted, seen
 
 
@@ -336,9 +347,14 @@ def _sync_site_lists(db: Session, tenant: MicrosoftTenant, site: SharepointSite)
                     index_elements=["graph_list_id", "graph_item_id"],
                     set_=update_cols,
                 )
-                db.execute(stmt)
-                written += 1
-            db.commit()
+                # Per-row commit-or-rollback (same pattern as documents).
+                try:
+                    db.execute(stmt)
+                    db.commit()
+                    written += 1
+                except Exception as exc:
+                    logger.warning("sharepoint list item insert failed for %s: %s", row.get("title"), str(exc)[:200])
+                    db.rollback()
     return written
 
 
