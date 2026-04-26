@@ -314,7 +314,14 @@ def _build_samples(records: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
             'grill_type': reported.get('model'),
             'rssi': _as_float(reported.get('RSSI'), 0.0),
             'errors': [_as_int(item, 0) for item in (reported.get('errors') or [])],
-            'raw_payload': record,
+            # NOTE: do NOT embed 'raw_payload': record here. The 2026-04-25
+            # tracemalloc diagnostic showed sync_aws_telemetry holding ~1 GB
+            # of RSS per call after gc+malloc_trim — root cause was every
+            # sample dict (one per DynamoDB record) carrying back-references
+            # to its full ~10 KB original record, plus session dicts then
+            # carrying _samples → samples → raw_payload chains. Sessions
+            # only need a few summary fields from the last sample (set in
+            # _finalize_session below) — they don't need the full record.
         })
     for device_samples in grouped.values():
         device_samples.sort(key=lambda item: item['sample_time'])
@@ -503,7 +510,12 @@ def _finalize_session(device_id: str, samples: list[dict[str, Any]]) -> dict[str
             'rssi_min': min(sample.get('rssi', 0.0) for sample in samples),
             'rssi_max': max(sample.get('rssi', 0.0) for sample in samples),
             'session_start_hint': start_hint.isoformat() if start_hint else None,
-            'last_sample_payload': last.get('raw_payload'),
+            # last_sample_payload removed 2026-04-25: it embedded the full
+            # ~10 KB DynamoDB record verbatim into every session's
+            # persisted JSONB, ballooning both Python RSS and PG row size.
+            # The handful of useful fields are already represented in the
+            # session columns above (firmware_version, grill_type,
+            # target_temp, etc.).
         },
     }
 
@@ -549,6 +561,18 @@ def sync_aws_telemetry(
         with _telemetry_setting_overrides(**override_values):
             records, read_stats = _load_records(max_records)
             sessions, derivation_stats = _derive_sessions(records)
+        # ``records`` (and the per-sample back-references they spawn) are
+        # the largest in-memory structures this connector owns. Once
+        # ``sessions`` has been derived, the original raw record list is
+        # no longer needed — drop it before we move into the DB write
+        # phase so glibc can reclaim it. Also strip ``_samples`` from
+        # each session (only used by _merge_adjacent_sessions, which is
+        # already done by now) — those samples carry no business data
+        # past the merge step and held a multiplier on RSS.
+        records_count = len(records)
+        del records
+        for _s in sessions:
+            _s.pop('_samples', None)
         # NOTE: sync_aws_telemetry treats telemetry_sessions as its own
         # scratch space — it always rebuilds its rows from the current
         # DynamoDB scan on each run. Historical backfill rows and
@@ -642,7 +666,7 @@ def sync_aws_telemetry(
 
         run.metadata_json = {
             **(run.metadata_json or {}),
-            'records_loaded': len(records),
+            'records_loaded': records_count,
             'sessions_derived': len(sessions),
             'devices_observed': derivation_stats.get('devices_observed'),
             'distinct_devices_observed': derivation_stats.get('distinct_devices_observed'),
@@ -663,7 +687,7 @@ def sync_aws_telemetry(
             'raw_rows_scanned': read_stats.get('raw_rows_scanned'),
             'recent_rows_after_cutoff': read_stats.get('recent_rows_after_cutoff'),
             'cutoff_ms': read_stats.get('cutoff_ms'),
-            'max_record_cap_hit': len(records) >= max_records,
+            'max_record_cap_hit': records_count >= max_records,
             'max_records_per_sync': read_stats.get('max_records_per_sync'),
             'target_devices_per_sync': read_stats.get('target_devices_per_sync'),
             'max_pages_scanned': read_stats.get('max_pages_scanned'),
@@ -676,7 +700,7 @@ def sync_aws_telemetry(
             'coverage_summary': (
                 f"Observed {derivation_stats.get('distinct_devices_observed') or 0} devices "
                 f"({derivation_stats.get('distinct_engaged_devices_observed') or 0} engaged) using {read_stats.get('scan_strategy')} under bounded limits; "
-                f"scan truncated={bool(read_stats.get('scan_truncated'))}, max_record_cap_hit={len(records) >= max_records}."
+                f"scan truncated={bool(read_stats.get('scan_truncated'))}, max_record_cap_hit={records_count >= max_records}."
             ),
             'days_materialized': len(daily),
             'max_records': max_records,
@@ -684,10 +708,28 @@ def sync_aws_telemetry(
             'table': settings.aws_telemetry_dynamodb_table,
             'region': settings.aws_region,
         }
-        finish_sync_run(db, run, status='success', records_processed=len(records))
+        finish_sync_run(db, run, status='success', records_processed=records_count)
         refresh_source_health_alerts(db)
         db.commit()
-        return {'ok': True, 'records_processed': len(records), 'sessions_derived': len(sessions), 'days_materialized': len(daily)}
+        result = {
+            'ok': True,
+            'records_processed': records_count,
+            'sessions_derived': len(sessions),
+            'days_materialized': len(daily),
+        }
+        # Drop large locals + ask glibc to release arenas before
+        # returning. Without this, the connector's per-call ~1 GB Python
+        # working set accumulates across scheduler ticks and OOM-kills
+        # the process inside ~4 cycles. Verified via
+        # app.cli.run_syncs_diagnose 2026-04-25.
+        del sessions, daily
+        import gc as _gc, ctypes as _ctypes
+        _gc.collect()
+        try:
+            _ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:
+            pass
+        return result
     except Exception as exc:
         finish_sync_run(db, run, status='failed', error_message=str(exc))
         refresh_source_health_alerts(db)
