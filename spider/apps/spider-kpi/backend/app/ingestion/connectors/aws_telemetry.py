@@ -164,69 +164,95 @@ def _load_records_from_dynamodb(max_records: int) -> tuple[list[dict[str, Any]],
     import boto3
     from botocore.config import Config
 
-    client = boto3.client(
+    # Use a fresh boto3 Session so the urllib3 connection pool is owned
+    # locally and can be closed at the end of this call. The default
+    # global Session keeps connections (and their response-body
+    # buffers) alive for the lifetime of the process — that was a
+    # major contributor to the ~1 GB of C-side memory still held
+    # after gc + malloc_trim (verified 2026-04-25 via
+    # app.cli.run_syncs_diagnose).
+    boto_session = boto3.session.Session()
+    client = boto_session.client(
         'dynamodb',
         region_name=settings.aws_region,
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
         config=Config(connect_timeout=5, read_timeout=30, retries={'max_attempts': 2}),
     )
-    projection = 'device_id, sample_time, device_data'
-    target_devices = max(1, settings.aws_telemetry_target_devices_per_sync or 1)
-    total_segments = max(1, settings.aws_telemetry_scan_segments or 1)
-    max_pages = max(1, settings.aws_telemetry_max_scan_pages or DEFAULT_MAX_SCAN_PAGES)
-    per_device_cap = max(1, max_records // target_devices)
-    cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
+    try:
+        projection = 'device_id, sample_time, device_data'
+        target_devices = max(1, settings.aws_telemetry_target_devices_per_sync or 1)
+        total_segments = max(1, settings.aws_telemetry_scan_segments or 1)
+        max_pages = max(1, settings.aws_telemetry_max_scan_pages or DEFAULT_MAX_SCAN_PAGES)
+        per_device_cap = max(1, max_records // target_devices)
+        cutoff_ms = int((datetime.now(timezone.utc) - timedelta(hours=settings.aws_telemetry_lookback_hours or DEFAULT_LOOKBACK_HOURS)).timestamp() * 1000)
 
-    rows_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    segment_keys: dict[int, Any] = {}
-    pages = 0
-    raw_rows_scanned = 0
+        rows_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        segment_keys: dict[int, Any] = {}
+        pages = 0
+        raw_rows_scanned = 0
 
-    while pages < max_pages:
-        progressed = False
-        for segment in range(total_segments):
-            if pages >= max_pages:
+        while pages < max_pages:
+            progressed = False
+            for segment in range(total_segments):
+                if pages >= max_pages:
+                    break
+                params = {
+                    'TableName': settings.aws_telemetry_dynamodb_table,
+                    'ProjectionExpression': projection,
+                    'Limit': min(250, max_records),
+                    'Segment': segment,
+                    'TotalSegments': total_segments,
+                }
+                if segment in segment_keys and segment_keys[segment]:
+                    params['ExclusiveStartKey'] = segment_keys[segment]
+                response = client.scan(**params)
+                items = [_normalize_record(item) for item in response.get('Items', [])]
+                raw_rows_scanned += len(items)
+                pages += 1
+                progressed = progressed or bool(items)
+                for item in items:
+                    device_id = str(item.get('device_id') or '')
+                    if not device_id:
+                        continue
+                    rows_by_device[device_id].append(item)
+                    rows_by_device[device_id].sort(key=lambda row: _as_int(row.get('sample_time'), 0), reverse=True)
+                    if len(rows_by_device[device_id]) > per_device_cap:
+                        rows_by_device[device_id] = rows_by_device[device_id][:per_device_cap]
+                segment_keys[segment] = response.get('LastEvaluatedKey')
+                # Drop the response immediately so urllib3 can release
+                # the underlying body buffer back to its pool. Without
+                # this, the response object stays alive at least until
+                # the next iteration overwrites the local.
+                del response, items
+                distinct_devices = len(rows_by_device)
+                retained_count = sum(len(bucket) for bucket in rows_by_device.values())
+                if distinct_devices >= target_devices and retained_count >= min(max_records, target_devices):
+                    break
+            if not progressed:
                 break
-            params = {
-                'TableName': settings.aws_telemetry_dynamodb_table,
-                'ProjectionExpression': projection,
-                'Limit': min(250, max_records),
-                'Segment': segment,
-                'TotalSegments': total_segments,
-            }
-            if segment in segment_keys and segment_keys[segment]:
-                params['ExclusiveStartKey'] = segment_keys[segment]
-            response = client.scan(**params)
-            items = [_normalize_record(item) for item in response.get('Items', [])]
-            raw_rows_scanned += len(items)
-            pages += 1
-            progressed = progressed or bool(items)
-            for item in items:
-                device_id = str(item.get('device_id') or '')
-                if not device_id:
-                    continue
-                rows_by_device[device_id].append(item)
-                rows_by_device[device_id].sort(key=lambda row: _as_int(row.get('sample_time'), 0), reverse=True)
-                if len(rows_by_device[device_id]) > per_device_cap:
-                    rows_by_device[device_id] = rows_by_device[device_id][:per_device_cap]
-            segment_keys[segment] = response.get('LastEvaluatedKey')
             distinct_devices = len(rows_by_device)
             retained_count = sum(len(bucket) for bucket in rows_by_device.values())
             if distinct_devices >= target_devices and retained_count >= min(max_records, target_devices):
                 break
-        if not progressed:
-            break
-        distinct_devices = len(rows_by_device)
-        retained_count = sum(len(bucket) for bucket in rows_by_device.values())
-        if distinct_devices >= target_devices and retained_count >= min(max_records, target_devices):
-            break
 
-    candidate_rows = [row for bucket in rows_by_device.values() for row in bucket]
-    candidate_rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
-    recent_rows = [item for item in candidate_rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
-    bounded_rows = (recent_rows or candidate_rows)[:max_records]
-    scan_truncated = any(bool(value) for value in segment_keys.values())
+        candidate_rows = [row for bucket in rows_by_device.values() for row in bucket]
+        candidate_rows.sort(key=lambda item: _as_int(item.get('sample_time'), 0), reverse=True)
+        recent_rows = [item for item in candidate_rows if _as_int(item.get('sample_time'), 0) >= cutoff_ms]
+        bounded_rows = (recent_rows or candidate_rows)[:max_records]
+        scan_truncated = any(bool(value) for value in segment_keys.values())
+    finally:
+        # CRITICAL: explicitly close the boto3 client so its underlying
+        # urllib3 connection pool is disposed. Without this, urllib3
+        # keeps DynamoDB response body buffers (large nested JSON) in
+        # C-allocated memory pinned to the connection pool for the
+        # lifetime of the global session — invisible to tracemalloc
+        # and not recovered by malloc_trim. This was the dominant
+        # untracked allocator in the run_syncs_diagnose report.
+        try:
+            client.close()
+        except Exception:
+            pass
     return bounded_rows, {
         'pages_scanned': pages,
         'scan_truncated': scan_truncated,
