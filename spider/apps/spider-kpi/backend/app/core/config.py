@@ -146,6 +146,17 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SHELOB_WEBHOOK_TOKEN", "KPI_WEBHOOK_TOKEN"),
     )
 
+    # Microsoft Graph — multi-tenant Azure AD app for SharePoint
+    # ingestion. The same CLIENT_ID/CLIENT_SECRET pair services every
+    # registered tenant since the app is multi-tenant on the platform
+    # side. Per-tenant config (tenant_id, display name, etc.) lives in
+    # the microsoft_tenants table so adding tenants is INSERT, not deploy.
+    ms_graph_client_id: Optional[str] = None
+    ms_graph_client_secret: Optional[str] = None
+    ms_graph_client_secret_id: Optional[str] = None
+    ms_graph_default_tenant_id: Optional[str] = None
+    sharepoint_sync_interval_minutes: int = 60
+
     # Klaviyo (Spider Grills account — public key XEp4CM). Agustin wires
     # the native app to this account via the Klaviyo Mobile SDK; the
     # dashboard reads it as an intermediary so we get user-level device

@@ -33,6 +33,7 @@ SOURCE_TYPES = {
     "aws_telemetry": "connector",
     "aws_telemetry_stream": "connector",
     "klaviyo": "connector",
+    "sharepoint": "connector",
     "decision-engine": "compute",
 }
 

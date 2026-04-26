@@ -120,6 +120,19 @@ def _run_ga4(db) -> None:
     sync_ga4(db, days=7)
 
 
+def _run_sharepoint(db) -> None:
+    """SharePoint multi-tenant ingest. Cheap (~30-100 MB) — small
+    document libraries on the AMW side. Self-gates due-checks via
+    sharepoint_sync_interval_minutes (60 min default)."""
+    from app.core.config import get_settings
+    if not _gate_due(db, "sharepoint", get_settings().sharepoint_sync_interval_minutes):
+        return
+    if _gate_already_running(db, "sharepoint"):
+        return
+    from app.ingestion.connectors.sharepoint import sync_sharepoint
+    sync_sharepoint(db)
+
+
 def _run_klaviyo(db) -> None:
     """Klaviyo profiles + events sync. Cheap-to-medium (~50-200 MB
     transient depending on backfill window). Lives in its own
@@ -248,6 +261,7 @@ TARGETS = {
     "freshdesk": _run_freshdesk,
     "ga4": _run_ga4,
     "klaviyo": _run_klaviyo,
+    "sharepoint": _run_sharepoint,
     "aws_telemetry": _run_aws_telemetry,
     "clarity": _run_clarity,
     "reddit": _run_reddit,

@@ -112,7 +112,7 @@ def run_syncs() -> None:
     # implicit ordering (e.g. freshdesk should land before downstream
     # consumers read it) is preserved.
     targets = [
-        "shopify", "triplewhale", "freshdesk", "ga4", "klaviyo",
+        "shopify", "triplewhale", "freshdesk", "ga4", "klaviyo", "sharepoint",
         "aws_telemetry",
         "clarity", "reddit", "amazon", "clickup", "slack",
         "youtube", "youtube_lore",

@@ -1620,6 +1620,113 @@ class KlaviyoEvent(TimestampMixin, Base):
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class MicrosoftTenant(TimestampMixin, Base):
+    """One row per Microsoft 365 / Azure AD tenant we ingest from.
+
+    Multi-tenant by design: AMW today, Spider Grills' own M365 account
+    later. Same multi-tenant Azure AD app (CLIENT_ID + CLIENT_SECRET in
+    env) services all of them — only this row needs to land per tenant.
+    """
+    __tablename__ = "microsoft_tenants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    primary_domain: Mapped[Optional[str]] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class SharepointSite(TimestampMixin, Base):
+    """The allowlist + metadata mirror for each granted SharePoint site.
+
+    Add a row here for each AMW SharePoint card the dashboard should
+    read. ``Sites.Selected`` on the Azure AD app means Microsoft will
+    still refuse to return data for any site we haven't been granted
+    via ``POST /sites/{id}/permissions`` — this table is the
+    application-level allowlist on top of that platform-level guard.
+    """
+    __tablename__ = "sharepoint_sites"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "site_path", name="uq_sharepoint_sites_tenant_path"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    graph_site_id: Mapped[Optional[str]] = mapped_column(String(256), unique=True, index=True)
+    site_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    hostname: Mapped[str] = mapped_column(String(128), default="alignmachineworks.sharepoint.com", nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255))
+    web_url: Mapped[Optional[str]] = mapped_column(String(512))
+    spider_product: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    default_division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    granted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    last_sync_error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class SharepointDocument(TimestampMixin, Base):
+    """Mirror of files + folders inside a SharePoint document library.
+
+    Folder names that map to dashboard divisions get denormalized into
+    ``top_level_folder`` so queries don't have to walk the path.
+    """
+    __tablename__ = "sharepoint_documents"
+    __table_args__ = (
+        UniqueConstraint("graph_drive_id", "graph_item_id", name="uq_sharepoint_documents_drive_item"),
+        Index("ix_sharepoint_documents_modified_div", "dashboard_division", "modified_at_remote"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    graph_site_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    graph_drive_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    graph_item_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    path: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
+    is_folder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    top_level_folder: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(128))
+    web_url: Mapped[Optional[str]] = mapped_column(String(2048))
+    created_by_email: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at_remote: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    modified_by_email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    modified_at_remote: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    spider_product: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    dashboard_division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    raw_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SharepointListItem(TimestampMixin, Base):
+    """Mirror of structured SharePoint list items (ECRs, task trackers,
+    vendor specs, BOM revs — anything that lives in a SharePoint List
+    rather than a document library)."""
+    __tablename__ = "sharepoint_list_items"
+    __table_args__ = (
+        UniqueConstraint("graph_list_id", "graph_item_id", name="uq_sharepoint_list_items_list_item"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    graph_site_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    graph_list_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    graph_list_name: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    graph_item_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(1024))
+    created_by_email: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at_remote: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    modified_by_email: Mapped[Optional[str]] = mapped_column(String(255))
+    modified_at_remote: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    web_url: Mapped[Optional[str]] = mapped_column(String(2048))
+    fields: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    spider_product: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    dashboard_division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class AIFeedback(TimestampMixin, Base):
     """One reaction per (user, AI-generated artifact). Closes the loop on
     whether the dashboard's AI outputs actually landed.
