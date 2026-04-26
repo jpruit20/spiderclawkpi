@@ -94,82 +94,100 @@ def _build_device_burn_pool(
 
     cutoff = now - timedelta(days=lookback_days)
 
-    # Aggregate down to ONE ROW PER DEVICE entirely in Postgres. The
-    # 2026-04-22 fix (3a399b5) moved JSONB averaging into PG but still
-    # returned one row per session (17-34K rows) and did the fuel math
-    # in Python. Each warmer tick churned ~250K Python objects through
-    # glibc's arena allocator and, on Linux, those arenas never return
-    # to the OS without an explicit malloc_trim — so RSS grew ~500 MB
-    # per tick until the kernel OOM-killed uvicorn. Doing the GROUP BY
-    # + fuel math in PG means Python only ever sees ~2-3K rows per
-    # device and the only per-session object work happens server-side
-    # in PG working memory (which is bounded and released cleanly).
+    # Per-session JSONB averaging happens in Postgres (one scalar
+    # per session over the wire). Per-device aggregation + fuel math
+    # happen in Python here. The 2026-04-22 fix (3a399b5) measured
+    # this shape at 7.1 s on a 16K-session 90d window — fast enough.
     #
-    # Thermal math mirrors thermal_demand_btu_per_hr + session_fuel_lb
-    # below. Keep them in sync if the constants ever move.
-    rows = db.execute(text("""
-        WITH per_session AS (
-            SELECT
-                ts.device_id,
-                ts.grill_type,
-                ts.firmware_version,
-                ts.session_start,
-                ts.session_duration_seconds::float AS dur_s,
-                COALESCE(
-                    CASE WHEN jsonb_typeof(ts.actual_temp_time_series) = 'array' THEN (
-                        SELECT AVG((elem->>'v')::float)
-                        FROM jsonb_array_elements(ts.actual_temp_time_series) elem
-                        WHERE jsonb_typeof(elem) = 'object'
-                          AND (elem ? 'v')
-                          AND (elem->>'v') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-                          AND (elem->>'v')::float > 0
-                          AND (elem->>'v')::float < 1000
-                    ) ELSE NULL END,
-                    ts.target_temp::float
-                ) AS avg_temp
-            FROM telemetry_sessions ts
-            WHERE ts.device_id IS NOT NULL
-              AND ts.device_id NOT LIKE 'mac:%'
-              AND ts.session_start IS NOT NULL
-              AND ts.session_start >= :cutoff
-              AND ts.session_duration_seconds >= 300
-        ), fuel AS (
-            SELECT
-                device_id, grill_type, firmware_version, session_start, dur_s, avg_temp,
-                -- dt = clamp(avg_temp, 180..600) - 60
-                (LEAST(600.0, GREATEST(180.0, avg_temp)) - 60.0) AS dt
-            FROM per_session
-            WHERE avg_temp IS NOT NULL AND avg_temp > 0 AND dur_s > 0
-        ), fuel_lb AS (
-            SELECT
-                device_id, grill_type, firmware_version, session_start,
-                -- btu_delivered = (0.02*dt^2 + 45*dt + 1500) * hours
-                -- fuel_btu = btu_delivered / 0.60
-                -- lump_lb = fuel_btu / 9000 ; briq_lb = fuel_btu / 6500
-                (((0.02 * dt * dt + 45.0 * dt + 1500.0) * (dur_s / 3600.0) / 0.60) / 9000.0) AS lump_lb,
-                (((0.02 * dt * dt + 45.0 * dt + 1500.0) * (dur_s / 3600.0) / 0.60) / 6500.0) AS briq_lb
-            FROM fuel
-        )
-        SELECT
-            device_id,
-            -- Grill type + firmware from the LATEST session in the window.
-            (array_agg(grill_type       ORDER BY session_start DESC NULLS LAST))[1] AS grill_type,
-            (array_agg(firmware_version ORDER BY session_start DESC NULLS LAST))[1] AS firmware_version,
-            COUNT(*)       AS sessions_in_window,
-            SUM(lump_lb)   AS lump_sum,
-            SUM(briq_lb)   AS briq_sum
-        FROM fuel_lb
-        GROUP BY device_id
-    """), {"cutoff": cutoff}).all()
-
+    # Critical: stream the result with stream_results=True + yield_per.
+    # Without this, psycopg/libpq buffers the ENTIRE result set in C
+    # heap as one PGresult — invisible to tracemalloc, not released by
+    # malloc_trim, and on a 17-34K-row window it pinned ~1.9 GB of RSS
+    # per call (measured 2026-04-25 via app.cli.burn_pool_diagnose).
+    # The previous "GROUP BY in PG" rewrite was 28× slower (201 s) for
+    # reasons that boiled down to the same buffering: PG had to fully
+    # materialize the array_agg state before the client could read.
+    # With server-side-cursor streaming, libpq holds at most one
+    # yield_per chunk in C memory at a time.
     huntsman_ids = build_huntsman_device_ids(db)
     t2_max_map = build_t2_max_by_device(db)
 
+    sql = text("""
+        SELECT
+            ts.device_id,
+            ts.grill_type,
+            ts.firmware_version,
+            ts.session_start,
+            ts.session_duration_seconds,
+            ts.target_temp,
+            CASE
+                WHEN jsonb_typeof(ts.actual_temp_time_series) = 'array' THEN (
+                    SELECT AVG((elem->>'v')::float)
+                    FROM jsonb_array_elements(ts.actual_temp_time_series) elem
+                    WHERE jsonb_typeof(elem) = 'object'
+                      AND (elem ? 'v')
+                      AND (elem->>'v') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                      AND (elem->>'v')::float > 0
+                      AND (elem->>'v')::float < 1000
+                )
+                ELSE NULL
+            END AS avg_actual_temp
+        FROM telemetry_sessions ts
+        WHERE ts.device_id IS NOT NULL
+          AND ts.device_id NOT LIKE 'mac:%'
+          AND ts.session_start >= :cutoff
+          AND ts.session_duration_seconds >= 300
+    """)
+    result = db.execute(
+        sql,
+        {"cutoff": cutoff},
+        execution_options={"stream_results": True, "yield_per": 2000},
+    )
+
+    # device_id → (lump_sum, briq_sum, count, latest_meta). Streaming
+    # iteration: each chunk of yield_per rows is consumed and freed
+    # before the next chunk arrives, so peak Python+libpq footprint
+    # is bounded to chunk_size, not total_rows.
+    per_device: dict[str, dict[str, Any]] = {}
+    for r in result:
+        dev, grill, fw, start, dur_s, tgt, avg_actual = r
+        if not dur_s or not start:
+            continue
+        avg_temp = avg_actual if avg_actual is not None else tgt
+        if avg_temp is None:
+            continue
+        lump, briq = session_fuel_lb(dur_s / 3600.0, float(avg_temp))
+        bucket = per_device.get(dev)
+        if bucket is None:
+            per_device[dev] = {
+                "lump_sum": lump,
+                "briq_sum": briq,
+                "count": 1,
+                "grill": grill,
+                "fw": fw,
+                "last_start": start,
+            }
+        else:
+            bucket["lump_sum"] += lump
+            bucket["briq_sum"] += briq
+            bucket["count"] += 1
+            if start > bucket["last_start"]:
+                bucket["grill"] = grill
+                bucket["fw"] = fw
+                bucket["last_start"] = start
+    # Explicitly close the streaming cursor so the server-side cursor
+    # is dropped (CLOSE <cursor_name>) before we hand the connection
+    # back to the pool.
+    try:
+        result.close()
+    except Exception:
+        pass
+
     scale = 30.0 / float(lookback_days) if lookback_days > 0 else 0.0
     pool: list[dict[str, Any]] = []
-    for dev, grill, fw, count, lump_sum, briq_sum in rows:
+    for dev, b in per_device.items():
         family = classify_product(
-            grill, fw,
+            b["grill"], b["fw"],
             device_id=dev,
             huntsman_device_ids=huntsman_ids,
             t2_max=t2_max_map.get(dev),
@@ -177,16 +195,12 @@ def _build_device_burn_pool(
         pool.append({
             "device_id": dev,
             "product_family": family,
-            "sessions_in_window": int(count),
-            "lump_lb_per_month": float(lump_sum or 0.0) * scale,
-            "briq_lb_per_month": float(briq_sum or 0.0) * scale,
+            "sessions_in_window": b["count"],
+            "lump_lb_per_month": b["lump_sum"] * scale,
+            "briq_lb_per_month": b["briq_sum"] * scale,
         })
 
-    # Drop the result list and close the implicit transaction before we
-    # stash the cache. SQLAlchemy would release on scope exit anyway,
-    # but being explicit bounds the connection's result-buffer lifetime
-    # to this function — matters when the warmer calls us back-to-back.
-    del rows
+    # Close the implicit transaction the streaming SELECT opened.
     try:
         db.rollback()
     except Exception:

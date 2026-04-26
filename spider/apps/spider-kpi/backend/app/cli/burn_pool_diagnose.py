@@ -55,7 +55,20 @@ from pathlib import Path
 
 
 def _rss_mb() -> float:
-    """Linux: ru_maxrss is KB. macOS: bytes. We're targeting Linux prod."""
+    """Current RSS via /proc/self/status (VmRSS).
+
+    Falls back to ``getrusage`` ru_maxrss (high-water-mark) if /proc
+    isn't readable. The first run of this tool used ru_maxrss and we
+    couldn't tell if memory came back down between iterations — the
+    answer to "did the fix work?" requires CURRENT RSS, not peak.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return float(line.split()[1]) / 1024.0  # KB → MB
+    except OSError:
+        pass
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
 

@@ -38,6 +38,22 @@ _lock = threading.Lock()
 
 
 def _rss_mb() -> float:
+    """Current RSS via /proc/self/status (VmRSS).
+
+    NOTE: ``getrusage(RUSAGE_SELF).ru_maxrss`` is HIGH-WATER-MARK, not
+    current — it never decreases over the process's lifetime. That
+    silently masked memory-release behavior in the 2026-04-25 OOM
+    investigation: we couldn't tell if a fix actually freed memory
+    or just held the same peak. /proc/self/status/VmRSS gives true
+    current RSS so we can SEE memory come back down after a call.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return float(line.split()[1]) / 1024.0  # KB → MB
+    except OSError:
+        pass
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
 
