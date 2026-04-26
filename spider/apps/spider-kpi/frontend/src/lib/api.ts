@@ -1123,6 +1123,131 @@ export const api = {
     request<KlaviyoEngagementByOwnership>(`/api/klaviyo/engagement-by-ownership`, { signal }),
   klaviyoRecentEvents: (limit: number = 50, signal?: AbortSignal) =>
     request<KlaviyoRecentEvents>(`/api/klaviyo/recent-events?limit=${limit}`, { signal }),
+  klaviyoCampaignsRecent: (limit: number = 20, signal?: AbortSignal) =>
+    request<KlaviyoCampaignsRecent>(`/api/klaviyo/campaigns-recent?limit=${limit}`, { signal }),
+  klaviyoFlowsStatus: (signal?: AbortSignal) =>
+    request<KlaviyoFlowsStatus>(`/api/klaviyo/flows-status`, { signal }),
+  klaviyoListsAndSegments: (signal?: AbortSignal) =>
+    request<KlaviyoListsAndSegments>(`/api/klaviyo/lists-and-segments`, { signal }),
+  klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
+    request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
+  klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
+    request<KlaviyoFriendbuyAttribution>(`/api/klaviyo/friendbuy-attribution?days=${days}`, { signal }),
+  klaviyoCustomerJourney: (
+    opts: { email?: string; external_id?: string; limit?: number },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.email) q.set('email', opts.email)
+    if (opts.external_id) q.set('external_id', opts.external_id)
+    if (opts.limit) q.set('limit', String(opts.limit))
+    return request<KlaviyoCustomerJourney>(`/api/klaviyo/customer-journey?${q.toString()}`, { signal })
+  },
+}
+
+export interface KlaviyoFriendbuyAttribution {
+  generated_at: string
+  window_days: number
+  total_profiles: number
+  profiles_with_friendbuy_tag: number
+  tag_rate_pct: number
+  new_in_window: number
+  new_friendbuy_in_window: number
+  friendbuy_share_of_new_pct: number
+  top_campaigns: Array<{ campaign: string; profiles: number }>
+}
+
+export interface KlaviyoCustomerJourney {
+  found?: boolean
+  email?: string
+  external_id?: string
+  error?: string
+  profile?: {
+    klaviyo_id: string
+    email: string | null
+    external_id: string | null
+    first_name: string | null
+    last_name: string | null
+    device_types: string[]
+    device_firmware_versions: string[]
+    product_ownership: string | null
+    phone_os: string | null
+    app_version: string | null
+    klaviyo_created_at: string | null
+  }
+  event_count?: number
+  events?: Array<{ metric: string; when: string; properties: Record<string, unknown> }>
+  by_month?: Array<{ month: string; counts: Record<string, number> }>
+}
+
+export interface KlaviyoBetaCustomers {
+  generated_at: string
+  list_id: string | null
+  error?: string
+  total_members?: number
+  members: Array<{
+    klaviyo_id: string
+    email: string | null
+    external_id: string | null
+    first_name: string | null
+    last_name: string | null
+    device_types: string[]
+    device_firmware_versions: string[]
+    product_ownership: string | null
+    phone_os: string | null
+    app_version: string | null
+    last_event_date: string | null
+  }>
+  firmware_distribution?: Array<{ label: string; count: number; pct: number }>
+  device_type_distribution?: Array<{ label: string; count: number; pct: number }>
+  phone_os_distribution?: Array<{ label: string; count: number; pct: number }>
+}
+
+export interface KlaviyoCampaignsRecent {
+  generated_at: string
+  campaigns: Array<{
+    id: string
+    name: string | null
+    status: string | null
+    scheduled_at: string | null
+    send_time: string | null
+    created_at: string | null
+    updated_at: string | null
+  }>
+}
+
+export interface KlaviyoFlowsStatus {
+  generated_at: string
+  by_status: Record<string, number>
+  flows: Array<{
+    id: string
+    name: string | null
+    status: string | null
+    trigger_type: string | null
+    created: string | null
+    updated: string | null
+  }>
+}
+
+export interface KlaviyoListsAndSegments {
+  generated_at: string
+  lists: Array<{
+    id: string
+    name: string | null
+    opt_in_process: string | null
+    member_count: number | null
+    created: string | null
+    updated: string | null
+  }>
+  segments: Array<{
+    id: string
+    name: string | null
+    is_active: boolean | null
+    is_processing: boolean | null
+    member_count: number | null
+    created: string | null
+    updated: string | null
+  }>
 }
 
 export interface KlaviyoInstallFunnel {

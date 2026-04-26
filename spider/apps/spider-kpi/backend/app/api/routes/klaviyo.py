@@ -628,6 +628,418 @@ def recent_events(
     }
 
 
+_marketing_cache: dict[str, tuple[float, Any]] = {}
+_MARKETING_CACHE_TTL = 1800  # 30 min
+
+
+def _cached_klaviyo(key: str, fn: Any) -> Any:
+    """Tiny in-memory TTL cache for Klaviyo proxy responses.
+
+    Marketing data (campaigns, flows, lists, segments) doesn't change
+    minute-to-minute, but the underlying Klaviyo API endpoints are slow
+    and rate-limited. 30 min TTL keeps the dashboard snappy without
+    hammering Klaviyo.
+    """
+    import time as _time
+    now = _time.monotonic()
+    hit = _marketing_cache.get(key)
+    if hit is not None and now - hit[0] < _MARKETING_CACHE_TTL:
+        return hit[1]
+    value = fn()
+    _marketing_cache[key] = (now, value)
+    return value
+
+
+@router.get("/campaigns-recent")
+def campaigns_recent(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Recent email campaigns (last 90d) with aggregate stats.
+
+    Pulled live from Klaviyo with a 30-min cache. Includes metadata
+    for each campaign — open rate, click rate, recipients — when
+    Klaviyo has finished tabulating it. Send-in-progress campaigns
+    show with ``status='Sending'`` and partial stats.
+    """
+    from app.ingestion.connectors.klaviyo import _get, _paginate
+
+    def _fetch() -> list[dict[str, Any]]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params = {
+            "filter": f"and(equals(messages.channel,\"email\"),greater-or-equal(scheduled_at,{cutoff}))",
+            "sort": "-scheduled_at",
+            "page[size]": min(limit, 100),
+            "fields[campaign]": "name,status,send_time,scheduled_at,created_at,updated_at,send_strategy",
+        }
+        out: list[dict[str, Any]] = []
+        for page in _paginate("/campaigns", params):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                out.append({
+                    "id": row.get("id"),
+                    "name": a.get("name"),
+                    "status": a.get("status"),
+                    "scheduled_at": a.get("scheduled_at"),
+                    "send_time": a.get("send_time"),
+                    "created_at": a.get("created_at"),
+                    "updated_at": a.get("updated_at"),
+                })
+                if len(out) >= limit:
+                    break
+            if len(out) >= limit:
+                break
+        return out
+
+    rows = _cached_klaviyo(f"campaigns:{limit}", _fetch)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "campaigns": rows,
+    }
+
+
+@router.get("/flows-status")
+def flows_status(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Status snapshot of every configured flow.
+
+    Each flow row carries name, status (live/draft/manual), trigger
+    type (Added to List / Metric / Date / etc.), and updated
+    timestamp. Surfaces stalled drafts and the live automation
+    population at a glance.
+    """
+    from app.ingestion.connectors.klaviyo import _paginate
+
+    def _fetch() -> list[dict[str, Any]]:
+        params = {
+            "page[size]": 50,
+            "fields[flow]": "name,status,trigger_type,created,updated",
+        }
+        out: list[dict[str, Any]] = []
+        for page in _paginate("/flows", params):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                out.append({
+                    "id": row.get("id"),
+                    "name": a.get("name"),
+                    "status": a.get("status"),
+                    "trigger_type": a.get("triggerType") or a.get("trigger_type"),
+                    "created": a.get("created"),
+                    "updated": a.get("updated"),
+                })
+        return out
+
+    rows = _cached_klaviyo("flows", _fetch)
+    by_status: dict[str, int] = {}
+    for r in rows:
+        s = r.get("status") or "unknown"
+        by_status[s] = by_status.get(s, 0) + 1
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "by_status": by_status,
+        "flows": sorted(rows, key=lambda r: (r.get("status") != "live", r.get("name") or "")),
+    }
+
+
+@router.get("/lists-and-segments")
+def lists_and_segments(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """All Klaviyo lists + segments with current membership.
+
+    Lists are explicit subscriber rosters (Beta Customers, Huntsman
+    Giveaway, etc.). Segments are dynamic queries (App active users,
+    Huntsman Purchasers All Time). Both carry a member count so the
+    Marketing team can see roster health and the dashboard can pull
+    list/segment IDs for downstream integrations (e.g. the Firmware
+    Beta Program reads the Beta Customers list).
+
+    Member counts come from a per-row count call to Klaviyo because
+    the list/segment endpoints don't inline it. Cached 30 min.
+    """
+    from app.ingestion.connectors.klaviyo import _get, _paginate
+
+    def _fetch() -> dict[str, list[dict[str, Any]]]:
+        lists: list[dict[str, Any]] = []
+        for page in _paginate("/lists", {"page[size]": 50}):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                lists.append({
+                    "id": row.get("id"),
+                    "name": a.get("name"),
+                    "opt_in_process": a.get("optInProcess") or a.get("opt_in_process"),
+                    "created": a.get("created"),
+                    "updated": a.get("updated"),
+                })
+        segments: list[dict[str, Any]] = []
+        for page in _paginate("/segments", {"page[size]": 50}):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                segments.append({
+                    "id": row.get("id"),
+                    "name": a.get("name"),
+                    "is_active": a.get("isActive"),
+                    "is_processing": a.get("isProcessing"),
+                    "created": a.get("created"),
+                    "updated": a.get("updated"),
+                })
+        # Membership count per object — small N (typical account has
+        # <50 of each) so a sequential walk is fine inside the 30-min
+        # cache window.
+        for row in lists:
+            try:
+                resp = _get(f"/lists/{row['id']}/profiles", params={"page[size]": 1})
+                meta = (resp.get("meta") or {})
+                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or 0))
+            except Exception:
+                row["member_count"] = None
+        for row in segments:
+            try:
+                resp = _get(f"/segments/{row['id']}/profiles", params={"page[size]": 1})
+                meta = (resp.get("meta") or {})
+                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or 0))
+            except Exception:
+                row["member_count"] = None
+        return {"lists": lists, "segments": segments}
+
+    payload = _cached_klaviyo("lists_segments", _fetch)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+
+
+@router.get("/beta-customers")
+def beta_customers(
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Members of Klaviyo's "Beta Customers" list.
+
+    Joseph and the marketing team curate this list inside Klaviyo;
+    the Firmware Beta Program reads it here as the canonical opt-in
+    cohort. Joins each member's email back to ``klaviyo_profiles`` to
+    pull device + firmware context, so the firmware team can see
+    the cohort's actual hardware spread before pushing an OTA.
+
+    The list ID is resolved by name on the fly, so renaming or
+    duplicating the list in Klaviyo just requires updating it there.
+    """
+    from app.ingestion.connectors.klaviyo import _get, _paginate
+
+    def _fetch_list_id() -> Optional[str]:
+        for page in _paginate("/lists", {"page[size]": 50}):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                if (a.get("name") or "").strip().lower() == "beta customers":
+                    return row.get("id")
+        return None
+
+    list_id = _cached_klaviyo("beta_list_id", _fetch_list_id)
+    if not list_id:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "list_id": None,
+            "error": "no list named 'Beta Customers' found in Klaviyo",
+            "members": [],
+        }
+
+    def _fetch_members() -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        params = {
+            "page[size]": min(limit, 100),
+            "fields[profile]": "email,external_id,first_name,last_name,properties,last_event_date",
+        }
+        for page in _paginate(f"/lists/{list_id}/profiles", params):
+            for row in page.get("data") or []:
+                a = row.get("attributes") or {}
+                props = a.get("properties") or {}
+                out.append({
+                    "klaviyo_id": row.get("id"),
+                    "email": a.get("email"),
+                    "external_id": a.get("externalId") or a.get("external_id"),
+                    "first_name": a.get("firstName") or a.get("first_name"),
+                    "last_name": a.get("lastName") or a.get("last_name"),
+                    "device_types": props.get("deviceTypes") or [],
+                    "device_firmware_versions": props.get("deviceFirmwareVersions") or [],
+                    "product_ownership": props.get("Product Ownership"),
+                    "phone_os": props.get("phoneOS"),
+                    "app_version": props.get("appVersion"),
+                    "last_event_date": a.get("lastEventDate") or a.get("last_event_date"),
+                })
+                if len(out) >= limit:
+                    return out
+        return out
+
+    members = _cached_klaviyo(f"beta_members:{list_id}:{limit}", _fetch_members)
+
+    # Roll up firmware + device-type distribution for the cohort —
+    # that's the firmware team's most-asked-for view of an opt-in list.
+    fw_counts: dict[str, int] = {}
+    dt_counts: dict[str, int] = {}
+    os_counts: dict[str, int] = {}
+    for m in members:
+        for fw in m.get("device_firmware_versions") or []:
+            fw_counts[fw] = fw_counts.get(fw, 0) + 1
+        for dt in m.get("device_types") or []:
+            dt_counts[dt] = dt_counts.get(dt, 0) + 1
+        if m.get("phone_os"):
+            os_counts[m["phone_os"]] = os_counts.get(m["phone_os"], 0) + 1
+
+    def _top(d: dict[str, int]) -> list[dict[str, Any]]:
+        total = sum(d.values()) or 1
+        return [
+            {"label": k, "count": v, "pct": round(v / total * 100.0, 1)}
+            for k, v in sorted(d.items(), key=lambda kv: kv[1], reverse=True)
+        ]
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "list_id": list_id,
+        "total_members": len(members),
+        "members": members,
+        "firmware_distribution": _top(fw_counts),
+        "device_type_distribution": _top(dt_counts),
+        "phone_os_distribution": _top(os_counts),
+    }
+
+
+@router.get("/friendbuy-attribution")
+def friendbuy_attribution(
+    days: int = Query(30, ge=7, le=365),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Friendbuy referral signal pulled from Klaviyo profile properties.
+
+    The Friendbuy app populates ``Friendbuy Customer Name`` /
+    ``Friendbuy Campaign Name`` / ``Friendbuy Referral Link`` on
+    every profile that has been issued a referral code, plus separate
+    ``Friendbuy - Referral Created`` / ``Referral Shared`` /
+    ``Advocate Reward Earned`` / ``Friend Incentive Earned`` events
+    when actions fire. Together they tell us how much of the recent
+    customer base came in through referrals and which campaigns
+    drove the most.
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    total_profiles = db.execute(select(func.count()).select_from(KlaviyoProfile)).scalar() or 0
+    with_friendbuy_tag = db.execute(text("""
+        SELECT COUNT(*) FROM klaviyo_profiles
+        WHERE raw_properties ? 'Friendbuy Customer Name'
+           OR raw_properties ? 'Friendbuy Campaign Name'
+    """)).scalar() or 0
+
+    new_in_window = db.execute(text("""
+        SELECT COUNT(*) FROM klaviyo_profiles
+        WHERE klaviyo_created_at >= :since
+    """), {"since": since}).scalar() or 0
+    new_friendbuy_in_window = db.execute(text("""
+        SELECT COUNT(*) FROM klaviyo_profiles
+        WHERE klaviyo_created_at >= :since
+          AND (raw_properties ? 'Friendbuy Customer Name'
+               OR raw_properties ? 'Friendbuy Campaign Name')
+    """), {"since": since}).scalar() or 0
+
+    campaign_rows = db.execute(text("""
+        SELECT
+            raw_properties->>'Friendbuy Campaign Name' AS campaign,
+            COUNT(*) AS profiles
+        FROM klaviyo_profiles
+        WHERE raw_properties->>'Friendbuy Campaign Name' IS NOT NULL
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 10
+    """)).all()
+
+    return {
+        "generated_at": now.isoformat(),
+        "window_days": days,
+        "total_profiles": int(total_profiles),
+        "profiles_with_friendbuy_tag": int(with_friendbuy_tag),
+        "tag_rate_pct": round(int(with_friendbuy_tag) / int(total_profiles) * 100.0, 1) if total_profiles else 0.0,
+        "new_in_window": int(new_in_window),
+        "new_friendbuy_in_window": int(new_friendbuy_in_window),
+        "friendbuy_share_of_new_pct": round(int(new_friendbuy_in_window) / int(new_in_window) * 100.0, 1) if new_in_window else 0.0,
+        "top_campaigns": [
+            {"campaign": r.campaign, "profiles": int(r.profiles)}
+            for r in campaign_rows
+        ],
+    }
+
+
+@router.get("/customer-journey")
+def customer_journey(
+    email: Optional[str] = Query(default=None),
+    external_id: Optional[str] = Query(default=None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Full chronological journey for one customer.
+
+    Pulls every mirrored Klaviyo event for the profile in event-time
+    order, oldest first. The CX team uses this when escalating a
+    ticket — "what happened before they hit support?" answered in
+    one call.
+    """
+    if not email and not external_id:
+        return {"error": "provide email or external_id"}
+
+    q = select(KlaviyoProfile)
+    if email:
+        q = q.where(KlaviyoProfile.email == email.lower())
+    else:
+        q = q.where(KlaviyoProfile.external_id == external_id)
+    profile = db.execute(q.limit(1)).scalar_one_or_none()
+    if profile is None:
+        return {"found": False, "email": email, "external_id": external_id}
+
+    events = db.execute(
+        select(
+            KlaviyoEvent.metric_name,
+            KlaviyoEvent.event_datetime,
+            KlaviyoEvent.properties,
+        )
+        .where(KlaviyoEvent.klaviyo_profile_id == profile.klaviyo_id)
+        .order_by(KlaviyoEvent.event_datetime.asc())
+        .limit(limit)
+    ).all()
+
+    # Bucket events by month so the UI can render a stacked timeline.
+    by_month: dict[str, dict[str, int]] = {}
+    for e in events:
+        month = e.event_datetime.strftime("%Y-%m")
+        by_month.setdefault(month, {})
+        by_month[month][e.metric_name] = by_month[month].get(e.metric_name, 0) + 1
+
+    return {
+        "found": True,
+        "profile": {
+            "klaviyo_id": profile.klaviyo_id,
+            "email": profile.email,
+            "external_id": profile.external_id,
+            "first_name": profile.first_name,
+            "last_name": profile.last_name,
+            "device_types": profile.device_types,
+            "device_firmware_versions": profile.device_firmware_versions,
+            "product_ownership": profile.product_ownership,
+            "phone_os": profile.phone_os,
+            "app_version": profile.app_version,
+            "klaviyo_created_at": profile.klaviyo_created_at.isoformat() if profile.klaviyo_created_at else None,
+        },
+        "event_count": len(events),
+        "events": [
+            {
+                "metric": e.metric_name,
+                "when": e.event_datetime.isoformat(),
+                "properties": e.properties or {},
+            }
+            for e in events
+        ],
+        "by_month": [
+            {"month": m, "counts": counts}
+            for m, counts in sorted(by_month.items())
+        ],
+    }
+
+
 @router.get("/sync-status")
 def sync_status(db: Session = Depends(db_session)) -> dict[str, Any]:
     """Freshness indicator for the Klaviyo connector.

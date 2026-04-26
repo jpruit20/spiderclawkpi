@@ -28,7 +28,13 @@ import { CompareMode as Mode } from '../lib/compare'
 import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 import { DivisionHero } from '../components/DivisionHero'
+import { KlaviyoFriendbuyCard } from '../components/KlaviyoFriendbuyCard'
 import { KlaviyoMarketingCard } from '../components/KlaviyoMarketingCard'
+import {
+  KlaviyoCampaignsCard,
+  KlaviyoFlowsStatusCard,
+  KlaviyoListsSegmentsCard,
+} from '../components/KlaviyoMarketingActivityCards'
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -610,6 +616,16 @@ export function MarketingDivision() {
               so marketing can see the funnel without bouncing between
               Klaviyo, Shopify, and the dashboard. */}
           <KlaviyoMarketingCard />
+
+          {/* Live Klaviyo activity — campaigns sent / flows running /
+              list & segment health. Together with the funnel above,
+              this gives the Marketing team a single-page view of the
+              whole Klaviyo account without bouncing into Klaviyo's UI
+              for each check. */}
+          <KlaviyoCampaignsCard />
+          <KlaviyoFlowsStatusCard />
+          <KlaviyoListsSegmentsCard />
+          <KlaviyoFriendbuyCard />
 
           {/* ---- KPI tiles (car-dashboard style: big number, color state,
                  trend arrow, optional sparkline) ---- */}

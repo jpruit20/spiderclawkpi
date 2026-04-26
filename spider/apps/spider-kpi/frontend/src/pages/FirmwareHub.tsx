@@ -37,6 +37,7 @@ import {
   type CookBehaviorBacktestResponse,
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
+import { KlaviyoBetaCustomersCard } from '../components/KlaviyoBetaCustomersCard'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
 import { useAuth } from '../components/AuthGate'
 import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
@@ -178,7 +179,12 @@ export function FirmwareHub() {
 
       {tab === 'overview' ? <OverviewTab /> : null}
       {tab === 'alpha' ? <AlphaCohortPanel /> : null}
-      {tab === 'beta' ? <BetaProgramPanel /> : null}
+      {tab === 'beta' ? (
+        <>
+          <KlaviyoBetaCustomersCard />
+          <BetaProgramPanel />
+        </>
+      ) : null}
       {tab === 'gamma' ? <GammaWavesPanel /> : null}
       {tab === 'device' ? <DeviceDrillDown /> : null}
       {tab === 'deploy' ? <FirmwareDeployPanel /> : null}

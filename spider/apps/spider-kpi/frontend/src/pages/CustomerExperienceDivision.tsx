@@ -10,6 +10,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { KlaviyoCustomerLookupCard } from '../components/KlaviyoCustomerLookupCard'
+import { KlaviyoCustomerJourneyCard } from '../components/KlaviyoCustomerJourneyCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { CXCutoverBanner } from '../components/CXCutoverBanner'
 import { DivisionHero } from '../components/DivisionHero'
@@ -745,6 +746,11 @@ export function CustomerExperienceDivision() {
               grill, firmware, app recency, and recent events. Replaces
               the Freshdesk→Klaviyo→Shopify copy/paste for triage. */}
           <KlaviyoCustomerLookupCard />
+
+          {/* Sister card to lookup but oriented around chronological
+              journey — used during escalations when we need to brief
+              engineering on what happened before the ticket. */}
+          <KlaviyoCustomerJourneyCard />
 
           {/* Performance Metrics as a visual tile grid. Each tile is a
               car-gauge: big number, state color, 7-day trend arrow.
