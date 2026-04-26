@@ -80,63 +80,70 @@ def run_seed() -> None:
 
 
 def run_syncs() -> None:
-    """Launch one full sync sweep in an isolated subprocess.
+    """Run each connector in its OWN subprocess, sequentially.
 
-    Why a subprocess: app.cli.run_syncs_diagnose (2026-04-25) measured
-    multiple connectors holding hundreds of MB of C-side memory per
-    call that neither gc.collect() nor malloc_trim(0) reclaim:
+    Why per-connector: the b445d22 single-subprocess wrapper bounded
+    the long-lived uvicorn parent (good — confirmed via rss_watchdog,
+    parent stayed at ~340 MB) but the subprocess itself was still
+    OOM-killed at ~3.6 GB anon-rss every 4-8 minutes because every
+    connector's C-side leak compounded inside one process.
 
-        sync_aws_telemetry      : 815 MB held per call after fixes
-        recompute_daily_kpis    : 543 MB held per call
-        materialize_app_side    : 2-3 GB during freshdesk + materialize
-        (others not yet measured)
+    Per-connector subprocesses bound each leak to one process's peak.
+    The OS reclaims everything on exit, then the next connector starts
+    with a fresh address space. No more compounding.
 
-    On a 4 GB droplet, that compounded to OOM-kill within 4 sync
-    cycles (7-10 min cadence, ~165 SIGKILLs/day). Incremental
-    Python-side reference fixes only reclaimed ~20% — most of the
-    leak is in libpq result buffers, urllib3 connection pools, and
-    CPython arena fragmentation, none of which is reachable from
-    Python without restarting the interpreter.
+    Each invocation is ``python -m app.cli.run_syncs_subprocess
+    --target NAME``. The connector handles its own gating
+    (already-running checks, due-checks for cron-style sources)
+    inside the subprocess so this dispatch loop stays dumb. A
+    crashed/OOM'd target doesn't abort the rest of the sweep.
 
-    Subprocess isolation makes the OS handle release: the child runs
-    one sweep, exits, and the kernel reclaims its entire address
-    space. The long-lived uvicorn process stays at its baseline RSS
-    forever. Spawn (not fork) so we don't inherit the parent's
-    APScheduler thread state.
+    Per-target wall-clock cap: 12 minutes. Aggregate cap: enforced
+    by the scheduler's ``coalesce + max_instances=1``.
     """
     import logging as _logging
     import os as _os
     import subprocess as _subprocess
     import sys as _sys
     log = _logging.getLogger(__name__)
-    # ``backend_dir`` resolves to .../spider-kpi/backend so ``-m
-    # app.cli.run_syncs_subprocess`` can import the package.
     backend_dir = Path(__file__).resolve().parent.parent
-    cmd = [_sys.executable, "-m", "app.cli.run_syncs_subprocess"]
-    log.warning("run_syncs: launching subprocess (pid will be in stdout)")
-    try:
-        proc = _subprocess.run(
-            cmd,
-            cwd=str(backend_dir),
-            timeout=25 * 60,  # 25 min wall-clock cap
-            capture_output=True,
-            text=True,
-            env=_os.environ.copy(),
-        )
-        if proc.returncode != 0:
-            log.warning(
-                "run_syncs subprocess exit=%s stderr_tail=%s",
-                proc.returncode, (proc.stderr or "")[-1500:],
+
+    # Order matches the previous _run_syncs_inner sequence so any
+    # implicit ordering (e.g. freshdesk should land before downstream
+    # consumers read it) is preserved.
+    targets = [
+        "shopify", "triplewhale", "freshdesk", "ga4",
+        "aws_telemetry",
+        "clarity", "reddit", "amazon", "clickup", "slack",
+        "youtube", "youtube_lore",
+        "recompute",
+    ]
+
+    log.warning("run_syncs: launching per-target subprocesses (n=%d)", len(targets))
+    for target in targets:
+        cmd = [_sys.executable, "-m", "app.cli.run_syncs_subprocess", "--target", target]
+        try:
+            proc = _subprocess.run(
+                cmd,
+                cwd=str(backend_dir),
+                timeout=12 * 60,
+                capture_output=True,
+                text=True,
+                env=_os.environ.copy(),
             )
-        else:
-            log.warning(
-                "run_syncs subprocess ok stdout_tail=%s",
-                (proc.stdout or "")[-500:],
-            )
-    except _subprocess.TimeoutExpired:
-        log.warning("run_syncs subprocess timed out (>25min)")
-    except Exception:
-        log.exception("run_syncs subprocess failed to launch")
+            if proc.returncode != 0:
+                log.warning(
+                    "run_syncs target=%s exit=%s stderr_tail=%s",
+                    target, proc.returncode, (proc.stderr or "")[-800:],
+                )
+            else:
+                log.warning("run_syncs target=%s ok", target)
+        except _subprocess.TimeoutExpired:
+            log.warning("run_syncs target=%s timed out (>12min)", target)
+        except Exception:
+            log.exception("run_syncs target=%s failed to launch", target)
+
+    log.warning("run_syncs: all targets done")
 
 
 def _run_syncs_inner() -> None:
