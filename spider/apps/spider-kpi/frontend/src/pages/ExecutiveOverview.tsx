@@ -10,6 +10,7 @@ import { KpiGrid } from '../components/KpiGrid'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
+import { TrendPill } from '../components/TrendPill'
 import { StaleDataBanner } from '../components/StaleDataBanner'
 import { TrendChart } from '../components/TrendChart'
 import { EventAnnotationList } from '../components/EventAnnotationList'
@@ -266,7 +267,10 @@ export function ExecutiveOverview() {
       {!loading && !error && data ? (
         <div className="three-col">
           <Card title="Revenue in Scope">
-            <div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div>
+              <TrendPill metricKey="revenue" />
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
               <div className="state-message" style={{ margin: 0 }}>Top-line revenue for the visible executive scope</div>
               {latestCompleteDay?.business_date && latestCompleteDay?.revenue != null ? (
