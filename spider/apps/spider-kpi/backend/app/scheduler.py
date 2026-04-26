@@ -561,7 +561,21 @@ def run_ai_self_grade_job() -> None:
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_seed, "date", id="seed-on-start", max_instances=1, coalesce=True)
-    scheduler.add_job(run_syncs, "interval", minutes=settings.sync_interval_minutes, id="sync-all", replace_existing=True, max_instances=1, coalesce=True)
+    # STOPGAP 2026-04-25: run_syncs is the OOM-driver, not the burn
+    # pool warmer or materialize_app_side. After 7ffb7a8 skipped the
+    # materialize hook, RSS still climbed 562 → 2760 MB AFTER the
+    # "freshdesk sync complete" log line — meaning a connector
+    # downstream of freshdesk inside run_syncs is allocating GBs.
+    # Candidates left in the loop: clarity, reddit, amazon, clickup,
+    # slack, youtube, youtube_lore, ga4, triplewhale, aws_telemetry,
+    # plus the recompute_daily_kpis + recompute_diagnostics hooks at
+    # the bottom. Until we get a tracemalloc on this code path, the
+    # whole run_syncs interval is OFF. Connectors won't refresh, but
+    # the dashboard data goes stale gracefully — far better than a
+    # 7-10 min OOM-kill loop.
+    # scheduler.add_job(run_syncs, "interval", minutes=settings.sync_interval_minutes, id="sync-all", replace_existing=True, max_instances=1, coalesce=True)
+    import logging as _logging
+    _logging.getLogger(__name__).warning("scheduler: run_syncs interval DISABLED (stopgap pending OOM diagnosis)")
     # Daily post-deploy verdict sweep: compares shadow-signal firings
     # before vs after each opted-in device's t0 across addresses_issues
     # tags. 09:00 UTC / 05:00 ET — after the main sync cycle has had a
