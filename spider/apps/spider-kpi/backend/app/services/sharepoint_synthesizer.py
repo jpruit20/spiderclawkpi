@@ -40,7 +40,7 @@ MODEL_ID = "claude-opus-4-7"
 
 
 class CogsBreakdownItem(BaseModel):
-    category: str = Field(description="Sub-assembly or cost category, e.g. 'Main Assembly', 'Hardware', 'Venom controller', 'Packaging', 'Gaskets'")
+    category: str
     cost_usd: float
     source_document_id: Optional[int] = None
     notes: Optional[str] = None
@@ -50,9 +50,9 @@ class CogsSummary(BaseModel):
     canonical_total_usd: Optional[float] = None
     canonical_line_count: Optional[int] = None
     canonical_document_id: Optional[int] = None
-    confidence: str = Field(description="One of: high | medium | low")
-    notes: Optional[str] = Field(default=None, description="Why this confidence — e.g. 'BOM has 179 lines but no costs filled in'")
-    breakdown: List[CogsBreakdownItem] = Field(default_factory=list, description="Cost broken down by sub-assembly / category, summing roughly to canonical_total_usd.")
+    confidence: str
+    notes: Optional[str] = None
+    breakdown: List[CogsBreakdownItem] = Field(default_factory=list)
     coated_total_usd: Optional[float] = None
     uncoated_total_usd: Optional[float] = None
     currency_notes: Optional[str] = None
@@ -69,8 +69,8 @@ class VendorRollup(BaseModel):
     name: str
     mentions: int
     documents_seen: int = 0
-    role: Optional[str] = None  # e.g. "fan supplier", "powder coat"
-    estimated_spend_usd: Optional[float] = Field(default=None, description="Spend you can attribute to this vendor across the analyzed files. Null when unknown.")
+    role: Optional[str] = None
+    estimated_spend_usd: Optional[float] = None
 
 
 class VendorSummary(BaseModel):
@@ -79,7 +79,7 @@ class VendorSummary(BaseModel):
 
 
 class DataQualityIssue(BaseModel):
-    severity: str = Field(description="One of: critical | warn | info")
+    severity: str
     issue: str
     affected_document_ids: List[int] = Field(default_factory=list)
     suggested_fix: Optional[str] = None
@@ -91,29 +91,29 @@ class Citation(BaseModel):
 
 
 class HeadlineMetric(BaseModel):
-    label: str = Field(description="Short label, e.g. 'COGS uncoated', 'Active vendors', 'Open ECRs', 'Latest rev'")
-    value: str = Field(description="Display value, e.g. '$281.12', '15', '3', 'Rev M02'")
-    unit: Optional[str] = Field(default=None, description="Optional unit or context, e.g. 'per unit', 'as of 2026-04-26'")
-    tone: str = Field(description="One of: good | warn | bad | neutral. Drives the color of the tile.")
+    label: str
+    value: str
+    unit: Optional[str] = None
+    tone: str
     source_document_id: Optional[int] = None
 
 
 class TimelineEvent(BaseModel):
-    date: str = Field(description="ISO date YYYY-MM-DD; use the doc_date or a date stated in the file")
-    label: str = Field(description="What happened, e.g. 'CBOM Rev J released', 'Charcoal grate spec change'")
+    date: str
+    label: str
     document_id: Optional[int] = None
-    kind: str = Field(description="One of: revision | decision | shipment | qc_event | quote | invoice | other")
+    kind: str
 
 
 class ProductSynthesis(BaseModel):
-    headline_metrics: List[HeadlineMetric] = Field(default_factory=list, description="3-6 dashboard-tile metrics that capture the state of this product at a glance.")
-    narrative_md: str = Field(description="Markdown narrative — 4-8 short paragraphs, executive-readable. Cite specific files inline as [doc:123]. Lead with what we know is true; end with what's missing/blocked.")
+    headline_metrics: List[HeadlineMetric] = Field(default_factory=list)
+    narrative_md: str
     cogs_summary: CogsSummary
     design_status: DesignStatus
     vendor_summary: VendorSummary
     data_quality_issues: List[DataQualityIssue] = Field(default_factory=list)
-    timeline: List[TimelineEvent] = Field(default_factory=list, description="Chronological events from the corpus — design revs, decisions, shipments, QC events. Up to 25.")
-    citations: List[Citation] = Field(default_factory=list, description="Every [doc:N] referenced in narrative_md, expanded.")
+    timeline: List[TimelineEvent] = Field(default_factory=list)
+    citations: List[Citation] = Field(default_factory=list)
 
 
 SYSTEM_PROMPT = """You are the synthesis pass for Spider Grills' SharePoint corpus.
