@@ -23,6 +23,9 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
+import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
+import { AppFunnelCard } from '../components/AppFunnelCard'
+import { AppLiveFeedCard } from '../components/AppLiveFeedCard'
 import { AppUsersCard } from '../components/AppUsersCard'
 import { KlaviyoOwnershipBreakdownCard } from '../components/KlaviyoOwnershipBreakdownCard'
 import { LifetimeFleetCard } from '../components/LifetimeFleetCard'
@@ -1023,11 +1026,52 @@ export function ProductEngineeringDivision() {
                   several places. */}
               <LifetimeFleetCard />
 
-              {/* App & Users — Klaviyo-backed app engagement, distinct
-                  from the Venom telemetry view above (which counts
-                  controllers phoning home; this counts actual app
-                  opens on a mobile device). */}
+              {/* ========================================================
+                  Mobile App (Klaviyo-backed)
+                  ========================================================
+                  Everything below this divider tracks the *native app*
+                  — distinct from the Venom-controller telemetry above.
+                  Klaviyo is the intermediary: Agustin's app fires
+                  events into Klaviyo, the dashboard mirrors them.
+                  Awaiting Agustin's `Device Paired` / `Cook Completed`
+                  / `Device Error` / `Firmware Updated` events to
+                  expand this section. */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginTop: 12,
+                marginBottom: 4,
+                paddingBottom: 6,
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+              }}>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  textTransform: 'uppercase',
+                  color: 'var(--muted)',
+                }}>
+                  Mobile App
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Klaviyo-backed · separate from controller telemetry above
+                </span>
+              </div>
+
+              {/* DAU / MAU / stickiness + iOS vs Android + app version
+                  + device-type tallies from Klaviyo profile properties. */}
               <AppUsersCard />
+
+              {/* Install → First Cook conversion + time-to-first-cook
+                  histogram. The closest thing we have to an
+                  onboarding funnel until the app fires per-step events. */}
+              <AppFunnelCard />
+
+              {/* DAU/MAU broken out by Klaviyo's Product Ownership tag
+                  — does Huntsman drive more app stickiness than
+                  Kettle/Webcraft? */}
+              <AppEngagementByOwnershipCard />
 
               {/* Giant-Huntsman-aware ownership split, derived from
                   Klaviyo Placed Order line-items. AWS-side telemetry
@@ -1035,6 +1079,11 @@ export function ProductEngineeringDivision() {
                   Huntsman; this card does, via Shopify product names
                   mirrored into Klaviyo. */}
               <KlaviyoOwnershipBreakdownCard />
+
+              {/* Live activity feed — last 40 app events with email,
+                  ownership, OS. Useful as an ops-floor "is the app
+                  alive right now?" indicator. */}
+              <AppLiveFeedCard />
 
               {/* Visual gauge dashboard — glanceable fleet health.
                   Benchmarks: cook success 69% median (28-month baseline),

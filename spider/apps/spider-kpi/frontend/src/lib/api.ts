@@ -1117,6 +1117,46 @@ export const api = {
     request<KlaviyoSyncStatus>(`/api/klaviyo/sync-status`, { signal }),
   klaviyoMarketingOverview: (days: number = 30, signal?: AbortSignal) =>
     request<KlaviyoMarketingOverview>(`/api/klaviyo/marketing-overview?days=${days}`, { signal }),
+  klaviyoInstallToFirstCook: (signal?: AbortSignal) =>
+    request<KlaviyoInstallFunnel>(`/api/klaviyo/install-to-first-cook`, { signal }),
+  klaviyoEngagementByOwnership: (signal?: AbortSignal) =>
+    request<KlaviyoEngagementByOwnership>(`/api/klaviyo/engagement-by-ownership`, { signal }),
+  klaviyoRecentEvents: (limit: number = 50, signal?: AbortSignal) =>
+    request<KlaviyoRecentEvents>(`/api/klaviyo/recent-events?limit=${limit}`, { signal }),
+}
+
+export interface KlaviyoInstallFunnel {
+  generated_at: string
+  installed: number
+  converted_to_first_cook: number
+  conversion_pct: number
+  median_days_to_first_cook: number | null
+  histogram: Array<{ bucket: string; count: number }>
+}
+
+export interface KlaviyoEngagementByOwnership {
+  generated_at: string
+  by_ownership: Array<{
+    ownership: string
+    profiles: number
+    dau: number
+    mau: number
+    stickiness_pct: number
+  }>
+}
+
+export interface KlaviyoRecentEvents {
+  generated_at: string
+  events: Array<{
+    event_id: string
+    metric: string
+    when: string | null
+    email: string | null
+    external_id: string | null
+    product_ownership: string | null
+    device_types: string[]
+    phone_os: string | null
+  }>
 }
 
 export interface KlaviyoMarketingOverview {

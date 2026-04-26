@@ -430,6 +430,204 @@ def marketing_overview(
     }
 
 
+@router.get("/install-to-first-cook")
+def install_to_first_cook(
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Conversion + time-to-first-cook funnel.
+
+    The app-side product question: when somebody installs the
+    Spider Grills app, how often does it lead to an actual first
+    cook, and how long does it take?
+
+    Methodology:
+
+    * "Installed" = profile that has fired at least one ``Opened App``
+      event (so we know the SDK initialized) and whose
+      ``klaviyo_created_at`` timestamp is the install anchor.
+    * "First cook" = the same profile fired ``First Cooking Session``
+      at some later timestamp.
+    * Time-to-first-cook = days between install and first-cook event.
+
+    Reports overall conversion + a histogram of time-to-first-cook
+    bucketed into 0d / 1d / 2-3d / 4-7d / 8-14d / 15-30d / 30d+.
+    """
+    rows = db.execute(text("""
+        WITH installs AS (
+            SELECT DISTINCT ON (klaviyo_profile_id)
+                klaviyo_profile_id,
+                MIN(event_datetime) AS first_open_at
+            FROM klaviyo_events
+            WHERE metric_name = 'Opened App'
+              AND klaviyo_profile_id IS NOT NULL
+            GROUP BY klaviyo_profile_id
+        ),
+        first_cooks AS (
+            SELECT
+                klaviyo_profile_id,
+                MIN(event_datetime) AS first_cook_at
+            FROM klaviyo_events
+            WHERE metric_name = 'First Cooking Session'
+              AND klaviyo_profile_id IS NOT NULL
+            GROUP BY klaviyo_profile_id
+        )
+        SELECT
+            COUNT(*) AS installed,
+            COUNT(c.klaviyo_profile_id) AS converted,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) < 86400
+            ) AS within_1d,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) BETWEEN 86400 AND 86400*3
+            ) AS within_3d,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) BETWEEN 86400*3 AND 86400*7
+            ) AS within_7d,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) BETWEEN 86400*7 AND 86400*14
+            ) AS within_14d,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) BETWEEN 86400*14 AND 86400*30
+            ) AS within_30d,
+            COUNT(*) FILTER (
+                WHERE c.first_cook_at IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at)) > 86400*30
+            ) AS beyond_30d,
+            PERCENTILE_DISC(0.50) WITHIN GROUP (
+                ORDER BY EXTRACT(EPOCH FROM (c.first_cook_at - i.first_open_at))
+            ) FILTER (WHERE c.first_cook_at IS NOT NULL) AS median_seconds
+        FROM installs i
+        LEFT JOIN first_cooks c USING (klaviyo_profile_id)
+    """)).first()
+
+    installed = int(rows.installed or 0)
+    converted = int(rows.converted or 0)
+    median_seconds = float(rows.median_seconds) if rows.median_seconds is not None else None
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "installed": installed,
+        "converted_to_first_cook": converted,
+        "conversion_pct": round(converted / installed * 100.0, 1) if installed else 0.0,
+        "median_days_to_first_cook": round(median_seconds / 86400, 1) if median_seconds is not None else None,
+        "histogram": [
+            {"bucket": "Same day", "count": int(rows.within_1d or 0)},
+            {"bucket": "1-3 days", "count": int(rows.within_3d or 0)},
+            {"bucket": "3-7 days", "count": int(rows.within_7d or 0)},
+            {"bucket": "1-2 weeks", "count": int(rows.within_14d or 0)},
+            {"bucket": "2-4 weeks", "count": int(rows.within_30d or 0)},
+            {"bucket": "30+ days", "count": int(rows.beyond_30d or 0)},
+        ],
+    }
+
+
+@router.get("/engagement-by-ownership")
+def engagement_by_ownership(
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """DAU/MAU split by Product Ownership tag.
+
+    Answers: do Huntsman owners use the app more than Kettle/Webcraft
+    owners? Helps prioritize which segments to invest app-feature
+    work into.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff_24h = now - timedelta(days=1)
+    cutoff_30d = now - timedelta(days=30)
+
+    rows = db.execute(text("""
+        SELECT
+            COALESCE(p.product_ownership, 'Unknown') AS ownership,
+            COUNT(DISTINCT p.klaviyo_id) AS profiles,
+            COUNT(DISTINCT p.klaviyo_id) FILTER (
+                WHERE EXISTS (
+                    SELECT 1 FROM klaviyo_events e
+                    WHERE e.klaviyo_profile_id = p.klaviyo_id
+                      AND e.metric_name = 'Opened App'
+                      AND e.event_datetime >= :cutoff_24h
+                )
+            ) AS dau,
+            COUNT(DISTINCT p.klaviyo_id) FILTER (
+                WHERE EXISTS (
+                    SELECT 1 FROM klaviyo_events e
+                    WHERE e.klaviyo_profile_id = p.klaviyo_id
+                      AND e.metric_name = 'Opened App'
+                      AND e.event_datetime >= :cutoff_30d
+                )
+            ) AS mau
+        FROM klaviyo_profiles p
+        WHERE p.app_version IS NOT NULL
+           OR p.phone_os IS NOT NULL
+           OR array_length(p.device_types, 1) IS NOT NULL
+        GROUP BY p.product_ownership
+        ORDER BY profiles DESC
+    """), {"cutoff_24h": cutoff_24h, "cutoff_30d": cutoff_30d}).all()
+
+    return {
+        "generated_at": now.isoformat(),
+        "by_ownership": [
+            {
+                "ownership": r.ownership,
+                "profiles": int(r.profiles or 0),
+                "dau": int(r.dau or 0),
+                "mau": int(r.mau or 0),
+                "stickiness_pct": round((int(r.dau or 0) / int(r.mau)) * 100.0, 1) if r.mau else 0.0,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/recent-events")
+def recent_events(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Live activity feed — last N app events with profile context.
+
+    Powers an ops-style scrolling feed of "what users are doing in
+    the app right now". Joins to klaviyo_profiles so each row carries
+    enough identity to be useful (email + product ownership).
+    """
+    rows = db.execute(text("""
+        SELECT
+            e.klaviyo_event_id,
+            e.metric_name,
+            e.event_datetime,
+            p.email,
+            p.external_id,
+            p.product_ownership,
+            p.device_types,
+            p.phone_os
+        FROM klaviyo_events e
+        LEFT JOIN klaviyo_profiles p ON p.klaviyo_id = e.klaviyo_profile_id
+        ORDER BY e.event_datetime DESC
+        LIMIT :limit
+    """), {"limit": limit}).all()
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "events": [
+            {
+                "event_id": r.klaviyo_event_id,
+                "metric": r.metric_name,
+                "when": r.event_datetime.isoformat() if r.event_datetime else None,
+                "email": r.email,
+                "external_id": r.external_id,
+                "product_ownership": r.product_ownership,
+                "device_types": r.device_types or [],
+                "phone_os": r.phone_os,
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/sync-status")
 def sync_status(db: Session = Depends(db_session)) -> dict[str, Any]:
     """Freshness indicator for the Klaviyo connector.
