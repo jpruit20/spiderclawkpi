@@ -1,5 +1,6 @@
 import { toneForAov, toneForConversion, toneForMer } from '../lib/decisionSupport'
 import { KPIIntraday, IntradayStatus, KpiDisplayMode, KpiDisplayRow } from '../lib/types'
+import { TrendPill } from './TrendPill'
 
 function currency(value?: number | null) {
   if (value == null) return '—'
@@ -76,16 +77,17 @@ export function KpiGrid({
   const intradayUnavailable = intradayStatus === 'unavailable'
   const provenance = provenanceLabel(latest)
 
-  const items = latest
+  // Tuple shape: [label, value, unavailable, tone, optional metric key for TrendPill]
+  const items: Array<[string, string, boolean, string, string | null]> = latest
     ? [
-        ['Revenue', currency(latest.revenue), false, 'neutral'],
-        ['Orders', integer(latest.orders), false, 'neutral'],
-        ['AOV', currency(latest.average_order_value), false, toneForAov(latest.average_order_value)],
-        ['Sessions', integer(latest.sessions), displayMode === 'today_intraday' && intradayUnavailable, 'neutral'],
-        ['Conversion', percent(latest.conversion_rate), displayMode === 'today_intraday' && intradayUnavailable, toneForConversion(latest.conversion_rate)],
-        ['Revenue / Session', currency(latest.revenue_per_session), displayMode === 'today_intraday' && intradayUnavailable, 'neutral'],
-        ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null, 'neutral'],
-        ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null, toneForMer(latest.mer)],
+        ['Revenue', currency(latest.revenue), false, 'neutral', 'revenue'],
+        ['Orders', integer(latest.orders), false, 'neutral', 'orders'],
+        ['AOV', currency(latest.average_order_value), false, toneForAov(latest.average_order_value), null],
+        ['Sessions', integer(latest.sessions), displayMode === 'today_intraday' && intradayUnavailable, 'neutral', null],
+        ['Conversion', percent(latest.conversion_rate), displayMode === 'today_intraday' && intradayUnavailable, toneForConversion(latest.conversion_rate), null],
+        ['Revenue / Session', currency(latest.revenue_per_session), displayMode === 'today_intraday' && intradayUnavailable, 'neutral', null],
+        ['Ad Spend', currency(latest.ad_spend), latest.ad_spend == null, 'neutral', null],
+        ['MER', latest.mer == null ? '—' : latest.mer.toFixed(2), latest.mer == null, toneForMer(latest.mer), null],
       ]
     : []
 
@@ -114,10 +116,13 @@ export function KpiGrid({
         <div className="state-message">{noDataMessage || 'No KPI summary returned.'}</div>
       ) : (
         <div className="kpi-grid">
-          {items.map(([label, value, unavailable, tone]) => (
-            <div className={`stat-card ${tone !== 'neutral' ? `status-${tone}` : ''}`} key={String(label)}>
+          {items.map(([label, value, unavailable, tone, metricKey]) => (
+            <div className={`stat-card ${tone !== 'neutral' ? `status-${tone}` : ''}`} key={label}>
               <div className="stat-label">{label}</div>
-              <div className="stat-value">{metricValue(String(value), Boolean(unavailable))}</div>
+              <div className="stat-value" style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                <span>{metricValue(value, unavailable)}</span>
+                {metricKey ? <TrendPill metricKey={metricKey} /> : null}
+              </div>
             </div>
           ))}
         </div>
