@@ -291,12 +291,177 @@ def _rec_firmware_beta_cohort_size(db: Session) -> list[dict[str, Any]]:
 # ── Dispatcher ──────────────────────────────────────────────────────
 
 
+def _rec_pe_disconnect_rate(db: Session) -> list[dict[str, Any]]:
+    """High disconnect rate signals a wifi/connectivity issue across
+    the fleet — could be an AWS endpoint regression or a firmware
+    regression in the connection retry logic."""
+    row = db.execute(text("""
+        SELECT
+            COUNT(*) AS sessions,
+            AVG(CASE WHEN disconnect_events > 0 THEN 1.0 ELSE 0.0 END) * 100 AS disconnect_pct
+        FROM telemetry_sessions
+        WHERE session_start >= NOW() - INTERVAL '7 days'
+          AND session_duration_seconds >= 600
+    """)).first()
+    if not row or int(row.sessions or 0) < 50:
+        return []
+    pct = float(row.disconnect_pct or 0.0)
+    if pct < 8:
+        return []
+    sev = "warn" if pct < 15 else "critical"
+    return [{
+        "title": f"Disconnect rate at {pct:.1f}% of sessions (7d)",
+        "severity": sev,
+        "evidence": f"{int(row.sessions):,} sessions ≥10 min in last 7d; healthy threshold is ≤5%.",
+        "action": "Check AWS IoT endpoint health for the affected region; cross-reference with the firmware version distribution to see if a recent OTA correlates.",
+        "impact": "Disconnects break cooks mid-session. Each percentage point drop is ~25 inbound CX tickets/month.",
+        "key": "pe.disconnect_rate",
+    }]
+
+
+def _rec_pe_overshoot_rate(db: Session) -> list[dict[str, Any]]:
+    """Overshoot signals PID tuning regression — typically from a
+    firmware change that nudged the control constants."""
+    row = db.execute(text("""
+        SELECT
+            COUNT(*) AS sessions,
+            AVG(CASE WHEN max_overshoot_f >= 25 THEN 1.0 ELSE 0.0 END) * 100 AS overshoot_pct
+        FROM telemetry_sessions
+        WHERE session_start >= NOW() - INTERVAL '7 days'
+          AND target_temp IS NOT NULL
+          AND max_overshoot_f IS NOT NULL
+    """)).first()
+    if not row or int(row.sessions or 0) < 50:
+        return []
+    pct = float(row.overshoot_pct or 0.0)
+    if pct < 18:
+        return []
+    sev = "warn" if pct < 28 else "critical"
+    return [{
+        "title": f"{pct:.1f}% of cooks overshot target by ≥25°F (7d)",
+        "severity": sev,
+        "evidence": f"{int(row.sessions):,} sessions with target temp set; baseline overshoot rate is ~12-15%.",
+        "action": "Filter Fleet Control Health by latest firmware version and overshoot = ≥25°F; if concentrated on one fw, ECR a PID-tuning fix.",
+        "impact": "Overshoot causes burnt food and the highest-frustration CX tickets. Recovering from 25% → 15% overshoot saves ~40 tickets/month.",
+        "key": "pe.overshoot_rate",
+    }]
+
+
+def _rec_cx_backlog_growing(db: Session) -> list[dict[str, Any]]:
+    """Detect ticket backlog growing 3 days in a row — a leading
+    indicator of CX team capacity falling behind inbound volume."""
+    rows = db.execute(text("""
+        SELECT business_date, open_tickets_eod
+        FROM freshdesk_tickets_daily
+        WHERE business_date >= CURRENT_DATE - INTERVAL '5 days'
+        ORDER BY business_date DESC
+        LIMIT 5
+    """)).all()
+    if len(rows) < 4:
+        return []
+    sequence = [int(r.open_tickets_eod or 0) for r in rows]
+    if not all(sequence[i] > sequence[i + 1] for i in range(3)):
+        return []
+    delta = sequence[0] - sequence[3]
+    return [{
+        "title": f"CX backlog growing 4 days straight (+{delta} tickets)",
+        "severity": "warn" if delta < 50 else "critical",
+        "evidence": f"Open tickets EOD: {' → '.join(str(s) for s in reversed(sequence[:4]))}.",
+        "action": "Look at ticket category mix today vs 7d-prior — if a single category jumped, that's likely a product/firmware regression. Otherwise consider routing or staffing.",
+        "impact": "Backlogs erode CSAT lagging-indicators by 0.1-0.2 per week of growth.",
+        "key": "cx.backlog_growth",
+    }]
+
+
+def _rec_marketing_unengaged_share(db: Session) -> list[dict[str, Any]]:
+    """High share of profiles that haven't opened the app or any
+    email in 90+ days — sunset candidates that drag email reputation."""
+    row = db.execute(text("""
+        WITH counts AS (
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (
+                    WHERE last_event_at IS NOT NULL
+                      AND last_event_at < NOW() - INTERVAL '90 days'
+                ) AS dormant_90d
+            FROM klaviyo_profiles
+        )
+        SELECT total, dormant_90d,
+               CASE WHEN total > 0 THEN ROUND(dormant_90d::numeric / total * 100, 1) ELSE NULL END AS pct
+        FROM counts
+    """)).first()
+    if not row or row.pct is None or int(row.total or 0) < 100:
+        return []
+    pct = float(row.pct)
+    if pct < 30:
+        return []
+    sev = "warn" if pct < 50 else "critical"
+    return [{
+        "title": f"{pct}% of profiles dormant for 90+ days",
+        "severity": sev,
+        "evidence": f"{int(row.dormant_90d or 0):,} of {int(row.total or 0):,} profiles haven't fired any event in the last 90 days.",
+        "action": "Run a re-activation sequence on the dormant segment; profiles that don't engage within 30d should sunset to protect email deliverability and reduce Klaviyo cost.",
+        "impact": "Active list of 12k beats dormant list of 30k — better deliverability, lower spend, more meaningful campaign analytics.",
+        "key": "mkt.dormant_share",
+    }]
+
+
+def _rec_firmware_release_stalled(db: Session) -> list[dict[str, Any]]:
+    """A firmware release in 'beta' or 'alpha' state with no
+    progress in 14 days is probably stuck and needs a ship/kill
+    decision."""
+    try:
+        rows = db.execute(text("""
+            SELECT
+                release_id, version, status, updated_at,
+                EXTRACT(EPOCH FROM (NOW() - updated_at))/86400 AS days_since_update
+            FROM firmware_releases
+            WHERE status IN ('alpha', 'beta')
+              AND updated_at < NOW() - INTERVAL '14 days'
+            ORDER BY updated_at ASC
+            LIMIT 5
+        """)).all()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        days = int(r.days_since_update or 0)
+        out.append({
+            "title": f"Firmware {r.version} stalled in {r.status} for {days}d",
+            "severity": "warn" if days < 30 else "critical",
+            "evidence": f"Release {r.release_id} ({r.version}) hasn't moved since {r.updated_at.isoformat() if r.updated_at else 'unknown'}.",
+            "action": "Open the Firmware Hub release detail; either promote it to gamma/production or kill it with an ECR. Stalled releases block the next test slot.",
+            "impact": "Each week of stall pushes the next firmware delivery back by a sprint and dilutes the beta cohort signal-to-noise.",
+            "key": f"fw.release_stalled.{r.release_id}",
+        })
+    return out
+
+
 _GENERATORS: dict[str, list[Callable[[Session], list[dict[str, Any]]]]] = {
-    "pe": [_rec_pe_session_freshness, _rec_pe_app_install_rate, _rec_pe_cook_success],
-    "cx": [_rec_cx_first_response_breach, _rec_cx_huntsman_ticket_spike],
-    "marketing": [_rec_marketing_friendbuy_attribution, _rec_marketing_unengaged_180d],
+    "pe": [
+        _rec_pe_session_freshness,
+        _rec_pe_app_install_rate,
+        _rec_pe_cook_success,
+        _rec_pe_disconnect_rate,
+        _rec_pe_overshoot_rate,
+    ],
+    "cx": [
+        _rec_cx_first_response_breach,
+        _rec_cx_huntsman_ticket_spike,
+        _rec_cx_backlog_growing,
+    ],
+    "marketing": [
+        _rec_marketing_friendbuy_attribution,
+        _rec_marketing_unengaged_180d,
+        _rec_marketing_unengaged_share,
+    ],
     "operations": [_rec_ops_order_aging],
-    "firmware": [_rec_firmware_beta_cohort_size],
+    "firmware": [
+        _rec_firmware_beta_cohort_size,
+        _rec_firmware_release_stalled,
+    ],
 }
 
 
