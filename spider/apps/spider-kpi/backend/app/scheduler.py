@@ -116,7 +116,11 @@ def run_syncs() -> None:
         "aws_telemetry",
         "clarity", "reddit", "amazon", "clickup", "slack",
         "youtube", "youtube_lore",
-        "recompute",
+        # recompute_daily_kpis + recompute_diagnostics ran together in
+        # one subprocess and OOMed (~3.6 GB anon-rss). Split into two
+        # subprocesses so each has its own ~500-800 MB working set
+        # budget, well under the cgroup ceiling.
+        "recompute_kpis", "recompute_diagnostics",
     ]
 
     log.warning("run_syncs: launching per-target subprocesses (n=%d)", len(targets))

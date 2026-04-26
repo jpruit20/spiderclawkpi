@@ -205,14 +205,23 @@ def _run_youtube_lore(db) -> None:
     sync_youtube_lore(db)
 
 
-def _run_recompute(db) -> None:
-    """Both KPI + diagnostics recompute, in this single subprocess.
-    They share enough working set that splitting them adds spawn cost
-    without memory benefit."""
+def _run_recompute_kpis(db) -> None:
+    """Recompute the daily KPI rollup. Measured 2026-04-25 at ~543 MB
+    held per call after gc + malloc_trim. On its own it's fine; it
+    OOM'd previously only because it was running in the same subprocess
+    as recompute_diagnostics (which adds another big working set)."""
     if _gate_already_running(db, "decision-engine"):
         return
-    from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
+    from app.compute.kpis import recompute_daily_kpis
     recompute_daily_kpis(db)
+
+
+def _run_recompute_diagnostics(db) -> None:
+    """Recompute the diagnostics rollup. Split out from recompute_kpis
+    so the two don't compound memory in one subprocess."""
+    if _gate_already_running(db, "decision-engine"):
+        return
+    from app.compute.kpis import recompute_diagnostics
     recompute_diagnostics(db)
 
 
@@ -229,7 +238,8 @@ TARGETS = {
     "slack": _run_slack,
     "youtube": _run_youtube,
     "youtube_lore": _run_youtube_lore,
-    "recompute": _run_recompute,
+    "recompute_kpis": _run_recompute_kpis,
+    "recompute_diagnostics": _run_recompute_diagnostics,
 }
 
 
