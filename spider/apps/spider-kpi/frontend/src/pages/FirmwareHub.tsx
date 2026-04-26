@@ -38,6 +38,7 @@ import {
 } from '../lib/api'
 import { BetaProgramPanel } from '../components/BetaProgramPanel'
 import { KlaviyoBetaCustomersCard } from '../components/KlaviyoBetaCustomersCard'
+import { RecommendationsCard } from '../components/RecommendationsCard'
 import { FirmwareDeployPanel, FirmwareDeployLogView } from '../components/FirmwareDeployPanel'
 import { useAuth } from '../components/AuthGate'
 import { CacheFreshnessBadge } from '../components/CacheFreshnessBadge'
@@ -181,6 +182,7 @@ export function FirmwareHub() {
       {tab === 'alpha' ? <AlphaCohortPanel /> : null}
       {tab === 'beta' ? (
         <>
+          <RecommendationsCard division="firmware" />
           <KlaviyoBetaCustomersCard />
           <BetaProgramPanel />
         </>

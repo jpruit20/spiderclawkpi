@@ -23,6 +23,7 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
+import { RecommendationsCard } from '../components/RecommendationsCard'
 import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
 import { AppFunnelCard } from '../components/AppFunnelCard'
 import { AppLiveFeedCard } from '../components/AppLiveFeedCard'
@@ -1019,6 +1020,13 @@ export function ProductEngineeringDivision() {
           {view === 'fleet' && (
             <>
               <TruthLegend />
+
+              {/* Top-of-page actionable recommendations engine.
+                  Surfaces "do this next" items based on current data
+                  — turns the dashboard from "displays" into "tells
+                  you what to do". Generators live in
+                  app/services/recommendations.py. */}
+              <RecommendationsCard division="pe" />
 
               {/* Fleet composition — canonical 24mo active count +
                   lifetime breakdown by product family and source.

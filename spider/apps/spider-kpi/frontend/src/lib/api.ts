@@ -1205,6 +1205,8 @@ export interface KlaviyoBetaCustomers {
 
 export interface KlaviyoCampaignsRecent {
   generated_at: string
+  missing_scope?: string
+  note?: string
   campaigns: Array<{
     id: string
     name: string | null
@@ -1218,6 +1220,8 @@ export interface KlaviyoCampaignsRecent {
 
 export interface KlaviyoFlowsStatus {
   generated_at: string
+  missing_scope?: string
+  note?: string
   by_status: Record<string, number>
   flows: Array<{
     id: string

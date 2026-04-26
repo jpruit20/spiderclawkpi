@@ -632,6 +632,23 @@ _marketing_cache: dict[str, tuple[float, Any]] = {}
 _MARKETING_CACHE_TTL = 1800  # 30 min
 
 
+def _scope_error(exc: Exception) -> Optional[str]:
+    """Return the missing-scope detail when the wrapped Klaviyo call
+    raised a 403 because the configured API key is too narrow. Lets
+    endpoints render a friendly "add this scope" hint instead of a
+    plain 500 — the dashboard stays usable while the operator adds
+    scopes in Klaviyo's admin UI."""
+    msg = str(exc)
+    if "Klaviyo API 403" not in msg:
+        return None
+    # Klaviyo's body looks like ``... missing required scopes: campaigns:read``
+    import re
+    m = re.search(r"missing required scopes:\s*([^\"\\}]+)", msg)
+    if m:
+        return m.group(1).strip()
+    return "unknown"
+
+
 def _cached_klaviyo(key: str, fn: Any) -> Any:
     """Tiny in-memory TTL cache for Klaviyo proxy responses.
 
@@ -696,7 +713,18 @@ def campaigns_recent(
                 break
         return out
 
-    rows = _cached_klaviyo(f"campaigns:{limit}", _fetch)
+    try:
+        rows = _cached_klaviyo(f"campaigns:{limit}", _fetch)
+    except Exception as exc:
+        scope = _scope_error(exc)
+        if scope:
+            return {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "campaigns": [],
+                "missing_scope": scope,
+                "note": f"Add the {scope} scope to KLAVIYO_API_KEY at https://www.klaviyo.com/account#api-keys-tab to populate this view.",
+            }
+        raise
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "campaigns": rows,
@@ -732,7 +760,19 @@ def flows_status(db: Session = Depends(db_session)) -> dict[str, Any]:
                 })
         return out
 
-    rows = _cached_klaviyo("flows", _fetch)
+    try:
+        rows = _cached_klaviyo("flows", _fetch)
+    except Exception as exc:
+        scope = _scope_error(exc)
+        if scope:
+            return {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "by_status": {},
+                "flows": [],
+                "missing_scope": scope,
+                "note": f"Add the {scope} scope to KLAVIYO_API_KEY at https://www.klaviyo.com/account#api-keys-tab to populate this view.",
+            }
+        raise
     by_status: dict[str, int] = {}
     for r in rows:
         s = r.get("status") or "unknown"

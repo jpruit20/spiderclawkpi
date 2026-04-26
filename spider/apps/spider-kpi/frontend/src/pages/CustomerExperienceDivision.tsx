@@ -11,6 +11,7 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { KlaviyoCustomerLookupCard } from '../components/KlaviyoCustomerLookupCard'
 import { KlaviyoCustomerJourneyCard } from '../components/KlaviyoCustomerJourneyCard'
+import { RecommendationsCard } from '../components/RecommendationsCard'
 import { ProductComplaintsCard } from '../components/ProductComplaintsCard'
 import { CXCutoverBanner } from '../components/CXCutoverBanner'
 import { DivisionHero } from '../components/DivisionHero'
@@ -741,6 +742,9 @@ export function CustomerExperienceDivision() {
             variant="compact"
             subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
           />
+
+          {/* Top-of-page actionable recommendations. */}
+          <RecommendationsCard division="cx" />
 
           {/* Klaviyo customer lookup — paste an email to see their
               grill, firmware, app recency, and recent events. Replaces

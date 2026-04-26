@@ -91,7 +91,11 @@ export function KlaviyoCampaignsCard() {
         </div>
       </div>
 
-      {data.campaigns.length === 0 ? (
+      {data.missing_scope ? (
+        <div className="state-message" style={{ marginTop: 10, color: 'var(--orange)' }}>
+          {data.note ?? `Klaviyo API key is missing the ${data.missing_scope} scope.`}
+        </div>
+      ) : data.campaigns.length === 0 ? (
         <div className="state-message" style={{ marginTop: 10 }}>No campaigns in the last 90 days.</div>
       ) : (
         <div style={{ marginTop: 10, overflowX: 'auto' }}>
@@ -183,7 +187,11 @@ export function KlaviyoFlowsStatusCard() {
         </div>
       </div>
 
-      {data.flows.length === 0 ? (
+      {data.missing_scope ? (
+        <div className="state-message" style={{ marginTop: 10, color: 'var(--orange)' }}>
+          {data.note ?? `Klaviyo API key is missing the ${data.missing_scope} scope.`}
+        </div>
+      ) : data.flows.length === 0 ? (
         <div className="state-message" style={{ marginTop: 10 }}>No flows configured.</div>
       ) : (
         <div style={{ marginTop: 10, maxHeight: 320, overflowY: 'auto' }}>

@@ -29,6 +29,7 @@ import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 import { DivisionHero } from '../components/DivisionHero'
 import { KlaviyoFriendbuyCard } from '../components/KlaviyoFriendbuyCard'
+import { RecommendationsCard } from '../components/RecommendationsCard'
 import { KlaviyoMarketingCard } from '../components/KlaviyoMarketingCard'
 import {
   KlaviyoCampaignsCard,
@@ -610,6 +611,9 @@ export function MarketingDivision() {
       {!loading && !error ? (
         <>
           <TruthLegend />
+
+          {/* Top-of-page actionable recommendations. */}
+          <RecommendationsCard division="marketing" />
 
           {/* Klaviyo funnel — signup → install → first cook → order.
               Surfaces the post-ingest mirror of the Klaviyo account,

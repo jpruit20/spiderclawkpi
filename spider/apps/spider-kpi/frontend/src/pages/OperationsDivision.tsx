@@ -5,6 +5,7 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { DivisionHero } from '../components/DivisionHero'
+import { RecommendationsCard } from '../components/RecommendationsCard'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { Link } from 'react-router-dom'
 
@@ -99,6 +100,9 @@ export function OperationsDivision() {
           { label: 'Late-ship reasons', value: '—', state: 'neutral' },
         ]}
       />
+      {/* Top-of-page actionable recommendations. */}
+      <RecommendationsCard division="operations" />
+
       {/* Order aging — Conor's 2026-04-21 ask. Lives here as a real ops
           KPI while the broader BC/ERP integration is still pending.
           Also rendered compact on the CX page for WISMO correlation. */}
