@@ -283,14 +283,55 @@ def synthesize_product(
     user_msg = _build_user_message(spider_product, [(d, a) for d, a in rows])
 
     # The schema is too large for Anthropic's strict-grammar structured
-    # output (nested optional fields blow the compiled grammar limit).
-    # Instead, prompt for raw JSON and parse manually with the Pydantic
-    # validator. Keeps all the field validation; loses only the
-    # generation-time guarantees.
-    json_instruction = (
-        "\n\nReturn ONLY a JSON object matching this TypeScript-like shape (no markdown, no commentary):\n"
-        + ProductSynthesis.model_json_schema().__repr__()[:4000]
-    )
+    # output. Embed an explicit example so Claude doesn't drift on the
+    # outer shape (e.g. mistaking vendor_summary for a list when it's
+    # an object containing a list).
+    json_instruction = """
+
+Return ONLY a JSON object with EXACTLY this shape (omit no top-level keys; null where unknown):
+
+{
+  "headline_metrics": [
+    {"label": "COGS per unit", "value": "$281.12", "unit": "uncoated · CBOM Rev J", "tone": "good", "source_document_id": 873}
+  ],
+  "narrative_md": "## Section heading\\n\\nFirst paragraph with [doc:N] citation.\\n\\nSecond paragraph...",
+  "cogs_summary": {
+    "canonical_total_usd": 281.12,
+    "canonical_line_count": 80,
+    "canonical_document_id": 873,
+    "confidence": "medium",
+    "notes": "...",
+    "breakdown": [
+      {"category": "Main Assembly", "cost_usd": 187.45, "source_document_id": 873, "notes": null}
+    ],
+    "coated_total_usd": 321.87,
+    "uncoated_total_usd": 281.12,
+    "currency_notes": null
+  },
+  "design_status": {
+    "latest_revision": "Tech Pack Rev M02",
+    "latest_revision_document_id": 5836,
+    "active_workstreams": ["Charcoal grate redesign 10mm→8mm rod spacing"],
+    "notable_iterations": ["Top dome 4mm→5mm thickness"]
+  },
+  "vendor_summary": {
+    "top_vendors": [
+      {"name": "Qifei (Shenzhen)", "mentions": 25, "documents_seen": 25, "role": "prime CM/exporter", "estimated_spend_usd": 87000.0}
+    ],
+    "total_unique": 15
+  },
+  "data_quality_issues": [
+    {"severity": "critical", "issue": "...", "affected_document_ids": [5836, 873], "suggested_fix": "..."}
+  ],
+  "timeline": [
+    {"date": "2025-09-16", "label": "BOM Main Assembly Rev M released", "document_id": 6588, "kind": "revision"}
+  ],
+  "citations": [
+    {"claim": "COGS per unit (uncoated) is $281.12", "document_id": 873}
+  ]
+}
+
+No markdown fence, no commentary, just the raw JSON object."""
     try:
         response = client.messages.create(
             model=MODEL_ID,
