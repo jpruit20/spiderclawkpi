@@ -119,25 +119,27 @@ def app_profile_summary(
 ) -> dict[str, Any]:
     """Phone platform mix + app version distribution + device types.
 
-    Restricted to profiles that have ever reported at least one of:
-    ``phone_os``, ``app_version``, or ``device_types`` (i.e. profiles
-    who actually installed and opened the app — not every Shopify-synced
-    profile).
+    Scoped to profiles that have ever fired the ``Opened App`` event —
+    that's the most reliable "actually used the app" signal. Older
+    fallback (phone_os IS NOT NULL) overcounted: phone_os gets
+    populated even on profiles that never opened the app, e.g. when
+    the SDK ran briefly during install. Joseph's 2026-04-26 callout
+    asked for the device-vs-app-user gap to be honest, so we anchor
+    on the event count here.
     """
-    # One query over profile rows that have ANY app signal.
-    profiles = db.execute(
-        select(
-            KlaviyoProfile.phone_os,
-            KlaviyoProfile.phone_brand,
-            KlaviyoProfile.app_version,
-            KlaviyoProfile.device_types,
-            KlaviyoProfile.last_event_at,
-        ).where(
-            (KlaviyoProfile.phone_os.isnot(None))
-            | (KlaviyoProfile.app_version.isnot(None))
-            | (func.array_length(KlaviyoProfile.device_types, 1).isnot(None))
+    # Pull profiles that have at least one Opened App event in their
+    # history. Subquery uses the indexed metric_name lookup.
+    profiles = db.execute(text("""
+        SELECT
+            p.phone_os, p.phone_brand, p.app_version,
+            p.device_types, p.last_event_at
+        FROM klaviyo_profiles p
+        WHERE EXISTS (
+            SELECT 1 FROM klaviyo_events e
+            WHERE e.klaviyo_profile_id = p.klaviyo_id
+              AND e.metric_name = 'Opened App'
         )
-    ).all()
+    """)).all()
 
     phone_os: Counter = Counter()
     phone_brand: Counter = Counter()
@@ -1085,6 +1087,23 @@ def customer_journey(
             for m, counts in sorted(by_month.items())
         ],
     }
+
+
+@router.get("/audience-segmentation")
+def audience_segmentation_endpoint(
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Single source of truth for the four populations the dashboard
+    cares about: total audience, owners (union of three signals),
+    app users (lifetime + 30d active), and connected devices.
+
+    Use this anywhere the right denominator matters. The previous
+    "app install rate" cards were dividing app_users by total_audience
+    (~9% — looks bad) when they should be dividing by owners
+    (the more honest comparison). Same for "dormant share" etc.
+    """
+    from app.services.klaviyo_audience import audience_segmentation
+    return audience_segmentation(db)
 
 
 @router.get("/sync-status")

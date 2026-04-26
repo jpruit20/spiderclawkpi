@@ -70,32 +70,43 @@ def _rec_pe_session_freshness(db: Session) -> list[dict[str, Any]]:
 
 
 def _rec_pe_app_install_rate(db: Session) -> list[dict[str, Any]]:
-    row = db.execute(text("""
-        WITH counts AS (
-            SELECT
-                COUNT(*) AS total,
-                COUNT(*) FILTER (
-                    WHERE app_version IS NOT NULL OR phone_os IS NOT NULL
-                       OR array_length(device_types, 1) IS NOT NULL
-                ) AS installed
-            FROM klaviyo_profiles
-        )
-        SELECT total, installed,
-               CASE WHEN total > 0 THEN ROUND(installed::numeric / total * 100, 1) ELSE NULL END AS install_pct
-        FROM counts
-    """)).first()
-    if not row or row.install_pct is None or int(row.total or 0) < 100:
+    """App install rate of OWNERS — not the whole audience.
+
+    Joseph's 2026-04-26 note: dividing app users by total Klaviyo
+    profiles is misleading because the audience includes 36k+
+    newsletter signups who don't own a Spider product. The honest
+    comparison is owners (people we sold to) vs app users (people
+    using the app to control their grill).
+    """
+    from app.services.klaviyo_audience import (
+        count_app_users, count_owners, count_connected_devices,
+    )
+    owners_total = count_owners(db).get("total", 0)
+    app_users = count_app_users(db)
+    devices = count_connected_devices(db).get("lifetime", 0)
+    if owners_total < 100 or app_users < 1:
         return []
-    pct = float(row.install_pct)
-    if pct >= 25:
+    pct_of_owners = round(app_users / owners_total * 100, 1) if owners_total else 0
+    # Devices is the more authoritative "real fleet" denominator,
+    # since every connected device implies an app user at some point.
+    pct_of_devices = round(app_users / devices * 100, 1) if devices else 0
+    if pct_of_devices >= 60:
         return []
-    sev = "warn" if pct >= 10 else "critical"
+    sev = "warn" if pct_of_devices >= 35 else "critical"
     return [{
-        "title": f"Only {pct}% of customers have installed the app",
+        "title": f"Only {pct_of_devices}% of connected devices have an active app user",
         "severity": sev,
-        "evidence": f"{int(row.installed or 0):,} app-installed of {int(row.total or 0):,} total Klaviyo profiles.",
-        "action": "Run a Klaviyo flow targeting the non-installed segment with an app onboarding email; investigate top reasons for drop-off in the first-cook funnel below.",
-        "impact": "Every new app install adds a recurring engagement signal + supports the Charcoal JIT subscription opt-in flow.",
+        "evidence": (
+            f"{app_users:,} profiles ever fired Opened App vs {devices:,} unique devices "
+            f"that have ever connected to AWS. Gap of {max(0, devices - app_users):,} devices."
+        ),
+        "action": (
+            "Targeted re-engagement: pull the device-MAC ↔ Klaviyo-profile bridge for owners "
+            "without a recent Opened App event; send a flow inviting them back into the app. "
+            "Pre-2025 users won't have an Opened App event because the SDK was added in mid-2025 — "
+            "that subset is fixable only by getting them to open the app once."
+        ),
+        "impact": "Every recovered app user unlocks Charcoal JIT, beta cohort eligibility, and recurring engagement signal.",
         "key": "pe.app_install_rate",
     }]
 
@@ -374,8 +385,10 @@ def _rec_cx_backlog_growing(db: Session) -> list[dict[str, Any]]:
 
 
 def _rec_marketing_unengaged_share(db: Session) -> list[dict[str, Any]]:
-    """High share of profiles that haven't opened the app or any
-    email in 90+ days — sunset candidates that drag email reputation."""
+    """High share of audience profiles dormant 90d+. Audience-level
+    metric (not owners) since this drives email-list health and
+    Klaviyo billing. Owners get their own re-engagement track in
+    pe.app_install_rate."""
     row = db.execute(text("""
         WITH counts AS (
             SELECT
@@ -397,11 +410,11 @@ def _rec_marketing_unengaged_share(db: Session) -> list[dict[str, Any]]:
         return []
     sev = "warn" if pct < 50 else "critical"
     return [{
-        "title": f"{pct}% of profiles dormant for 90+ days",
+        "title": f"{pct}% of marketing audience dormant for 90+ days",
         "severity": sev,
-        "evidence": f"{int(row.dormant_90d or 0):,} of {int(row.total or 0):,} profiles haven't fired any event in the last 90 days.",
-        "action": "Run a re-activation sequence on the dormant segment; profiles that don't engage within 30d should sunset to protect email deliverability and reduce Klaviyo cost.",
-        "impact": "Active list of 12k beats dormant list of 30k — better deliverability, lower spend, more meaningful campaign analytics.",
+        "evidence": f"{int(row.dormant_90d or 0):,} of {int(row.total or 0):,} profiles (audience-wide, includes non-owners) haven't fired any event in 90+ days.",
+        "action": "Run a re-activation sequence on the dormant audience; sunset profiles that don't engage within 30d to protect email deliverability and reduce Klaviyo cost. Owners need a separate retention track — they shouldn't get sunset just because they don't open marketing emails.",
+        "impact": "Active list of 12k beats dormant list of 30k — better deliverability, lower Klaviyo bill, more meaningful campaign analytics. Don't sunset owners by accident.",
         "key": "mkt.dormant_share",
     }]
 

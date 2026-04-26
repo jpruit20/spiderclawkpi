@@ -1129,6 +1129,8 @@ export const api = {
     request<KlaviyoFlowsStatus>(`/api/klaviyo/flows-status`, { signal }),
   klaviyoListsAndSegments: (signal?: AbortSignal) =>
     request<KlaviyoListsAndSegments>(`/api/klaviyo/lists-and-segments`, { signal }),
+  klaviyoAudienceSegmentation: (signal?: AbortSignal) =>
+    request<KlaviyoAudienceSegmentation>(`/api/klaviyo/audience-segmentation`, { signal }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1357,6 +1359,28 @@ export interface KlaviyoCustomerLookup {
     when: string
     properties: Record<string, unknown>
   }>
+}
+
+export interface KlaviyoAudienceSegmentation {
+  generated_at: string
+  total_audience: number
+  owners: {
+    by_order: number
+    by_klaviyo_tag: number
+    by_device_types: number
+    total: number
+    pct_of_audience: number
+  }
+  app_users: {
+    lifetime: number
+    active_30d: number
+    pct_of_owners: number
+    pct_of_audience: number
+  }
+  connected_devices: { lifetime: number; last_24mo: number }
+  device_to_app_user_ratio: number | null
+  non_owner_audience: number
+  non_owner_pct: number
 }
 
 export interface KlaviyoSyncStatus {

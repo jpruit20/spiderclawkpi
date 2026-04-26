@@ -28,6 +28,7 @@ import { CompareMode as Mode } from '../lib/compare'
 import { ActionObject, BlockedStateOutput, ClarityPageMetric, IssueRadarResponse, KPIDaily, KPIObject, OverviewResponse, SocialTrendsResponse, SourceHealthItem } from '../lib/types'
 import { actionFromKpi, buildBlockedState, buildNumericKpi, buildTextKpi, enforceActionContract, truthStateFromSource } from '../lib/divisionContract'
 import { DivisionHero } from '../components/DivisionHero'
+import { AudienceSegmentationCard } from '../components/AudienceSegmentationCard'
 import { KlaviyoFriendbuyCard } from '../components/KlaviyoFriendbuyCard'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { KlaviyoMarketingCard } from '../components/KlaviyoMarketingCard'
@@ -611,6 +612,11 @@ export function MarketingDivision() {
       {!loading && !error ? (
         <>
           <TruthLegend />
+
+          {/* Audience taxonomy — sets the context for every card
+              below. The marketing audience is mostly NOT owners;
+              cards use the right denominator per metric. */}
+          <AudienceSegmentationCard />
 
           {/* Top-of-page actionable recommendations. */}
           <RecommendationsCard division="marketing" />

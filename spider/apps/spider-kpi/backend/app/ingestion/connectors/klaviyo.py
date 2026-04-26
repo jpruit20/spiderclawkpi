@@ -53,7 +53,13 @@ TIMEOUT = 30
 PROFILE_PAGE_SIZE = 100
 EVENT_PAGE_SIZE = 200
 # First-run lookback for profiles + events when no prior sync_run exists.
-DEFAULT_BACKFILL_DAYS = 30
+# Bumped 2026-04-26 from 30 days to 730 (~2 years) so the lifetime
+# "Opened App" / "First Cooking Session" / "Placed Order" baselines
+# fully populate. The Klaviyo SDK started firing Opened App in
+# 2025-06-20 — anything narrower truncated app-user counts to a 1-month
+# window and made Joseph's "we have 7k+ devices but only 3k app users"
+# disconnect look like reality.
+DEFAULT_BACKFILL_DAYS = 730
 # Safety cap so a wedged sync can't chew CPU forever. Each profile sync
 # is ~1 HTTP call per 100 profiles; at 20k profiles that's 200 calls.
 MAX_PAGES_PER_RUN = 500
@@ -270,7 +276,13 @@ def _flatten_event(row: dict[str, Any], metric_name: str, metric_id: str) -> dic
     profile_rel = ((rels.get("profile") or {}).get("data") or {})
     dt_str = attrs.get("datetime")
     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")) if dt_str else None
-    props = attrs.get("eventProperties") or {}
+    # 2026-04-26: Klaviyo returns this attribute as ``event_properties``
+    # (snake_case) per the JSON:API response, NOT ``eventProperties``
+    # (camelCase). Reading the wrong key silently dropped Items[] on
+    # every Placed Order event, breaking Giant Huntsman attribution.
+    # ``eventProperties`` retained as a fallback in case Klaviyo flips
+    # casing in a future API revision.
+    props = attrs.get("event_properties") or attrs.get("eventProperties") or {}
     # Profile email/external_id aren't on the event itself unless we
     # sideload the profile — we leave them empty here and fill them at
     # query time by joining to klaviyo_profiles on klaviyo_profile_id.
@@ -312,8 +324,13 @@ def _sync_events_for_metric(
         for v in values:
             if v["event_datetime"] is None:
                 continue
-            stmt = pg_insert(KlaviyoEvent).values(**v).on_conflict_do_nothing(
-                index_elements=["klaviyo_event_id"]
+            # ON CONFLICT DO UPDATE on properties so a re-sync after a
+            # connector bug fix (like the 2026-04-26 event_properties
+            # rename) heals existing rows in place. Other columns are
+            # immutable so we don't need to update them.
+            stmt = pg_insert(KlaviyoEvent).values(**v).on_conflict_do_update(
+                index_elements=["klaviyo_event_id"],
+                set_={"properties": v["properties"]},
             )
             result = db.execute(stmt)
             if result.rowcount:

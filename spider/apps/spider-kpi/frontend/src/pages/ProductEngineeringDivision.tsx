@@ -23,6 +23,7 @@ import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
+import { AudienceSegmentationCard } from '../components/AudienceSegmentationCard'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
 import { AppFunnelCard } from '../components/AppFunnelCard'
@@ -1066,6 +1067,11 @@ export function ProductEngineeringDivision() {
                   Klaviyo-backed · separate from controller telemetry above
                 </span>
               </div>
+
+              {/* Audience reconciliation — devices, owners, app users,
+                  audience all in one frame so the cards below are
+                  read against the right denominator. */}
+              <AudienceSegmentationCard />
 
               {/* DAU / MAU / stickiness + iOS vs Android + app version
                   + device-type tallies from Klaviyo profile properties. */}
