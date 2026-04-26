@@ -132,6 +132,20 @@ class Settings(BaseSettings):
     freshdesk_api_key: Optional[str] = None
     freshdesk_api_user: Optional[str] = None
 
+    # Shelob first-boot webhook. When KPI's stream writer detects a
+    # MAC's first-ever telemetry event, it POSTs to this URL with
+    # the X-Shelob-Webhook-Token header so Shelob can materialize the
+    # bound persona onto the device shadow. Both env vars must be set
+    # for the webhook to fire — empty either side is a clean no-op.
+    shelob_first_boot_url: Optional[str] = Field(
+        default="https://api.spidergrills.ai/api/devices/first-boot",
+        validation_alias=AliasChoices("SHELOB_FIRST_BOOT_URL"),
+    )
+    shelob_webhook_token: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("SHELOB_WEBHOOK_TOKEN", "KPI_WEBHOOK_TOKEN"),
+    )
+
     # Klaviyo (Spider Grills account — public key XEp4CM). Agustin wires
     # the native app to this account via the Klaviyo Mobile SDK; the
     # dashboard reads it as an intermediary so we get user-level device

@@ -82,12 +82,27 @@ def normalize_stream_record(record: dict[str, Any]) -> dict[str, Any] | None:
 def write_stream_records(db: Session, normalized_records: list[dict[str, Any]]) -> dict[str, Any]:
     inserted = 0
     skipped = 0
+    inserted_records: list[dict[str, Any]] = []
     for payload in normalized_records:
         stmt = insert(TelemetryStreamEvent).values(**payload)
         stmt = stmt.on_conflict_do_nothing(index_elements=['source_event_id'])
         result = db.execute(stmt)
-        inserted += int(result.rowcount or 0)
-        if not (result.rowcount or 0):
+        if result.rowcount:
+            inserted += int(result.rowcount)
+            inserted_records.append(payload)
+        else:
             skipped += 1
     db.commit()
+
+    # Fire Shelob's first-boot webhook for any brand-new MACs we just
+    # accepted. Best-effort, swallows all failures — telemetry ingestion
+    # never blocks on Shelob being reachable.
+    if inserted_records:
+        try:
+            from app.streaming.shelob_webhook import maybe_fire_first_boot
+            maybe_fire_first_boot(db, inserted_records)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("shelob first-boot dispatch crashed")
+
     return {'inserted': inserted, 'skipped': skipped}
