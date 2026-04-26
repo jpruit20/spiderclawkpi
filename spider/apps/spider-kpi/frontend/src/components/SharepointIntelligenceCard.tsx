@@ -668,12 +668,16 @@ export function SharepointIntelligenceCard({ division, defaultProduct }: Props) 
         <div style={{ marginTop: 12 }}>
           {narrative?.available ? (
             <>
-              {/* Headline metric tiles */}
+              {/* Headline metric tiles. Drop "uncoated" tiles for products
+                  that ship coated only — uncoated is supplementary context
+                  surfaced inside the COGS hero, not a top-level tile. */}
               {narrative.headline_metrics && narrative.headline_metrics.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
-                  {narrative.headline_metrics.map((m, i) => (
-                    <MetricTile key={i} metric={m} citationDocs={citationDocsObj} />
-                  ))}
+                  {narrative.headline_metrics
+                    .filter(m => !/uncoated/i.test(m.label))
+                    .map((m, i) => (
+                      <MetricTile key={i} metric={m} citationDocs={citationDocsObj} />
+                    ))}
                 </div>
               )}
 

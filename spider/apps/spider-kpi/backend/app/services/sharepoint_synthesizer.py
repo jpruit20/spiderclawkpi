@@ -194,6 +194,15 @@ Pick the numbers a busy operator would scan first. Examples:
 
 Tone drives color: good=green, warn=orange, bad=red, neutral=blue.
 
+## Coated vs uncoated for Huntsman / Giant Huntsman
+
+These products ship coated only — coated is canonical. If both prices exist:
+- canonical_total_usd MUST be the coated price
+- coated_total_usd: same value
+- uncoated_total_usd: the lower number, kept as supplementary context only
+- Do NOT emit a separate "COGS per unit (uncoated)" headline_metrics tile. The uncoated number is supplementary; promoting it to a tile creates dashboard noise.
+- The COGS hero on the dashboard already shows both numbers below the headline; the headline tile should be the canonical (coated) number.
+
 ## cogs_summary — RECONCILE ACROSS FILES, don't just pick one
 
 This is the most-watched dashboard number. Spider's BOMs frequently have empty cost columns; their costed view lives in **CBOMs (consolidated BOMs)**, **price-list quotes**, and **invoices/POs**. Your job is to reconcile across them.
