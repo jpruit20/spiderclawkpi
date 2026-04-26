@@ -148,8 +148,11 @@ def kpi_daily_series(db: Session, column: str, days: int = 35) -> list[float]:
     Whitelist of columns to avoid SQL injection (column comes from the
     caller — needs to be a real column name on KPIDaily)."""
     SAFE_COLS = {
-        "revenue", "orders", "cook_success_rate", "active_devices",
-        "tickets_created", "csat", "first_response_hours",
+        "revenue", "orders", "tickets_created", "tickets_resolved",
+        "csat", "first_response_time", "resolution_time", "sla_breach_rate",
+        "open_backlog", "reopen_rate", "tickets_per_100_orders",
+        "average_order_value", "sessions", "conversion_rate",
+        "ad_spend", "mer", "cost_per_purchase",
     }
     if column not in SAFE_COLS:
         raise ValueError(f"refusing to query unknown kpi column: {column!r}")
@@ -162,6 +165,22 @@ def kpi_daily_series(db: Session, column: str, days: int = 35) -> list[float]:
         ORDER BY business_date
     """)).all()
     return [float(r.v) for r in rows]
+
+
+def cook_success_rate_series(db: Session, days: int = 35) -> list[float]:
+    """Cook success rate is derived: successful_sessions / session_count.
+    Skips days with zero sessions to avoid 0/0 dragging the mean."""
+    rows = db.execute(text(f"""
+        SELECT (successful_sessions::float / NULLIF(session_count, 0)) AS v
+        FROM telemetry_history_daily
+        WHERE business_date >= CURRENT_DATE - INTERVAL '{int(days)} days'
+          AND business_date < CURRENT_DATE
+          AND session_count IS NOT NULL
+          AND session_count > 0
+          AND successful_sessions IS NOT NULL
+        ORDER BY business_date
+    """)).all()
+    return [float(r.v) for r in rows if r.v is not None]
 
 
 def telemetry_history_daily_series(db: Session, column: str, days: int = 35) -> list[float]:

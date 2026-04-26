@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
 from app.services.trend_analysis import (
+    cook_success_rate_series,
     detect_anomaly,
     kpi_daily_series,
     telemetry_history_daily_series,
@@ -29,16 +30,17 @@ router = APIRouter(prefix="/api/trends", tags=["trends"])
 # direction-where-up-is-good controls whether an upward trend renders
 # green or red. Revenue up = good (green); ticket count up = bad (red).
 METRICS: dict[str, dict[str, Any]] = {
-    "revenue":             {"table": "kpi", "col": "revenue",            "label": "Revenue",              "up_is_good": True},
-    "orders":              {"table": "kpi", "col": "orders",             "label": "Orders",               "up_is_good": True},
-    "cook_success_rate":   {"table": "kpi", "col": "cook_success_rate",  "label": "Cook success rate",    "up_is_good": True},
-    "active_devices":      {"table": "kpi", "col": "active_devices",     "label": "Active devices",       "up_is_good": True},
-    "tickets_created":     {"table": "kpi", "col": "tickets_created",    "label": "Tickets created",      "up_is_good": False},
-    "csat":                {"table": "kpi", "col": "csat",               "label": "CSAT",                 "up_is_good": True},
-    "first_response_hours":{"table": "kpi", "col": "first_response_hours","label": "First-response hrs",  "up_is_good": False},
-    "telemetry_active":    {"table": "tel", "col": "active_devices",     "label": "Telemetry active",     "up_is_good": True},
-    "telemetry_sessions":  {"table": "tel", "col": "session_count",      "label": "Cook sessions",        "up_is_good": True},
-    "telemetry_errors":    {"table": "tel", "col": "error_events",       "label": "Telemetry errors",     "up_is_good": False},
+    "revenue":             {"table": "kpi", "col": "revenue",             "label": "Revenue",              "up_is_good": True},
+    "orders":              {"table": "kpi", "col": "orders",              "label": "Orders",               "up_is_good": True},
+    "tickets_created":     {"table": "kpi", "col": "tickets_created",     "label": "Tickets created",      "up_is_good": False},
+    "csat":                {"table": "kpi", "col": "csat",                "label": "CSAT",                 "up_is_good": True},
+    "first_response_time": {"table": "kpi", "col": "first_response_time", "label": "First-response time",  "up_is_good": False},
+    "active_devices":      {"table": "tel", "col": "active_devices",      "label": "Active devices",       "up_is_good": True},
+    "telemetry_sessions":  {"table": "tel", "col": "session_count",       "label": "Cook sessions",        "up_is_good": True},
+    "telemetry_errors":    {"table": "tel", "col": "error_events",        "label": "Telemetry errors",     "up_is_good": False},
+    # Cook success rate is derived (successful_sessions / session_count),
+    # so it doesn't map to a single column — special-cased in _series.
+    "cook_success_rate":   {"table": "derived", "col": "cook_success_rate", "label": "Cook success rate",  "up_is_good": True},
 }
 
 
@@ -46,7 +48,11 @@ def _series(db: Session, metric_key: str, days: int = 35) -> list[float]:
     spec = METRICS[metric_key]
     if spec["table"] == "kpi":
         return kpi_daily_series(db, spec["col"], days=days)
-    return telemetry_history_daily_series(db, spec["col"], days=days)
+    if spec["table"] == "tel":
+        return telemetry_history_daily_series(db, spec["col"], days=days)
+    if spec["table"] == "derived" and spec["col"] == "cook_success_rate":
+        return cook_success_rate_series(db, days=days)
+    raise ValueError(f"unknown metric source for {metric_key!r}")
 
 
 @router.get("/all")

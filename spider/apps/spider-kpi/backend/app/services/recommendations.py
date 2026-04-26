@@ -531,7 +531,7 @@ _anomaly_pe_telemetry_errors = _rec_anomaly_for("telemetry_errors", "pe")
 _anomaly_pe_telemetry_sessions = _rec_anomaly_for("telemetry_sessions", "pe")
 _anomaly_cx_tickets = _rec_anomaly_for("tickets_created", "cx")
 _anomaly_cx_csat = _rec_anomaly_for("csat", "cx")
-_anomaly_cx_first_response = _rec_anomaly_for("first_response_hours", "cx")
+_anomaly_cx_first_response = _rec_anomaly_for("first_response_time", "cx")
 _anomaly_marketing_revenue = _rec_anomaly_for("revenue", "marketing")
 _anomaly_marketing_orders = _rec_anomaly_for("orders", "marketing")
 
