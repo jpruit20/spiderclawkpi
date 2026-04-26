@@ -249,4 +249,4 @@ def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
             classified_at=sa_bindparam("classified_at"),
         )
     )
-    db.execute(stmt, payload)
+    db.execute(stmt, payload, execution_options={"synchronize_session": None})
