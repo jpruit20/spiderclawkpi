@@ -155,17 +155,22 @@ def _run_syncs_inner() -> None:
             freshdesk_success = _successful_result(sync_freshdesk(db, days=7))
             any_success = freshdesk_success or any_success
         if freshdesk_success:
-            # Re-enabled 2026-04-25: subprocess isolation in the parent
-            # run_syncs() means materialize_app_side's per-call memory
-            # gets reclaimed by the OS on subprocess exit. The
-            # 8809bf5 batch-and-expunge rewrite is still here as
-            # defense-in-depth; the subprocess wrapper is the real fix.
-            try:
-                materialize_app_side(db)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception("app_side materialize failed")
-                db.rollback()
+            # STOPGAP 2026-04-25 (re-applied after subprocess iso wasn't
+            # enough): subprocess isolation kept the parent at ~400 MB,
+            # but the SUBPROCESS itself OOM-kills at ~3.6 GB anon-rss
+            # because all connectors run sequentially in one process and
+            # their per-call leaks compound (aws_telemetry ~815 MB +
+            # recompute_daily_kpis ~543 MB + materialize ~2-3 GB peak +
+            # others). On a 4 GB droplet that OOMs the cgroup. The
+            # 2-3 GB peak from materialize_app_side is the single
+            # biggest contributor, so skipping it here is the cheapest
+            # way to bring the subprocess under the ceiling. Long-term
+            # fix is per-connector subprocesses; this restores
+            # stability while we land that.
+            import logging
+            logging.getLogger(__name__).warning(
+                "app_side materialize SKIPPED (stopgap) — subprocess hits 3.6GB OOM ceiling otherwise"
+            )
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
         aws_success = False
