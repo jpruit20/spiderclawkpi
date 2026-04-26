@@ -80,6 +80,69 @@ def run_seed() -> None:
 
 
 def run_syncs() -> None:
+    """Launch one full sync sweep in an isolated subprocess.
+
+    Why a subprocess: app.cli.run_syncs_diagnose (2026-04-25) measured
+    multiple connectors holding hundreds of MB of C-side memory per
+    call that neither gc.collect() nor malloc_trim(0) reclaim:
+
+        sync_aws_telemetry      : 815 MB held per call after fixes
+        recompute_daily_kpis    : 543 MB held per call
+        materialize_app_side    : 2-3 GB during freshdesk + materialize
+        (others not yet measured)
+
+    On a 4 GB droplet, that compounded to OOM-kill within 4 sync
+    cycles (7-10 min cadence, ~165 SIGKILLs/day). Incremental
+    Python-side reference fixes only reclaimed ~20% — most of the
+    leak is in libpq result buffers, urllib3 connection pools, and
+    CPython arena fragmentation, none of which is reachable from
+    Python without restarting the interpreter.
+
+    Subprocess isolation makes the OS handle release: the child runs
+    one sweep, exits, and the kernel reclaims its entire address
+    space. The long-lived uvicorn process stays at its baseline RSS
+    forever. Spawn (not fork) so we don't inherit the parent's
+    APScheduler thread state.
+    """
+    import logging as _logging
+    import os as _os
+    import subprocess as _subprocess
+    import sys as _sys
+    log = _logging.getLogger(__name__)
+    # ``backend_dir`` resolves to .../spider-kpi/backend so ``-m
+    # app.cli.run_syncs_subprocess`` can import the package.
+    backend_dir = Path(__file__).resolve().parent.parent
+    cmd = [_sys.executable, "-m", "app.cli.run_syncs_subprocess"]
+    log.warning("run_syncs: launching subprocess (pid will be in stdout)")
+    try:
+        proc = _subprocess.run(
+            cmd,
+            cwd=str(backend_dir),
+            timeout=25 * 60,  # 25 min wall-clock cap
+            capture_output=True,
+            text=True,
+            env=_os.environ.copy(),
+        )
+        if proc.returncode != 0:
+            log.warning(
+                "run_syncs subprocess exit=%s stderr_tail=%s",
+                proc.returncode, (proc.stderr or "")[-1500:],
+            )
+        else:
+            log.warning(
+                "run_syncs subprocess ok stdout_tail=%s",
+                (proc.stdout or "")[-500:],
+            )
+    except _subprocess.TimeoutExpired:
+        log.warning("run_syncs subprocess timed out (>25min)")
+    except Exception:
+        log.exception("run_syncs subprocess failed to launch")
+
+
+def _run_syncs_inner() -> None:
+    """Body of one sync sweep. Invoked by app.cli.run_syncs_subprocess
+    in a fresh subprocess so per-call leaks don't accumulate in
+    uvicorn. Don't call this directly from the long-lived process."""
     db = SessionLocal()
     try:
         any_success = False
@@ -92,21 +155,17 @@ def run_syncs() -> None:
             freshdesk_success = _successful_result(sync_freshdesk(db, days=7))
             any_success = freshdesk_success or any_success
         if freshdesk_success:
-            # STOPGAP 2026-04-25: materialize_app_side is the real OOM
-            # source (not the burn pool warmer). Even after the
-            # 8809bf5 batch-and-expunge rewrite, RSS still climbed
-            # 537→3154 MB in 60 s on the next freshdesk sync (verified
-            # via rss_watchdog journal). Disabled until we can run
-            # tracemalloc directly on this code path. Freshdesk row
-            # ingest still runs (tickets land in freshdesk_tickets);
-            # only the app_side rollup is paused, so the per-source
-            # device/user observation tables and the daily rollup
-            # will go stale until this comes back. That's a far better
-            # tradeoff than a 7-10 min OOM-kill loop.
-            import logging
-            logging.getLogger(__name__).warning(
-                "app_side materialize SKIPPED (stopgap) — pending tracemalloc diagnosis of OOM"
-            )
+            # Re-enabled 2026-04-25: subprocess isolation in the parent
+            # run_syncs() means materialize_app_side's per-call memory
+            # gets reclaimed by the OS on subprocess exit. The
+            # 8809bf5 batch-and-expunge rewrite is still here as
+            # defense-in-depth; the subprocess wrapper is the real fix.
+            try:
+                materialize_app_side(db)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("app_side materialize failed")
+                db.rollback()
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
         aws_success = False
@@ -561,21 +620,16 @@ def run_ai_self_grade_job() -> None:
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_seed, "date", id="seed-on-start", max_instances=1, coalesce=True)
-    # Re-enabled 2026-04-25 evening after the OOM kill loop stopped:
-    #   - last SIGKILL: 2026-04-25 20:44 UTC
-    #   - subsequent restarts at 21:00 / 21:08 were planned (auto-pull),
-    #     not OOM-driven
-    #   - rss_watchdog confirmed RSS settling at ~340 MB after the
-    #     initial cohort burn pool warmup spike, instead of marching
-    #     to 3.6 GB the way it did during the leak
-    # The run_syncs sweep covers Shopify / Triplewhale / Freshdesk /
-    # GA4 / Clarity / Reddit / Amazon / ClickUp / Slack / YouTube /
-    # AWS-telemetry plus the daily KPI + diagnostics recompute hooks.
-    # While it was disabled, none of those refreshed automatically —
-    # Klaviyo's last sync was 5+ hours stale at the point of re-enable,
-    # for example. Watching rss_watchdog here is the tripwire: if the
-    # leak comes back, RSS will start climbing again within a few
-    # sweeps and we have the run_syncs_diagnose CLI ready to bisect.
+    # run_syncs() is now a thin subprocess launcher (see its docstring).
+    # The actual work happens in a fresh Python process invoked via
+    # ``app.cli.run_syncs_subprocess``, so the per-call leaks measured
+    # via app.cli.run_syncs_diagnose (aws_telemetry ~815 MB held,
+    # recompute_daily_kpis ~543 MB, materialize ~2 GB peak) are
+    # reclaimed by the OS when the subprocess exits — the long-lived
+    # uvicorn parent stays at its baseline RSS forever.
+    # rss_watchdog is the tripwire: if the parent's RSS climbs at all
+    # between sweeps, the subprocess isolation has a hole and we go
+    # back to run_syncs_diagnose.
     scheduler.add_job(run_syncs, "interval", minutes=settings.sync_interval_minutes, id="sync-all", replace_existing=True, max_instances=1, coalesce=True)
     # Daily post-deploy verdict sweep: compares shadow-signal firings
     # before vs after each opted-in device's t0 across addresses_issues
