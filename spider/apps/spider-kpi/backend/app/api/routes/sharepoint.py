@@ -508,6 +508,8 @@ def product_narrative(
         "design_status": row.design_status,
         "vendor_summary": row.vendor_summary,
         "data_quality_issues": row.data_quality_issues,
+        "headline_metrics": row.headline_metrics or [],
+        "timeline": row.timeline or [],
         "citations": row.citations,
         "citation_docs": citation_docs,
         "files_analyzed": row.files_analyzed,

@@ -35,8 +35,15 @@ from app.models import SharepointDocument, SharepointFileAnalysis, SharepointPro
 
 
 logger = logging.getLogger(__name__)
-SYNTHESIZER_VERSION = "synth-v1.0.0"
+SYNTHESIZER_VERSION = "synth-v2.0.0"
 MODEL_ID = "claude-opus-4-7"
+
+
+class CogsBreakdownItem(BaseModel):
+    category: str = Field(description="Sub-assembly or cost category, e.g. 'Main Assembly', 'Hardware', 'Venom controller', 'Packaging', 'Gaskets'")
+    cost_usd: float
+    source_document_id: Optional[int] = None
+    notes: Optional[str] = None
 
 
 class CogsSummary(BaseModel):
@@ -45,6 +52,10 @@ class CogsSummary(BaseModel):
     canonical_document_id: Optional[int] = None
     confidence: str = Field(description="One of: high | medium | low")
     notes: Optional[str] = Field(default=None, description="Why this confidence — e.g. 'BOM has 179 lines but no costs filled in'")
+    breakdown: List[CogsBreakdownItem] = Field(default_factory=list, description="Cost broken down by sub-assembly / category, summing roughly to canonical_total_usd.")
+    coated_total_usd: Optional[float] = None
+    uncoated_total_usd: Optional[float] = None
+    currency_notes: Optional[str] = None
 
 
 class DesignStatus(BaseModel):
@@ -59,6 +70,7 @@ class VendorRollup(BaseModel):
     mentions: int
     documents_seen: int = 0
     role: Optional[str] = None  # e.g. "fan supplier", "powder coat"
+    estimated_spend_usd: Optional[float] = Field(default=None, description="Spend you can attribute to this vendor across the analyzed files. Null when unknown.")
 
 
 class VendorSummary(BaseModel):
@@ -78,40 +90,104 @@ class Citation(BaseModel):
     document_id: int
 
 
+class HeadlineMetric(BaseModel):
+    label: str = Field(description="Short label, e.g. 'COGS uncoated', 'Active vendors', 'Open ECRs', 'Latest rev'")
+    value: str = Field(description="Display value, e.g. '$281.12', '15', '3', 'Rev M02'")
+    unit: Optional[str] = Field(default=None, description="Optional unit or context, e.g. 'per unit', 'as of 2026-04-26'")
+    tone: str = Field(description="One of: good | warn | bad | neutral. Drives the color of the tile.")
+    source_document_id: Optional[int] = None
+
+
+class TimelineEvent(BaseModel):
+    date: str = Field(description="ISO date YYYY-MM-DD; use the doc_date or a date stated in the file")
+    label: str = Field(description="What happened, e.g. 'CBOM Rev J released', 'Charcoal grate spec change'")
+    document_id: Optional[int] = None
+    kind: str = Field(description="One of: revision | decision | shipment | qc_event | quote | invoice | other")
+
+
 class ProductSynthesis(BaseModel):
+    headline_metrics: List[HeadlineMetric] = Field(default_factory=list, description="3-6 dashboard-tile metrics that capture the state of this product at a glance.")
     narrative_md: str = Field(description="Markdown narrative — 4-8 short paragraphs, executive-readable. Cite specific files inline as [doc:123]. Lead with what we know is true; end with what's missing/blocked.")
     cogs_summary: CogsSummary
     design_status: DesignStatus
     vendor_summary: VendorSummary
     data_quality_issues: List[DataQualityIssue] = Field(default_factory=list)
+    timeline: List[TimelineEvent] = Field(default_factory=list, description="Chronological events from the corpus — design revs, decisions, shipments, QC events. Up to 25.")
     citations: List[Citation] = Field(default_factory=list, description="Every [doc:N] referenced in narrative_md, expanded.")
 
 
 SYSTEM_PROMPT = """You are the synthesis pass for Spider Grills' SharePoint corpus.
 
-You receive every analyzed file for one product (Huntsman / Giant Huntsman / Venom / Webcraft / Giant Webcraft) and produce one coherent picture for the founder/operator who reads the dashboard.
+You receive every analyzed file for one product (Huntsman / Giant Huntsman / Venom / Webcraft / Giant Webcraft) and produce one coherent picture for a founder/operator dashboard.
 
 Voice: dense, concrete, founder-grade. No filler. Lead with what's true. End with what's blocking decisions.
 
-For **narrative_md**: 4-8 short paragraphs in markdown. Cite specific files inline using [doc:N] where N is the document_id from the input. Cover (when the data supports it):
+This is rendered as a KPI dashboard, not a memo. Most of the value lives in the **structured fields** (headline_metrics, cogs_summary.breakdown, vendor_summary, timeline, data_quality_issues). The narrative_md is a secondary read.
 
-- What this product is and what's currently being worked on. Reference recent revisions, ECRs, active workstreams.
-- The COGS picture. If there's a canonical BOM with real numbers, lead with the total. If costs are missing, state that clearly: "BOM Rev M has 179 lines but no cost columns filled in [doc:123]; pricing for ~40 of those parts shows up in the Vendor PL [doc:456], implying $X partial coverage."
-- Vendor relationships — who supplies the most, what they supply.
-- Data quality issues blocking the dashboard from giving a clean answer.
-- Anything else genuinely meaningful in the corpus (test reports, tech packs, quality plans, recent design pivots).
+## headline_metrics — 3-6 tile-ready stats
 
-Do NOT pad. Do NOT speculate beyond what the analyzed files say. If the corpus is thin, say so.
+Pick the numbers a busy operator would scan first. Examples:
+  { label: "COGS per unit", value: "$281.12", unit: "uncoated · CBOM Rev J", tone: "good", source_document_id: 873 }
+  { label: "Active vendors", value: "15", unit: "across analyzed files", tone: "neutral" }
+  { label: "Latest design rev", value: "Rev M02", unit: "Tech Pack · 2026-02-28", tone: "neutral", source_document_id: 5836 }
+  { label: "Open quality issues", value: "5 of 43", unit: "lots marked pass with defects", tone: "bad", source_document_id: 934 }
+  { label: "BOM cost coverage", value: "0%", unit: "Tech Pack BOM", tone: "bad", source_document_id: 5836 }
 
-For **cogs_summary**: pick the file you'd treat as canonical for COGS, give your confidence (high/medium/low), and explain.
+Tone drives color: good=green, warn=orange, bad=red, neutral=blue.
 
-For **design_status**: latest revision label and the document it came from. List active workstreams inferred from filenames + recent activity.
+## cogs_summary — RECONCILE ACROSS FILES, don't just pick one
 
-For **vendor_summary**: ranked vendor list with documents_seen count.
+This is the most-watched dashboard number. Spider's BOMs frequently have empty cost columns; their costed view lives in **CBOMs (consolidated BOMs)**, **price-list quotes**, and **invoices/POs**. Your job is to reconcile across them.
 
-For **data_quality_issues**: 0-8 entries. Severity = critical when it blocks a decision (e.g. "no BOM has costs"), warn when it makes a decision risky (e.g. "two BOMs disagree on vent ring cost"), info for nice-to-fix.
+- canonical_total_usd: best estimate of per-unit COGS in USD
+- canonical_document_id: the file you treated as the canonical reference
+- confidence:
+  - **high** when a CBOM with full pricing is at the same design rev as the current Tech Pack
+  - **medium** when the costed BOM is one design rev behind, or you reconciled across CBOM + quotes
+  - **low** when costs come from invoices/POs you summed but couldn't verify against a BOM line list
+- coated_total_usd / uncoated_total_usd: when the CBOM separates them, fill both
+- breakdown: 4-12 categories that roughly sum to canonical_total_usd. Examples for Huntsman:
+  - Main Assembly steel · $X
+  - Hardware (XJ fasteners) · $X
+  - Venom controller subassembly · $X
+  - Door + fiberglass gaskets · $X
+  - Door handles + latches · $X
+  - Packaging · $X
+- notes: explain reconciliation. "CBOM Rev J quotes from May 2025; Tech Pack now Rev M02. Cross-checked hardware total against XJ PO QPO2026-032 ($3,598.96) — matches within 2%."
 
-For **citations**: expand every [doc:N] you used in narrative_md.
+If the price-list / vendor quote files cover only a subset of the BOM, SAY SO and quantify: "Vendor PL covers 42 of ~140 BOM line items, ~30% of the dollar value."
+
+## design_status
+
+latest_revision (e.g. "Tech Pack Rev M02"). active_workstreams should be specific, not generic — "Charcoal grate rod-spacing 10→8mm + double-thickness reinforcement" not just "Charcoal grate redesign".
+
+## vendor_summary
+
+Ranked vendors. estimated_spend_usd when you can sum quotes/invoices for that vendor across files, even partial. 'role' = what they supply (fasteners, controller, gaskets, etc.).
+
+## data_quality_issues
+
+The dashboard renders these as severity-colored alerts. Be specific. Examples:
+  - "Tech Pack Rev M02 BOM has 100+ lines, zero costs filled in" (critical)
+  - "CTN002 shipment has $28,906 / $29,406 / $29,546 across three customs docs" (warn)
+  - "5 of 43 inspection lots marked 'pass' despite documented defects" (warn)
+
+## timeline
+
+Chronological events with ISO dates. Used to render a horizontal revision/decision timeline.
+
+## narrative_md
+
+4-8 short paragraphs. Inline cite as [doc:N]. Don't repeat the structured fields verbatim — the narrative is for *connecting* the dots ("the sub-304 stainless finding [doc:6248] is consistent with the latch electrolysis defects in QC [doc:934]").
+
+## Cross-checking expectations
+
+- **CBOM/BOM costs vs price-list quotes**: when both exist for the same parts, reconcile and flag deltas >5% as data quality issues.
+- **Invoice totals vs BOM totals**: invoices are real money paid; BOMs are budgeted. Differences are expected but big gaps should be flagged.
+- **Customs declared values vs invoice values**: should match to the dollar. Differences are flags.
+- **Pass rates vs defect logs**: a "pass" row with documented defects is a flag.
+
+Do NOT invent numbers. Do NOT hallucinate vendors. If a number isn't in the analyzed files, leave the field null.
 
 Respond with JSON conforming to ProductSynthesis."""
 
@@ -234,6 +310,8 @@ def synthesize_product(
     existing.vendor_summary = syn.vendor_summary.model_dump()
     existing.data_quality_issues = [i.model_dump() for i in syn.data_quality_issues]
     existing.citations = [c.model_dump() for c in syn.citations]
+    existing.headline_metrics = [m.model_dump() for m in syn.headline_metrics]
+    existing.timeline = [t.model_dump() for t in syn.timeline]
     existing.files_analyzed = len(rows)
     existing.model_used = MODEL_ID
     existing.synthesizer_version = SYNTHESIZER_VERSION

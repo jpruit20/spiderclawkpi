@@ -1628,18 +1628,46 @@ export interface SharepointSetCanonicalResponse {
   source_file: SharepointDocSummary | null
 }
 
+export interface SharepointHeadlineMetric {
+  label: string
+  value: string
+  unit: string | null
+  tone: 'good' | 'warn' | 'bad' | 'neutral' | string
+  source_document_id: number | null
+}
+
+export interface SharepointCogsBreakdownItem {
+  category: string
+  cost_usd: number
+  source_document_id: number | null
+  notes: string | null
+}
+
+export interface SharepointTimelineEvent {
+  date: string
+  label: string
+  document_id: number | null
+  kind: string
+}
+
 export interface SharepointProductNarrative {
   generated_at: string
   spider_product: string
   available: boolean
   reason?: string
   narrative_md?: string
+  headline_metrics?: SharepointHeadlineMetric[]
+  timeline?: SharepointTimelineEvent[]
   cogs_summary?: {
     canonical_total_usd: number | null
     canonical_line_count: number | null
     canonical_document_id: number | null
     confidence: string
     notes: string | null
+    breakdown?: SharepointCogsBreakdownItem[]
+    coated_total_usd?: number | null
+    uncoated_total_usd?: number | null
+    currency_notes?: string | null
   }
   design_status?: {
     latest_revision: string | null
@@ -1648,7 +1676,7 @@ export interface SharepointProductNarrative {
     notable_iterations: string[]
   }
   vendor_summary?: {
-    top_vendors: Array<{ name: string; mentions: number; documents_seen: number; role: string | null }>
+    top_vendors: Array<{ name: string; mentions: number; documents_seen: number; role: string | null; estimated_spend_usd?: number | null }>
     total_unique: number
   }
   data_quality_issues?: Array<{

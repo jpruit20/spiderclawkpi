@@ -1833,6 +1833,8 @@ class SharepointProductIntelligence(Base):
     vendor_summary: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     data_quality_issues: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     citations: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    headline_metrics: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    timeline: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     files_analyzed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     model_used: Mapped[Optional[str]] = mapped_column(String(64))
     synthesizer_version: Mapped[str] = mapped_column(String(32), nullable=False, default="synth-v1")
