@@ -25,6 +25,7 @@ import { TempControlQualityPanel } from '../components/TempControlQualityPanel'
 import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { AudienceSegmentationCard } from '../components/AudienceSegmentationCard'
 import { RecommendationsCard } from '../components/RecommendationsCard'
+import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
 import { AppFunnelCard } from '../components/AppFunnelCard'
 import { AppLiveFeedCard } from '../components/AppLiveFeedCard'
@@ -1028,6 +1029,11 @@ export function ProductEngineeringDivision() {
                   you what to do". Generators live in
                   app/services/recommendations.py. */}
               <RecommendationsCard division="pe" />
+
+              {/* SharePoint engineering activity — pulled from AMW's
+                  per-product sites. Files modified in the
+                  Engineering folder across all 5 product cards. */}
+              <SharepointActivityCard division="pe" />
 
               {/* Fleet composition — canonical 24mo active count +
                   lifetime breakdown by product family and source.

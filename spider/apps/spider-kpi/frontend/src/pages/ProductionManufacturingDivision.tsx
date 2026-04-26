@@ -1,5 +1,7 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 import { DivisionHero } from '../components/DivisionHero'
+import { RecommendationsCard } from '../components/RecommendationsCard'
+import { SharepointActivityCard } from '../components/SharepointActivityCard'
 
 export function ProductionManufacturingDivision() {
   return (
@@ -47,6 +49,17 @@ export function ProductionManufacturingDivision() {
           { label: 'Bottlenecks', value: '—', state: 'neutral' },
         ]}
       />
+      {/* Action recommendations specifically for Manufacturing now
+          that we have real Production-and-QC document signal flowing
+          through the engine. */}
+      <RecommendationsCard division="manufacturing" />
+
+      {/* SharePoint Production & QC activity — pulls from AMW's per-product
+          sites' "Production and QC" folders. First real manufacturing
+          data on this page; production output / yield / defect feeds
+          remain blocked below until MES integration lands. */}
+      <SharepointActivityCard division="manufacturing" />
+
       <BlockedDivisionPage
         title="Production / Manufacturing"
         owner="David"

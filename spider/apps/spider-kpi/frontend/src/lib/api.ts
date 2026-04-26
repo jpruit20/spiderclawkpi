@@ -1131,6 +1131,22 @@ export const api = {
     request<KlaviyoListsAndSegments>(`/api/klaviyo/lists-and-segments`, { signal }),
   klaviyoAudienceSegmentation: (signal?: AbortSignal) =>
     request<KlaviyoAudienceSegmentation>(`/api/klaviyo/audience-segmentation`, { signal }),
+  // SharePoint
+  sharepointSites: (signal?: AbortSignal) =>
+    request<SharepointSitesResponse>(`/api/sharepoint/sites`, { signal }),
+  sharepointRecentChanges: (
+    opts: { days?: number; division?: string; spider_product?: string; limit?: number },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.days) q.set('days', String(opts.days))
+    if (opts.division) q.set('division', opts.division)
+    if (opts.spider_product) q.set('spider_product', opts.spider_product)
+    if (opts.limit) q.set('limit', String(opts.limit))
+    return request<SharepointRecentChanges>(`/api/sharepoint/recent-changes?${q.toString()}`, { signal })
+  },
+  sharepointByProduct: (signal?: AbortSignal) =>
+    request<SharepointByProduct>(`/api/sharepoint/by-product`, { signal }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1381,6 +1397,60 @@ export interface KlaviyoAudienceSegmentation {
   device_to_app_user_ratio: number | null
   non_owner_audience: number
   non_owner_pct: number
+}
+
+export interface SharepointSitesResponse {
+  generated_at: string
+  sites: Array<{
+    tenant_id: string
+    tenant_display_name: string | null
+    site_path: string
+    display_name: string | null
+    spider_product: string | null
+    default_division: string | null
+    web_url: string | null
+    enabled: boolean
+    last_synced_at: string | null
+    last_sync_error: string | null
+  }>
+}
+
+export interface SharepointRecentChanges {
+  generated_at: string
+  window_days: number
+  filters: { division: string | null; spider_product: string | null }
+  documents: Array<{
+    name: string
+    path: string
+    spider_product: string | null
+    dashboard_division: string | null
+    top_level_folder: string | null
+    modified_at: string | null
+    modified_by_email: string | null
+    size_bytes: number | null
+    mime_type: string | null
+    web_url: string | null
+  }>
+  list_items: Array<{
+    title: string | null
+    list_name: string | null
+    spider_product: string | null
+    dashboard_division: string | null
+    modified_at: string | null
+    modified_by_email: string | null
+    web_url: string | null
+    fields_preview: Record<string, unknown>
+  }>
+}
+
+export interface SharepointByProduct {
+  generated_at: string
+  by_product: Array<{
+    spider_product: string | null
+    docs: number
+    list_items: number
+    last_modified: string | null
+  }>
 }
 
 export interface KlaviyoSyncStatus {

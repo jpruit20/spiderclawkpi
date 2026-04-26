@@ -452,6 +452,97 @@ def _rec_firmware_release_stalled(db: Session) -> list[dict[str, Any]]:
     return out
 
 
+def _rec_pe_engineering_stale(db: Session) -> list[dict[str, Any]]:
+    """Flag products that haven't seen any engineering-folder file
+    activity in 30+ days. Helps spot stalled product workstreams
+    before they show up as a missed deadline."""
+    try:
+        rows = db.execute(text("""
+            SELECT
+                spider_product,
+                MAX(modified_at_remote) AS last_modified,
+                EXTRACT(EPOCH FROM (NOW() - MAX(modified_at_remote)))/86400 AS days_stale
+            FROM sharepoint_documents
+            WHERE dashboard_division = 'pe'
+              AND is_folder = false
+              AND spider_product IS NOT NULL
+            GROUP BY spider_product
+            HAVING MAX(modified_at_remote) < NOW() - INTERVAL '30 days'
+            ORDER BY days_stale DESC
+            LIMIT 5
+        """)).all()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        days = int(r.days_stale or 0)
+        out.append({
+            "title": f"{r.spider_product} engineering activity stalled — {days}d since last file change",
+            "severity": "info" if days < 60 else "warn",
+            "evidence": f"Last Engineering folder change: {r.last_modified.isoformat() if r.last_modified else 'unknown'}.",
+            "action": f"Open the {r.spider_product} card in SharePoint and check whether the workstream is paused intentionally or genuinely stuck. If active, ping the engineering owner.",
+            "impact": "Catches stalled product workstreams ~weeks before the missed-deadline signal hits.",
+            "key": f"pe.engineering_stale.{r.spider_product}",
+        })
+    return out
+
+
+def _rec_ops_recent_quotes(db: Session) -> list[dict[str, Any]]:
+    """Surface fresh quotation/PO files in the Project Management
+    folder so Operations can see vendor activity at a glance."""
+    try:
+        rows = db.execute(text("""
+            SELECT spider_product, COUNT(*) AS n
+            FROM sharepoint_documents
+            WHERE dashboard_division = 'operations'
+              AND is_folder = false
+              AND modified_at_remote >= NOW() - INTERVAL '7 days'
+              AND (LOWER(name) LIKE '%quot%' OR LOWER(name) LIKE '%po %' OR LOWER(name) LIKE '%purchase%' OR LOWER(name) LIKE '%price%')
+            GROUP BY spider_product
+            HAVING COUNT(*) >= 3
+            ORDER BY 2 DESC
+            LIMIT 3
+        """)).all()
+    except Exception:
+        return []
+    return [{
+        "title": f"{r.n} new quote/PO files for {r.spider_product} this week",
+        "severity": "info",
+        "evidence": f"Detected in the Project Management folder (filenames matching 'quote', 'PO', 'purchase', 'price').",
+        "action": f"Skim the latest quotations on the Operations page's SharePoint card. If a vendor decision is pending, pull it forward.",
+        "impact": "Vendor decisions made within a week of quoting save 3-5d of Q&A churn vs reviewing later.",
+        "key": f"ops.fresh_quotes.{r.spider_product}",
+    } for r in rows]
+
+
+def _rec_mfg_qc_documents(db: Session) -> list[dict[str, Any]]:
+    """When new Production-and-QC documents land on Huntsman or
+    Webcraft (the active SKUs), tell the manufacturing owner."""
+    try:
+        rows = db.execute(text("""
+            SELECT spider_product, COUNT(*) AS n, MAX(modified_at_remote) AS last_mod
+            FROM sharepoint_documents
+            WHERE dashboard_division = 'manufacturing'
+              AND is_folder = false
+              AND modified_at_remote >= NOW() - INTERVAL '3 days'
+              AND spider_product IN ('Huntsman', 'Webcraft', 'Giant Huntsman', 'Giant Webcraft')
+            GROUP BY spider_product
+            HAVING COUNT(*) >= 5
+            ORDER BY 2 DESC
+            LIMIT 4
+        """)).all()
+    except Exception:
+        return []
+    return [{
+        "title": f"{r.n} Production/QC files updated for {r.spider_product} in last 3 days",
+        "severity": "info",
+        "evidence": f"Most recent: {r.last_mod.isoformat() if r.last_mod else 'unknown'}.",
+        "action": "Check the SharePoint Production & QC card for new yield reports, defect logs, or inspection records. Push any defect-reason updates back to the Issue Radar.",
+        "impact": "Fast loops between QC findings and engineering ECRs cut defect-rate-recovery time roughly in half.",
+        "key": f"mfg.qc_activity.{r.spider_product}",
+    } for r in rows]
+
+
 _GENERATORS: dict[str, list[Callable[[Session], list[dict[str, Any]]]]] = {
     "pe": [
         _rec_pe_session_freshness,
@@ -459,6 +550,7 @@ _GENERATORS: dict[str, list[Callable[[Session], list[dict[str, Any]]]]] = {
         _rec_pe_cook_success,
         _rec_pe_disconnect_rate,
         _rec_pe_overshoot_rate,
+        _rec_pe_engineering_stale,
     ],
     "cx": [
         _rec_cx_first_response_breach,
@@ -470,10 +562,16 @@ _GENERATORS: dict[str, list[Callable[[Session], list[dict[str, Any]]]]] = {
         _rec_marketing_unengaged_180d,
         _rec_marketing_unengaged_share,
     ],
-    "operations": [_rec_ops_order_aging],
+    "operations": [
+        _rec_ops_order_aging,
+        _rec_ops_recent_quotes,
+    ],
     "firmware": [
         _rec_firmware_beta_cohort_size,
         _rec_firmware_release_stalled,
+    ],
+    "manufacturing": [
+        _rec_mfg_qc_documents,
     ],
 }
 

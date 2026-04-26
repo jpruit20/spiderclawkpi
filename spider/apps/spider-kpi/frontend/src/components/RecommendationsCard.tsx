@@ -48,7 +48,7 @@ const SEVERITY_LABEL: Record<Severity, string> = {
 }
 
 export interface RecommendationsCardProps {
-  division: 'pe' | 'cx' | 'marketing' | 'operations' | 'firmware'
+  division: 'pe' | 'cx' | 'marketing' | 'operations' | 'firmware' | 'manufacturing'
 }
 
 const DIVISION_LABEL: Record<RecommendationsCardProps['division'], string> = {
@@ -57,6 +57,7 @@ const DIVISION_LABEL: Record<RecommendationsCardProps['division'], string> = {
   marketing: 'Marketing',
   operations: 'Operations',
   firmware: 'Firmware',
+  manufacturing: 'Manufacturing',
 }
 
 export function RecommendationsCard({ division }: RecommendationsCardProps) {

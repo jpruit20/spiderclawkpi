@@ -18,7 +18,7 @@ from app.services.recommendations import recommendations_for
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 
 
-VALID_DIVISIONS = {"pe", "cx", "marketing", "operations", "firmware"}
+VALID_DIVISIONS = {"pe", "cx", "marketing", "operations", "firmware", "manufacturing"}
 
 
 @router.get("/all/morning-brief")
