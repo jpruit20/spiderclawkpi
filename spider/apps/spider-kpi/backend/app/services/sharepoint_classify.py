@@ -29,7 +29,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import bindparam as sa_bindparam, select, update
 from sqlalchemy.orm import Session
 
 from app.models import SharepointDocument
@@ -188,12 +188,24 @@ def parse_filename_metadata(name: Optional[str]) -> dict[str, Any]:
 # ── Batch runner ────────────────────────────────────────────────────
 
 
-def classify_documents(db: Session, *, force: bool = False, limit: Optional[int] = None) -> dict[str, int]:
+def classify_documents(
+    db: Session,
+    *,
+    force: bool = False,
+    limit: Optional[int] = None,
+    batch_size: int = 500,
+) -> dict[str, int]:
     """Walk every (non-folder) sharepoint_document and write classification
-    columns. Idempotent — ``classified_at`` short-circuits unchanged rows
-    unless ``force=True``."""
+    columns. Bulk UPDATE in batches of ``batch_size`` so 12k rows
+    process in seconds, not minutes.
+    """
     q = (
-        select(SharepointDocument)
+        select(
+            SharepointDocument.id,
+            SharepointDocument.name,
+            SharepointDocument.path,
+            SharepointDocument.mime_type,
+        )
         .where(SharepointDocument.is_folder == False)  # noqa: E712
     )
     if not force:
@@ -201,34 +213,40 @@ def classify_documents(db: Session, *, force: bool = False, limit: Optional[int]
     if limit:
         q = q.limit(limit)
 
-    docs = db.execute(q).scalars().all()
-    counts = {"seen": 0, "updated": 0, "skipped": 0}
+    rows = db.execute(q).all()
+    counts = {"seen": 0, "updated": 0}
     now = datetime.now(timezone.utc)
-    for doc in docs:
+    payload: list[dict[str, Any]] = []
+    for row in rows:
         counts["seen"] += 1
-        archive = classify_archive_status(doc.path)
-        sem = classify_semantic_type(doc.name, doc.mime_type)
-        meta = parse_filename_metadata(doc.name)
-        # Skip if all values match (true no-op)
-        if (
-            doc.archive_status == archive
-            and doc.semantic_type == sem
-            and (doc.parsed_metadata or {}) == meta
-            and doc.classified_at is not None
-            and not force
-        ):
-            counts["skipped"] += 1
-            continue
-        db.execute(
-            update(SharepointDocument)
-            .where(SharepointDocument.id == doc.id)
-            .values(
-                archive_status=archive,
-                semantic_type=sem,
-                parsed_metadata=meta,
-                classified_at=now,
-            )
-        )
-        counts["updated"] += 1
+        payload.append({
+            "_id": row.id,
+            "archive_status": classify_archive_status(row.path),
+            "semantic_type": classify_semantic_type(row.name, row.mime_type),
+            "parsed_metadata": parse_filename_metadata(row.name),
+            "classified_at": now,
+        })
+        if len(payload) >= batch_size:
+            _flush_classify_batch(db, payload)
+            counts["updated"] += len(payload)
+            payload.clear()
+    if payload:
+        _flush_classify_batch(db, payload)
+        counts["updated"] += len(payload)
     db.commit()
     return counts
+
+
+def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
+    """Bulk UPDATE — one statement per batch via SQLAlchemy executemany."""
+    stmt = (
+        update(SharepointDocument)
+        .where(SharepointDocument.id == sa_bindparam("_id"))
+        .values(
+            archive_status=sa_bindparam("archive_status"),
+            semantic_type=sa_bindparam("semantic_type"),
+            parsed_metadata=sa_bindparam("parsed_metadata"),
+            classified_at=sa_bindparam("classified_at"),
+        )
+    )
+    db.execute(stmt, payload)
