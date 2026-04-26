@@ -133,6 +133,43 @@ def _run_sharepoint(db) -> None:
     sync_sharepoint(db)
 
 
+def _run_sharepoint_deep_analysis(db) -> None:
+    """Deep analysis pass: download + parse content for any active
+    analyzable doc that doesn't have a fresh content row, run Claude
+    per-file analysis on extracted content, then synthesize per-product
+    narratives. Cheap on subsequent runs because both content and
+    analysis layers cache on (source_modified_at, sha, version).
+
+    Cost: ~$1-2 per full corpus pass (Haiku per-file + Opus synthesis).
+    Gated via sharepoint_deep_analysis_sync_interval_minutes (default
+    every 12 hours)."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    interval = getattr(settings, "sharepoint_deep_analysis_sync_interval_minutes", None) or 720
+    if not _gate_due(db, "sharepoint_deep_analysis", interval):
+        return
+    if _gate_already_running(db, "sharepoint_deep_analysis"):
+        return
+
+    from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+    upsert_source_config(db, "sharepoint_deep_analysis", configured=True, enabled=True, sync_mode="poll")
+    run = start_sync_run(db, "sharepoint_deep_analysis", "scheduled")
+    try:
+        from app.services.sharepoint_content_extractor import extract_content_for_corpus
+        from app.services.sharepoint_ai_analyzer import analyze_corpus
+        from app.services.sharepoint_synthesizer import synthesize_all_products
+
+        ec = extract_content_for_corpus(db)
+        ac = analyze_corpus(db)
+        sc = synthesize_all_products(db)
+
+        records = (ac.get("ok", 0) or 0) + sum(1 for v in sc.values() if v.get("status") == "ok")
+        finish_sync_run(db, run, status="success", records_processed=records)
+    except Exception as exc:
+        finish_sync_run(db, run, status="failed", error_message=str(exc)[:500])
+        raise
+
+
 def _run_sharepoint_intelligence(db) -> None:
     """Post-ingest semantic-layer pass: classify any newly-ingested
     docs (path/filename heuristics, fast), then download + parse any
@@ -321,6 +358,7 @@ TARGETS = {
     "klaviyo": _run_klaviyo,
     "sharepoint": _run_sharepoint,
     "sharepoint_intelligence": _run_sharepoint_intelligence,
+    "sharepoint_deep_analysis": _run_sharepoint_deep_analysis,
     "aws_telemetry": _run_aws_telemetry,
     "clarity": _run_clarity,
     "reddit": _run_reddit,

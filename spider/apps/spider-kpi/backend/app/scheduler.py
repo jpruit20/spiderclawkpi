@@ -118,6 +118,10 @@ def run_syncs() -> None:
         # sweep. Cheap (~bulk UPDATE on classify, ~1-3s/file on extract);
         # gates itself via sharepoint_intelligence_sync_interval_minutes.
         "sharepoint_intelligence",
+        # Deep AI pass: content extraction + per-file Claude + per-product
+        # synthesis. Default cadence 12h via sharepoint_deep_analysis_sync_interval_minutes;
+        # cheap on cached docs because both layers idempotency-key on source_modified_at.
+        "sharepoint_deep_analysis",
         "aws_telemetry",
         "clarity", "reddit", "amazon", "clickup", "slack",
         "youtube", "youtube_lore",
