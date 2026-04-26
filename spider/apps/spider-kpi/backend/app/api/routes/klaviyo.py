@@ -665,11 +665,16 @@ def campaigns_recent(
     from app.ingestion.connectors.klaviyo import _get, _paginate
 
     def _fetch() -> list[dict[str, Any]]:
+        # NB: Klaviyo's /campaigns, /flows, /lists, /segments endpoints
+        # all reject `page[size]` (verified 2026-04-25 via 400 response —
+        # "page_size is not a valid field for the resource"). They use
+        # the cursor-based default page size and we follow links.next.
+        # /campaigns *does* require a channel filter — without it the
+        # API returns 400 even on bare GETs.
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
         params = {
             "filter": f"and(equals(messages.channel,\"email\"),greater-or-equal(scheduled_at,{cutoff}))",
             "sort": "-scheduled_at",
-            "page[size]": min(limit, 100),
             "fields[campaign]": "name,status,send_time,scheduled_at,created_at,updated_at,send_strategy",
         }
         out: list[dict[str, Any]] = []
@@ -711,7 +716,6 @@ def flows_status(db: Session = Depends(db_session)) -> dict[str, Any]:
 
     def _fetch() -> list[dict[str, Any]]:
         params = {
-            "page[size]": 50,
             "fields[flow]": "name,status,trigger_type,created,updated",
         }
         out: list[dict[str, Any]] = []
@@ -758,7 +762,7 @@ def lists_and_segments(db: Session = Depends(db_session)) -> dict[str, Any]:
 
     def _fetch() -> dict[str, list[dict[str, Any]]]:
         lists: list[dict[str, Any]] = []
-        for page in _paginate("/lists", {"page[size]": 50}):
+        for page in _paginate("/lists", None):
             for row in page.get("data") or []:
                 a = row.get("attributes") or {}
                 lists.append({
@@ -769,7 +773,7 @@ def lists_and_segments(db: Session = Depends(db_session)) -> dict[str, Any]:
                     "updated": a.get("updated"),
                 })
         segments: list[dict[str, Any]] = []
-        for page in _paginate("/segments", {"page[size]": 50}):
+        for page in _paginate("/segments", None):
             for row in page.get("data") or []:
                 a = row.get("attributes") or {}
                 segments.append({
@@ -783,18 +787,22 @@ def lists_and_segments(db: Session = Depends(db_session)) -> dict[str, Any]:
         # Membership count per object — small N (typical account has
         # <50 of each) so a sequential walk is fine inside the 30-min
         # cache window.
+        # /lists/{id}/profiles and /segments/{id}/profiles also reject
+        # page[size]; we just take the first page and trust the meta
+        # block for the count. ``additional-fields[list]=profile_count``
+        # would be cleaner but isn't on every Klaviyo plan.
         for row in lists:
             try:
-                resp = _get(f"/lists/{row['id']}/profiles", params={"page[size]": 1})
+                resp = _get(f"/lists/{row['id']}/profiles")
                 meta = (resp.get("meta") or {})
-                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or 0))
+                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or len(resp.get("data") or [])))
             except Exception:
                 row["member_count"] = None
         for row in segments:
             try:
-                resp = _get(f"/segments/{row['id']}/profiles", params={"page[size]": 1})
+                resp = _get(f"/segments/{row['id']}/profiles")
                 meta = (resp.get("meta") or {})
-                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or 0))
+                row["member_count"] = int((meta.get("filterCount") or meta.get("filter_count") or len(resp.get("data") or [])))
             except Exception:
                 row["member_count"] = None
         return {"lists": lists, "segments": segments}
@@ -825,7 +833,7 @@ def beta_customers(
     from app.ingestion.connectors.klaviyo import _get, _paginate
 
     def _fetch_list_id() -> Optional[str]:
-        for page in _paginate("/lists", {"page[size]": 50}):
+        for page in _paginate("/lists", None):
             for row in page.get("data") or []:
                 a = row.get("attributes") or {}
                 if (a.get("name") or "").strip().lower() == "beta customers":
@@ -844,7 +852,6 @@ def beta_customers(
     def _fetch_members() -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         params = {
-            "page[size]": min(limit, 100),
             "fields[profile]": "email,external_id,first_name,last_name,properties,last_event_date",
         }
         for page in _paginate(f"/lists/{list_id}/profiles", params):
