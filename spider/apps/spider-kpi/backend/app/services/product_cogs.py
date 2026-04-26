@@ -36,21 +36,41 @@ from app.models import (
 PRODUCTS = ("Huntsman", "Giant Huntsman", "Venom", "Webcraft", "Giant Webcraft")
 
 
+def _norm_title(title: str) -> str:
+    """Normalize a Shopify line_item title for matching: lowercase,
+    strip ™ ® ©, collapse whitespace."""
+    t = (title or "").lower().replace("™", "").replace("®", "").replace("©", "")
+    return " ".join(t.split())
+
+
+# CANONICAL grill/controller titles — only the core SKU we apply COGS to.
+# Accessories (covers, side shelves, rotisseries, pizza ovens, lift kits,
+# seasoning kits, replacement parts, probes, batteries, cables, gaskets,
+# hinges, conversion clips, NextLevel cooking systems) explicitly DO NOT
+# match here. They sell with their own retail prices and we don't have a
+# per-unit COGS for them, so counting them toward grill margins double-
+# counted accessory revenue at grill-COGS — produced false negative
+# margins like Huntsman -11.79%. Spot-checked 2026-04-26.
+_CANONICAL_TITLES: dict[str, str] = {
+    # Huntsman line
+    "the huntsman": "Huntsman",
+    "giant huntsman": "Giant Huntsman",
+    # Venom controller (the "Venom" product is the controller, not a grill)
+    "venom digital temperature controller": "Venom",
+    # Webcraft kit (two casings live in the catalog)
+    'the webcraft for 22" weber kettles': "Webcraft",
+}
+
+
 def _classify_line_item_title(title: str) -> Optional[str]:
-    """Map a Shopify line_item title to a Spider product family.
-    Conservative matcher — returns None for accessories/attachments."""
-    t = (title or "").lower()
-    if "giant huntsman" in t:
-        return "Giant Huntsman"
-    if "giant webcraft" in t or "giant web craft" in t:
-        return "Giant Webcraft"
-    if "huntsman" in t:
-        return "Huntsman"
-    if "webcraft" in t or "web craft" in t:
-        return "Webcraft"
-    if "venom" in t:
-        return "Venom"
-    return None
+    """Exact-canonical matcher. Returns the product family ONLY for
+    the core SKU titles we have COGS for; everything else (accessories,
+    parts, bundles, replacements) returns None and is counted as
+    'unclassified revenue' in the rollup so the math stays honest."""
+    nt = _norm_title(title)
+    if not nt:
+        return None
+    return _CANONICAL_TITLES.get(nt)
 
 
 def get_canonical_cogs(db: Session) -> dict[str, dict[str, Any]]:
