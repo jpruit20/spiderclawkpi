@@ -92,23 +92,44 @@ def units_by_product_in_window(
 ) -> dict[str, dict[str, Any]]:
     """Sum Shopify line-item quantities by product family within
     [start, end). Returns ``{product: {units, revenue}}`` plus
-    coverage stats so callers know how much of the order set has
-    line_item data."""
-    where_parts = ["event_type = 'poll.order_snapshot'", "jsonb_typeof(raw_payload->'line_items') = 'array'"]
+    coverage stats.
+
+    Two correctness considerations:
+    1. ``shopify_order_events`` polls the same order multiple times —
+       each ``poll.order_snapshot`` row carries the full line_items
+       array. We dedupe by ``order_id`` and take the LATEST snapshot
+       so units don't multi-count.
+    2. Window filtering uses ``event_timestamp`` (the order's source
+       timestamp from Shopify), not ``business_date`` (a derived
+       date). The earlier draft referenced ``created_at_source``,
+       which doesn't exist on this table — that was a copy from the
+       Freshdesk ticket schema.
+    """
+    where_parts = ["event_type = 'poll.order_snapshot'", "order_id IS NOT NULL"]
     params: dict[str, Any] = {}
     if start is not None:
-        where_parts.append("created_at_source >= :start_ts")
+        where_parts.append("event_timestamp >= :start_ts")
         params["start_ts"] = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
     if end is not None:
-        where_parts.append("created_at_source < :end_ts")
+        where_parts.append("event_timestamp < :end_ts")
         params["end_ts"] = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc)
     where_sql = " AND ".join(where_parts)
 
+    # Dedupe to the latest snapshot per order_id, then expand line_items.
     rows = db.execute(text(f"""
-        WITH li AS (
-            SELECT jsonb_array_elements(raw_payload->'line_items') AS line
+        WITH latest AS (
+            SELECT DISTINCT ON (order_id)
+                order_id,
+                raw_payload,
+                event_timestamp
             FROM shopify_order_events
             WHERE {where_sql}
+            ORDER BY order_id, event_timestamp DESC NULLS LAST, id DESC
+        ),
+        li AS (
+            SELECT jsonb_array_elements(raw_payload->'line_items') AS line
+            FROM latest
+            WHERE jsonb_typeof(raw_payload->'line_items') = 'array'
         )
         SELECT
             lower(coalesce(line->>'title', '')) AS title,
@@ -130,16 +151,15 @@ def units_by_product_in_window(
         by_product[fam]["units"] += int(qty)
         by_product[fam]["revenue"] += revenue
 
-    # Coverage: how many orders in window vs how many had line_items
-    total_q = ["event_type = 'poll.order_snapshot'"]
-    if start is not None:
-        total_q.append("created_at_source >= :start_ts")
-    if end is not None:
-        total_q.append("created_at_source < :end_ts")
-    cov_total = db.execute(text(f"SELECT count(*) FROM shopify_order_events WHERE {' AND '.join(total_q)}"), params).scalar() or 0
+    # Coverage: distinct orders in window vs distinct orders carrying line_items.
+    cov_total = db.execute(text(f"""
+        SELECT count(DISTINCT order_id) FROM shopify_order_events
+        WHERE {where_sql}
+    """), params).scalar() or 0
     cov_with = db.execute(text(f"""
-        SELECT count(*) FROM shopify_order_events
-        WHERE {' AND '.join(total_q)} AND jsonb_typeof(raw_payload->'line_items') = 'array'
+        SELECT count(DISTINCT order_id) FROM shopify_order_events
+        WHERE {where_sql}
+          AND jsonb_typeof(raw_payload->'line_items') = 'array'
     """), params).scalar() or 0
 
     return {
