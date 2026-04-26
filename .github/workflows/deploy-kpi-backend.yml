@@ -117,6 +117,11 @@ jobs:
             fi
           fi
 
+          if [ "$OLD_SHA" = "$REMOTE" ]; then
+            echo "droplet already at origin/master ($REMOTE) — skipping duplicate restart"
+            exit 0
+          fi
+
           git -C "$REPO_ROOT" pull --ff-only origin master
           NEW_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
 

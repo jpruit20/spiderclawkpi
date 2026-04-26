@@ -11,6 +11,8 @@ EnvironmentFile=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.env
 ExecStart=/home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/.venv/bin/python -m uvicorn app.main:app --app-dir /home/jpruit20/.openclaw/workspace/spider/apps/spider-kpi/backend --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
+TimeoutStopSec=20s
+SendSIGKILL=yes
 
 [Install]
 WantedBy=multi-user.target
