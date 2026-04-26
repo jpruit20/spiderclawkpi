@@ -92,13 +92,21 @@ def run_syncs() -> None:
             freshdesk_success = _successful_result(sync_freshdesk(db, days=7))
             any_success = freshdesk_success or any_success
         if freshdesk_success:
-            try:
-                materialize_app_side(db)
-            except Exception:
-                # Materializer failure should not abort the scheduler sweep.
-                import logging
-                logging.getLogger(__name__).exception("app_side materialize failed")
-                db.rollback()
+            # STOPGAP 2026-04-25: materialize_app_side is the real OOM
+            # source (not the burn pool warmer). Even after the
+            # 8809bf5 batch-and-expunge rewrite, RSS still climbed
+            # 537→3154 MB in 60 s on the next freshdesk sync (verified
+            # via rss_watchdog journal). Disabled until we can run
+            # tracemalloc directly on this code path. Freshdesk row
+            # ingest still runs (tickets land in freshdesk_tickets);
+            # only the app_side rollup is paused, so the per-source
+            # device/user observation tables and the daily rollup
+            # will go stale until this comes back. That's a far better
+            # tradeoff than a 7-10 min OOM-kill loop.
+            import logging
+            logging.getLogger(__name__).warning(
+                "app_side materialize SKIPPED (stopgap) — pending tracemalloc diagnosis of OOM"
+            )
         if not _already_running(db, "ga4"):
             any_success = _successful_result(sync_ga4(db, days=7)) or any_success
         aws_success = False
