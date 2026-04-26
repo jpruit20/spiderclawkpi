@@ -1774,6 +1774,71 @@ class SharepointExtractionRun(Base):
     ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class SharepointFileContent(Base):
+    """Cached extracted content per document. We re-extract only when
+    ``source_modified_at`` advances or ``content_sha256`` changes, so
+    the corpus pass is cheap on subsequent runs."""
+    __tablename__ = "sharepoint_file_content"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(Integer, ForeignKey("sharepoint_documents.id", ondelete="CASCADE"), nullable=False, unique=True)
+    text_content: Mapped[Optional[str]] = mapped_column(Text)
+    structure_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    content_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    source_modified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    byte_size: Mapped[Optional[int]] = mapped_column(BigInteger)
+    extractor_version: Mapped[str] = mapped_column(String(32), nullable=False, default="content-v1")
+    extraction_status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
+    extraction_error: Mapped[Optional[str]] = mapped_column(Text)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SharepointFileAnalysis(Base):
+    """Claude's structured analysis of a single document. The dashboard
+    cites specific facts from ``key_facts`` back to this row."""
+    __tablename__ = "sharepoint_file_analysis"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(Integer, ForeignKey("sharepoint_documents.id", ondelete="CASCADE"), nullable=False, unique=True)
+    purpose: Mapped[Optional[str]] = mapped_column(Text)
+    key_facts: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    related_part_numbers: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    related_vendors: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    cost_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    design_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    decisions: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    data_quality_flags: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    model_used: Mapped[Optional[str]] = mapped_column(String(64))
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    analyzer_version: Mapped[str] = mapped_column(String(32), nullable=False, default="analysis-v1")
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SharepointProductIntelligence(Base):
+    """Per-product cross-file synthesis. ``narrative_md`` leads the
+    intelligence card; the typed sub-payloads drive the structured
+    sections; ``citations`` lets the UI link every claim to its source."""
+    __tablename__ = "sharepoint_product_intelligence"
+    __table_args__ = (
+        UniqueConstraint("spider_product", "dashboard_division", name="uq_sp_product_intel_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    spider_product: Mapped[str] = mapped_column(String(64), nullable=False)
+    dashboard_division: Mapped[Optional[str]] = mapped_column(String(32))
+    narrative_md: Mapped[Optional[str]] = mapped_column(Text)
+    cogs_summary: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    design_status: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    vendor_summary: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    data_quality_issues: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    citations: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    files_analyzed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    model_used: Mapped[Optional[str]] = mapped_column(String(64))
+    synthesizer_version: Mapped[str] = mapped_column(String(32), nullable=False, default="synth-v1")
+    synthesized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class SharepointListItem(TimestampMixin, Base):
     """Mirror of structured SharePoint list items (ECRs, task trackers,
     vendor specs, BOM revs — anything that lives in a SharePoint List

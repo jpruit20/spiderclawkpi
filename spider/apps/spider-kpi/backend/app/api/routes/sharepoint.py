@@ -24,7 +24,10 @@ from app.models import (
     SharepointCanonicalSource,
     SharepointDocument,
     SharepointExtractionRun,
+    SharepointFileAnalysis,
+    SharepointFileContent,
     SharepointListItem,
+    SharepointProductIntelligence,
     SharepointSite,
 )
 from app.services.sharepoint_canonical import (
@@ -456,6 +459,129 @@ def list_canonical_sources(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "supported_data_types": list(DATA_TYPE_TO_SEMANTICS.keys()),
         "rows": out,
+    }
+
+
+# ── Deep analysis layer (Phase 2) ───────────────────────────────────
+
+
+@router.get("/intelligence/product-narrative")
+def product_narrative(
+    spider_product: str = Query(...),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Per-product cross-file synthesis. Returns the narrative_md +
+    typed sub-payloads + citations expanded with source-document
+    summaries so the UI can link every cited claim through to the file."""
+    row = db.execute(
+        select(SharepointProductIntelligence).where(
+            SharepointProductIntelligence.spider_product == spider_product,
+        )
+        .order_by(SharepointProductIntelligence.synthesized_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "spider_product": spider_product,
+            "available": False,
+            "reason": "No synthesis yet — run the deep-analysis pipeline.",
+        }
+
+    # Expand citation document_ids into doc summaries so the UI can render
+    citation_docs: dict[int, dict[str, Any]] = {}
+    cited_ids: list[int] = []
+    for c in (row.citations or []):
+        if isinstance(c, dict) and c.get("document_id"):
+            cited_ids.append(int(c["document_id"]))
+    if cited_ids:
+        docs = db.execute(select(SharepointDocument).where(SharepointDocument.id.in_(cited_ids))).scalars().all()
+        for d in docs:
+            citation_docs[d.id] = doc_summary_dict(d)  # type: ignore[assignment]
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "spider_product": spider_product,
+        "available": True,
+        "narrative_md": row.narrative_md,
+        "cogs_summary": row.cogs_summary,
+        "design_status": row.design_status,
+        "vendor_summary": row.vendor_summary,
+        "data_quality_issues": row.data_quality_issues,
+        "citations": row.citations,
+        "citation_docs": citation_docs,
+        "files_analyzed": row.files_analyzed,
+        "model_used": row.model_used,
+        "synthesized_at": row.synthesized_at.isoformat() if row.synthesized_at else None,
+    }
+
+
+@router.get("/intelligence/file-analyses")
+def file_analyses(
+    spider_product: Optional[str] = Query(None),
+    division: Optional[str] = Query(None),
+    semantic_type: Optional[str] = Query(None),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Every analyzed file with its purpose + key facts. Used as the
+    drill-down layer underneath the synthesis."""
+    q = (
+        select(SharepointDocument, SharepointFileAnalysis)
+        .join(SharepointFileAnalysis, SharepointFileAnalysis.document_id == SharepointDocument.id)
+        .where(SharepointDocument.archive_status == "active")
+        .order_by(SharepointDocument.modified_at_remote.desc().nulls_last())
+        .limit(500)
+    )
+    if spider_product:
+        q = q.where(SharepointDocument.spider_product == spider_product)
+    if division:
+        q = q.where(SharepointDocument.dashboard_division == division)
+    if semantic_type:
+        q = q.where(SharepointDocument.semantic_type == semantic_type)
+    rows = db.execute(q).all()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "filters": {"spider_product": spider_product, "division": division, "semantic_type": semantic_type},
+        "files": [
+            {
+                "document": doc_summary_dict(doc),
+                "purpose": an.purpose,
+                "key_facts": an.key_facts,
+                "related_part_numbers": an.related_part_numbers,
+                "related_vendors": an.related_vendors,
+                "cost_data": an.cost_data,
+                "design_data": an.design_data,
+                "decisions": an.decisions,
+                "data_quality_flags": an.data_quality_flags,
+                "analyzed_at": an.analyzed_at.isoformat() if an.analyzed_at else None,
+            }
+            for doc, an in rows
+        ],
+    }
+
+
+@router.get("/intelligence/analysis-status")
+def analysis_status(db: Session = Depends(db_session)) -> dict[str, Any]:
+    """Pipeline progress: how many docs have content extracted, how
+    many have AI analyses, how many products have a synthesis."""
+    extracted = db.execute(
+        select(func.count())
+        .select_from(SharepointFileContent)
+        .where(SharepointFileContent.extraction_status == "ok")
+    ).scalar() or 0
+    analyzed = db.execute(select(func.count()).select_from(SharepointFileAnalysis)).scalar() or 0
+    synthesized = db.execute(select(func.count()).select_from(SharepointProductIntelligence)).scalar() or 0
+    last_extract = db.execute(select(func.max(SharepointFileContent.extracted_at))).scalar()
+    last_analysis = db.execute(select(func.max(SharepointFileAnalysis.analyzed_at))).scalar()
+    last_synth = db.execute(select(func.max(SharepointProductIntelligence.synthesized_at))).scalar()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "files_with_content": int(extracted),
+        "files_with_analysis": int(analyzed),
+        "products_with_synthesis": int(synthesized),
+        "last_content_extracted_at": last_extract.isoformat() if last_extract else None,
+        "last_analysis_at": last_analysis.isoformat() if last_analysis else None,
+        "last_synthesis_at": last_synth.isoformat() if last_synth else None,
     }
 
 

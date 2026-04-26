@@ -27,6 +27,9 @@ from app.db.session import SessionLocal
 from app.services.sharepoint_classify import classify_documents
 from app.services.sharepoint_bom_extractor import extract_all_bom_documents
 from app.services.sharepoint_canonical import resolve_canonical
+from app.services.sharepoint_content_extractor import extract_content_for_corpus
+from app.services.sharepoint_ai_analyzer import analyze_corpus
+from app.services.sharepoint_synthesizer import synthesize_all_products
 
 
 PRODUCTS = ["Huntsman", "Giant Huntsman", "Venom", "Webcraft", "Giant Webcraft"]
@@ -39,17 +42,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--classify", action="store_true", help="Run filename/path classifier")
     p.add_argument("--extract-bom", action="store_true", help="Download + parse BOM/CBOM/price_list spreadsheets")
     p.add_argument("--resolve-canonical", action="store_true", help="Recompute canonical source picks for every (type, product, division)")
+    p.add_argument("--extract-content", action="store_true", help="Phase 2: deep content extraction (Excel sheets/PDF/Word/PPT) for every active analyzable file")
+    p.add_argument("--analyze-files", action="store_true", help="Phase 2: per-file Claude analysis on extracted content")
+    p.add_argument("--synthesize", action="store_true", help="Phase 2: per-product Claude synthesis from analyzed files")
+    p.add_argument("--product", default=None, help="Limit content/analyze passes to one Spider product")
     p.add_argument("--force", action="store_true", help="Re-run already-processed rows")
     p.add_argument("--limit", type=int, default=None, help="Limit how many docs are processed")
     p.add_argument("--all", action="store_true", help="Shorthand for --classify --extract-bom --resolve-canonical")
+    p.add_argument("--full", action="store_true", help="Run the entire pipeline including deep analysis (--all + --extract-content + --analyze-files + --synthesize)")
     args = p.parse_args(argv)
 
-    if args.all:
+    if args.all or args.full:
         args.classify = True
         args.extract_bom = True
         args.resolve_canonical = True
+    if args.full:
+        args.extract_content = True
+        args.analyze_files = True
+        args.synthesize = True
 
-    if not (args.classify or args.extract_bom or args.resolve_canonical):
+    if not (args.classify or args.extract_bom or args.resolve_canonical or args.extract_content or args.analyze_files or args.synthesize):
         p.print_help()
         return 2
 
@@ -67,6 +79,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             log.info("Extracting BOM lines (force=%s, limit=%s)...", args.force, args.limit)
             counts = extract_all_bom_documents(db, force=args.force, limit=args.limit)
             log.info("extract_bom: %s", counts)
+
+        if args.extract_content:
+            log.info("Extracting deep content (force=%s, limit=%s, product=%s)...", args.force, args.limit, args.product)
+            counts = extract_content_for_corpus(db, spider_product=args.product, limit=args.limit, force=args.force)
+            log.info("extract_content: %s", counts)
+
+        if args.analyze_files:
+            log.info("Analyzing files with Claude (force=%s, limit=%s, product=%s)...", args.force, args.limit, args.product)
+            from app.services.sharepoint_ai_analyzer import analyze_corpus as _analyze
+            counts = _analyze(db, spider_product=args.product, limit=args.limit, force=args.force)
+            log.info("analyze_files: %s", counts)
+
+        if args.synthesize:
+            log.info("Synthesizing per-product narratives (force=%s)...", args.force)
+            results = synthesize_all_products(db, force=args.force)
+            for prod, r in results.items():
+                log.info("synthesize[%s]: %s", prod, r)
 
         if args.resolve_canonical:
             log.info("Resolving canonical sources for %d data_types × %d products × %d divisions...",
