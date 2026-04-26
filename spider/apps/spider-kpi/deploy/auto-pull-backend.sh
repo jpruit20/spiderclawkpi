@@ -33,6 +33,7 @@ VENV_PIP="$APP_DIR/.venv/bin/pip"
 VENV_ALEMBIC="$APP_DIR/.venv/bin/alembic"
 HEALTH_URL="http://127.0.0.1:8000/health"
 SOURCE_TAG="auto-pull"
+DEPLOY_SETTLE_SECONDS="${DEPLOY_SETTLE_SECONDS:-45}"
 
 mkdir -p "$(dirname "$REJECTED_MARKER")"
 
@@ -78,6 +79,27 @@ if [ -f "$REJECTED_MARKER" ]; then
             log "origin/master ($REMOTE) matches rejected SHA — skipping (marker will clear when master advances)"
         fi
         exit 0
+    fi
+fi
+
+# Give nearby pushes a short window to settle so one editing burst deploys
+# as one service restart instead of several public 502 windows.
+if [[ "$DEPLOY_SETTLE_SECONDS" =~ ^[0-9]+$ ]] && [ "$DEPLOY_SETTLE_SECONDS" -gt 0 ]; then
+    log "remote changed; waiting ${DEPLOY_SETTLE_SECONDS}s to coalesce nearby pushes"
+    sleep "$DEPLOY_SETTLE_SECONDS"
+    git fetch origin master --quiet 2>/dev/null || exit 0
+    REMOTE=$(git rev-parse origin/master)
+
+    if [ "$OLD_SHA" = "$REMOTE" ]; then
+        exit 0
+    fi
+
+    if [ -f "$REJECTED_MARKER" ]; then
+        REJECTED=$(tr -d '[:space:]' < "$REJECTED_MARKER" 2>/dev/null || true)
+        if [ -n "$REJECTED" ] && [ "$REMOTE" = "$REJECTED" ]; then
+            log "origin/master ($REMOTE) matches rejected SHA after settle window — skipping"
+            exit 0
+        fi
     fi
 fi
 
