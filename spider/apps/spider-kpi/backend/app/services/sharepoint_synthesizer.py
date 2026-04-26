@@ -282,23 +282,43 @@ def synthesize_product(
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=300, max_retries=1)
     user_msg = _build_user_message(spider_product, [(d, a) for d, a in rows])
 
+    # The schema is too large for Anthropic's strict-grammar structured
+    # output (nested optional fields blow the compiled grammar limit).
+    # Instead, prompt for raw JSON and parse manually with the Pydantic
+    # validator. Keeps all the field validation; loses only the
+    # generation-time guarantees.
+    json_instruction = (
+        "\n\nReturn ONLY a JSON object matching this TypeScript-like shape (no markdown, no commentary):\n"
+        + ProductSynthesis.model_json_schema().__repr__()[:4000]
+    )
     try:
-        response = client.messages.parse(
+        response = client.messages.create(
             model=MODEL_ID,
             max_tokens=16000,
             thinking={"type": "adaptive"},
             output_config={"effort": "medium"},
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            system=[{"type": "text", "text": SYSTEM_PROMPT + json_instruction, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_msg}],
-            output_format=ProductSynthesis,
         )
     except Exception as exc:
-        logger.exception("synthesis failed for %s", spider_product)
+        logger.exception("synthesis API call failed for %s", spider_product)
         return {"status": "failed", "error": str(exc)[:500]}
 
-    syn: Optional[ProductSynthesis] = response.parsed_output
-    if syn is None:
-        return {"status": "failed", "error": "parsed_output is None"}
+    # Concatenate text blocks
+    raw_text = ""
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            raw_text += block.text
+    raw_text = raw_text.strip()
+    # Strip a leading ```json fence if Claude added one
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text
+        raw_text = raw_text.rsplit("```", 1)[0].strip()
+    try:
+        syn = ProductSynthesis.model_validate_json(raw_text)
+    except Exception as exc:
+        logger.exception("synthesis JSON parse failed for %s", spider_product)
+        return {"status": "failed", "error": f"json parse: {exc}"[:500], "raw_preview": raw_text[:500]}
 
     now = datetime.now(timezone.utc)
     if existing is None:
