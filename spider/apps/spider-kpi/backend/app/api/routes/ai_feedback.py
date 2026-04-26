@@ -190,19 +190,66 @@ def get_self_grade(grade_id: int, db: Session = Depends(db_session)) -> dict[str
     return _serialize_grade(row)
 
 
+_SELF_GRADE_RUNNING = {"flag": False, "started_at": None, "last_result": None}
+
+
 @router.post("/self-grade/run")
 def run_self_grade(
     request: Request,
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
     """Manual trigger — owner-only. Normally runs Sunday 10:00 ET via the
-    scheduler."""
+    scheduler.
+
+    Opus 4.7 self-grade with adaptive thinking takes 2-3 minutes per
+    run; nginx times out at 60s so we run it in a background thread
+    and return immediately. Frontend polls /api/ai/self-grade to see
+    the new row when it lands. Status of the running job exposed via
+    /api/ai/self-grade/run-status."""
+    import threading
+    from datetime import datetime, timezone
     user = _require_user(request, db)
     if (user.email or "").lower() != OWNER_EMAIL:
         raise HTTPException(status_code=403, detail="Owner only")
-    from app.services.ai_self_grade import run_weekly_self_grade
-    result = run_weekly_self_grade(db)
-    return result
+    if _SELF_GRADE_RUNNING["flag"]:
+        return {
+            "ok": True,
+            "status": "already_running",
+            "started_at": _SELF_GRADE_RUNNING["started_at"],
+        }
+
+    def _worker() -> None:
+        from app.db.session import SessionLocal
+        from app.services.ai_self_grade import run_weekly_self_grade
+        s = SessionLocal()
+        try:
+            result = run_weekly_self_grade(s)
+            _SELF_GRADE_RUNNING["last_result"] = result
+        except Exception as exc:
+            _SELF_GRADE_RUNNING["last_result"] = {"ok": False, "error": str(exc)[:300]}
+        finally:
+            _SELF_GRADE_RUNNING["flag"] = False
+            s.close()
+
+    _SELF_GRADE_RUNNING["flag"] = True
+    _SELF_GRADE_RUNNING["started_at"] = datetime.now(timezone.utc).isoformat()
+    _SELF_GRADE_RUNNING["last_result"] = None
+    threading.Thread(target=_worker, daemon=True, name="self-grade-worker").start()
+    return {
+        "ok": True,
+        "status": "started",
+        "started_at": _SELF_GRADE_RUNNING["started_at"],
+        "note": "Opus 4.7 self-grade running in background (~2-3 min). Refresh the self-grade list to see the new row when it completes.",
+    }
+
+
+@router.get("/self-grade/run-status")
+def run_self_grade_status() -> dict[str, Any]:
+    return {
+        "running": bool(_SELF_GRADE_RUNNING["flag"]),
+        "started_at": _SELF_GRADE_RUNNING["started_at"],
+        "last_result": _SELF_GRADE_RUNNING["last_result"],
+    }
 
 
 @router.post("/self-grade/{grade_id}/approve")
