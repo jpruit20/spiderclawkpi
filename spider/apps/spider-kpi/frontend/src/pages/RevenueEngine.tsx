@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
+import { GrossProfitCard } from '../components/GrossProfitCard'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
@@ -214,6 +215,8 @@ export function RevenueEngine() {
           </div>
 
           <VenomKpiStrip cards={kpiCards} />
+
+          <GrossProfitCard days={30} />
 
           <ProvenanceBanner
             compact

@@ -12,6 +12,7 @@ import { AISelfGradeCard } from '../components/AISelfGradeCard'
 import { CommandCenterHero } from '../components/CommandCenterHero'
 import { MorningBriefingCard } from '../components/MorningBriefingCard'
 import { TrendSnapshotCard } from '../components/TrendSnapshotCard'
+import { GrossProfitCard } from '../components/GrossProfitCard'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -145,6 +146,12 @@ export function CommandCenter() {
           hero so Joseph can scan the whole-business pulse before the
           gauges. */}
       <TrendSnapshotCard />
+
+      {/* ── GROSS PROFIT (cross-platform truth) ────────────────────────
+          Same component used on Executive / Commercial / Revenue / Marketing
+          so all surfaces read the same number. Per-unit COGS comes from
+          the SharePoint synthesis; unit counts from Shopify line_items. */}
+      <GrossProfitCard days={30} />
 
       {/* ── UNIFIED COMMAND CENTER HERO ────────────────────────────────
           Three anchor gauges (revenue / fleet / cook-success) always on,

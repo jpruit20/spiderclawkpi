@@ -1214,6 +1214,20 @@ export const api = {
   },
   sharepointAnalysisStatus: (signal?: AbortSignal) =>
     request<SharepointAnalysisStatusResponse>(`/api/sharepoint/intelligence/analysis-status`, { signal }),
+  // Financials — single source of truth for COGS / gross profit
+  financialsCogsTable: (signal?: AbortSignal) =>
+    request<FinancialsCogsTable>(`/api/financials/cogs-table`, { signal }),
+  financialsGrossProfit: (
+    opts: { days?: number; start?: string; end?: string },
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.days) q.set('days', String(opts.days))
+    if (opts.start) q.set('start', opts.start)
+    if (opts.end) q.set('end', opts.end)
+    const qs = q.toString()
+    return request<FinancialsGrossProfit>(`/api/financials/gross-profit${qs ? `?${qs}` : ''}`, { signal })
+  },
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1725,6 +1739,50 @@ export interface SharepointFileAnalysesResponse {
   generated_at: string
   filters: { spider_product: string | null; division: string | null; semantic_type: string | null }
   files: SharepointFileAnalysisRow[]
+}
+
+export interface FinancialsCogsTableRow {
+  product: string
+  cogs_usd: number
+  confidence: string
+  source_doc_id: number | null
+  source_doc_name: string | null
+  source_web_url: string | null
+  notes: string | null
+  synthesized_at: string | null
+}
+
+export interface FinancialsCogsTable {
+  products: FinancialsCogsTableRow[]
+}
+
+export interface FinancialsGrossProfit {
+  generated_at: string
+  window: { start: string | null; end: string | null; days: number | null }
+  totals: {
+    revenue_usd: number
+    revenue_classified_usd: number
+    revenue_unclassified_usd: number
+    units_sold: number
+    applied_cogs_usd: number
+    gross_profit_usd: number
+    gross_margin_pct: number | null
+  }
+  by_product: Array<{
+    product: string
+    units_sold: number
+    revenue_usd: number
+    unit_cogs_usd: number | null
+    applied_cogs_usd: number
+    gross_profit_usd: number
+    gross_margin_pct: number | null
+    cogs_confidence: string | null
+    cogs_source_doc_id: number | null
+    cogs_source_doc_name: string | null
+    cogs_source_web_url: string | null
+  }>
+  data_quality_flags: Array<{ severity: string; product: string; issue: string }>
+  coverage: { orders_with_line_items: number; orders_total: number; note: string }
 }
 
 export interface SharepointAnalysisStatusResponse {

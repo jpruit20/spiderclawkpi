@@ -20,6 +20,7 @@ from app.api.routes.command_center import router as command_center_router
 from app.api.routes.diagnostics import router as diagnostics_router, public_router as diagnostics_public_router
 from app.api.routes.ecrs import router as ecrs_router
 from app.api.routes.executive import router as executive_router
+from app.api.routes.financials import router as financials_router
 from app.api.routes.firmware import router as firmware_router
 from app.api.routes.firmware_deploy import router as firmware_deploy_router
 from app.api.routes.deci import router as deci_router
@@ -123,6 +124,7 @@ app.include_router(diagnostics_router)
 app.include_router(diagnostics_public_router)
 app.include_router(ecrs_router)
 app.include_router(executive_router)
+app.include_router(financials_router)
 app.include_router(firmware_router)
 app.include_router(firmware_deploy_router)
 app.include_router(klaviyo_router)

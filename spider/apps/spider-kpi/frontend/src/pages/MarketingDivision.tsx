@@ -10,6 +10,7 @@ import { ClickUpComplianceCard } from '../components/ClickUpComplianceCard'
 import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ChannelMixCard } from '../components/ChannelMixCard'
 import { ChannelTrendsCard, MarketingPacingCard, MerHealthCard } from '../components/MarketingIntelligenceCards'
+import { GrossProfitCard } from '../components/GrossProfitCard'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -936,6 +937,11 @@ export function MarketingDivision() {
             <MarketingPacingCard />
             <MerHealthCard days={90} />
           </div>
+
+          {/* Gross profit context — same component / same number as
+              Executive / Commercial / Revenue / Command Center. Marketing
+              decisions read against gross profit, not just revenue. */}
+          <GrossProfitCard days={30} title="Gross profit (marketing context)" />
 
           {/* ---- Industry Pulse — Social Listening ---- */}
           <section className="card">

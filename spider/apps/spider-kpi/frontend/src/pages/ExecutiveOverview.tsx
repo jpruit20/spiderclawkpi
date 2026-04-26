@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { BaselineBand } from '../components/BaselineBand'
 import { Card } from '../components/Card'
+import { GrossProfitCard } from '../components/GrossProfitCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { BetaProgramSummaryCard } from '../components/BetaProgramSummaryCard'
 import { EventTimelinePanel } from '../components/EventTimelinePanel'
@@ -294,6 +295,7 @@ export function ExecutiveOverview() {
       {!loading && !error && data ? (
         <>
           <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
+          <GrossProfitCard days={30} />
           <ActionBlock items={actionItems} />
           <ThresholdPanel metrics={[
             { metric: 'conversion_rate', value: displayKpi?.conversion_rate },

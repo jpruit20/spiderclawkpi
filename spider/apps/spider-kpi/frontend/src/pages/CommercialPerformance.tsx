@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBlock } from '../components/ActionBlock'
 import { Card } from '../components/Card'
+import { GrossProfitCard } from '../components/GrossProfitCard'
 import { CompareToolbar } from '../components/CompareToolbar'
 import { CompareSummary } from '../components/CompareSummary'
 import { EventAnnotationList } from '../components/EventAnnotationList'
@@ -212,6 +213,7 @@ export function CommercialPerformance() {
           {!priorComparable ? <StatePanel kind="partial" tone="warn" title="Comparison window incomplete" message="Deltas are not trustworthy yet because the selected range cannot be fully matched to the comparison window." /> : null}
           {priorComparable ? <div className="scope-note">Compare mode: {compareMode === 'same_day_last_week' ? 'Same day last week' : 'Prior period'} · Revenue {formatDeltaPct(revenueCompare.deltaPct)} · Orders {formatDeltaPct(ordersCompare.deltaPct)}</div> : null}
           <CompareSummary mode={compareMode} points={comparePoints} />
+          <GrossProfitCard days={30} />
         </>
       ) : (
         <Card title="Performance Summary"><div className="state-message">No KPI rows returned.</div></Card>
