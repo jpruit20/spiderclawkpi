@@ -11,6 +11,7 @@ import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 import { AISelfGradeCard } from '../components/AISelfGradeCard'
 import { CommandCenterHero } from '../components/CommandCenterHero'
 import { MorningBriefingCard } from '../components/MorningBriefingCard'
+import { TrendSnapshotCard } from '../components/TrendSnapshotCard'
 import type { MorningBriefResponse, TelemetryAnomaly } from '../lib/types'
 import type { StatusLightDetail, TileState } from '../components/tiles'
 
@@ -135,6 +136,15 @@ export function CommandCenter() {
           to a single green "calm morning" line so it's not visual
           noise on healthy days. */}
       <MorningBriefingCard />
+
+      {/* ── 7-DAY TREND SNAPSHOT ───────────────────────────────────────
+          All registered KPIs in one compact grid (revenue/orders/cook
+          success/active devices/sessions/errors/tickets/csat/FRT) with
+          7d-vs-prior-7d arrow + % and a moderate+ anomaly chip. Powered
+          by /api/trends/all. Sits between the morning briefing and the
+          hero so Joseph can scan the whole-business pulse before the
+          gauges. */}
+      <TrendSnapshotCard />
 
       {/* ── UNIFIED COMMAND CENTER HERO ────────────────────────────────
           Three anchor gauges (revenue / fleet / cook-success) always on,
