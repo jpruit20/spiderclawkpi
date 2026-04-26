@@ -573,8 +573,20 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
     db.commit()
 
     telemetry_daily_rows = db.execute(select(TelemetryDaily).order_by(TelemetryDaily.business_date)).scalars().all() if telemetry_ready else []
-    telemetry_sessions = db.execute(select(TelemetrySession)).scalars().all() if telemetry_ready else []
-    if telemetry_daily_rows and telemetry_sessions:
+    # Project to scalar (firmware_version, grill_type) only — never load
+    # the full ORM row, because TelemetrySession carries multi-MB
+    # actual_temp_time_series / fan_output_time_series JSONB columns
+    # that pulled 1-3 GB into Python memory and OOM-killed the
+    # recompute_diagnostics subprocess (verified 2026-04-25 via
+    # app.cli.run_syncs_diagnose: recompute_kpis ok, but
+    # recompute_diagnostics still exit=-9 / cgroup oom-kill until
+    # this fix lands).
+    telemetry_session_meta: list[tuple[str | None, str | None]] = (
+        list(db.execute(select(TelemetrySession.firmware_version, TelemetrySession.grill_type)))
+        if telemetry_ready
+        else []
+    )
+    if telemetry_daily_rows and telemetry_session_meta:
         latest = telemetry_daily_rows[-1]
 
         # --- Historical comparison for temperature stability ---
@@ -618,8 +630,8 @@ def build_issue_radar(db: Session, lookback_days: int = 30) -> dict[str, Any]:
                 telemetry_title = "Manual Override Spike"
                 telemetry_summary = "Manual override rate is elevated, suggesting the product is not holding course automatically."
 
-            firmware_counter = Counter((row.firmware_version or "unknown") for row in telemetry_sessions)
-            grill_counter = Counter((row.grill_type or "unknown") for row in telemetry_sessions)
+            firmware_counter = Counter((fw or "unknown") for fw, _ in telemetry_session_meta)
+            grill_counter = Counter((gt or "unknown") for _, gt in telemetry_session_meta)
 
             # Priority score: temperature only escalates if corroborated by tickets or historical degradation
             temp_priority = (1 - latest.temp_stability_score) * 100 * 1.8
