@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
+import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
@@ -745,6 +746,11 @@ export function CustomerExperienceDivision() {
 
           {/* Top-of-page actionable recommendations. */}
           <RecommendationsCard division="cx" />
+
+          {/* CX × shipping correlation — WISMO ticket detection +
+              match against ShipStation, late-tracking signal,
+              per-carrier WISMO breakdown. */}
+          <ShippingIntelligenceCard defaultDays={30} showCxCorrelation />
 
           {/* Klaviyo customer lookup — paste an email to see their
               grill, firmware, app recency, and recent events. Replaces

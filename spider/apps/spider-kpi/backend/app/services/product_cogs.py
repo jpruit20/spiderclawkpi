@@ -353,6 +353,24 @@ def compute_gross_profit(
         end = date.today()
         start = end - timedelta(days=days)
 
+    # When no window is specified at all, the "lifetime" rollup is
+    # misleading because Shopify line_items capture only started 2026-
+    # 04-21 while ShipStation history goes back years. Constrain to
+    # the actual order-data coverage window so revenue and shipping
+    # are measured over the same span.
+    if start is None and end is None:
+        bounds = db.execute(text("""
+            SELECT
+                MIN(event_timestamp)::date AS start_d,
+                (MAX(event_timestamp) + INTERVAL '1 day')::date AS end_d
+            FROM shopify_order_events
+            WHERE event_type='poll.order_snapshot'
+              AND jsonb_typeof(raw_payload->'line_items') = 'array'
+        """)).first()
+        if bounds and bounds.start_d:
+            start = bounds.start_d
+            end = bounds.end_d
+
     cogs_table = get_canonical_cogs(db)
     units_data = units_by_product_in_window(db, start=start, end=end)
     rows_by_product = units_data["by_product"]

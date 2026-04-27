@@ -1246,6 +1246,17 @@ export const api = {
     request<{ ok: boolean; deleted_id: number }>(`/api/kpi-targets/${id}`, { method: 'DELETE', signal }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
+  // Shipping intelligence
+  shippingCarrierMix: (days: number = 90, signal?: AbortSignal) =>
+    request<ShippingCarrierMix>(`/api/shipping/carrier-mix?days=${days}`, { signal }),
+  shippingGeographic: (days: number = 365, signal?: AbortSignal) =>
+    request<ShippingGeographic>(`/api/shipping/geographic-distribution?days=${days}`, { signal }),
+  shippingCostTrend: (days: number = 90, bucket: 'week' | 'day' = 'week', signal?: AbortSignal) =>
+    request<ShippingCostTrend>(`/api/shipping/cost-trend?days=${days}&bucket=${bucket}`, { signal }),
+  shipping3plRoi: (days: number = 365, signal?: AbortSignal) =>
+    request<Shipping3plRoi>(`/api/shipping/3pl-roi?days=${days}`, { signal }),
+  shippingCxCorrelation: (days: number = 30, signal?: AbortSignal) =>
+    request<ShippingCxCorrelation>(`/api/shipping/cx-correlation?days=${days}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
     request<KlaviyoFriendbuyAttribution>(`/api/klaviyo/friendbuy-attribution?days=${days}`, { signal }),
   klaviyoCustomerJourney: (
@@ -1755,6 +1766,57 @@ export interface SharepointFileAnalysesResponse {
   generated_at: string
   filters: { spider_product: string | null; division: string | null; semantic_type: string | null }
   files: SharepointFileAnalysisRow[]
+}
+
+export interface ShippingWindow { start: string | null; end: string; days: number | null }
+
+export interface ShippingCarrierMix {
+  window: ShippingWindow
+  totals: { shipments: number; total_cost_usd: number; avg_cost_per_shipment: number }
+  carriers: Array<{ carrier: string; shipments: number; total_cost_usd: number; avg_cost_usd: number; avg_weight_oz: number; share_pct: number }>
+}
+
+export interface ShippingGeographic {
+  window: ShippingWindow
+  totals: { domestic_shipments: number; international_shipments: number; states_seen: number }
+  by_state: Array<{ state: string; country: string; shipments: number; total_cost_usd: number; avg_cost_usd: number }>
+}
+
+export interface ShippingCostTrend {
+  window: ShippingWindow & { bucket: string }
+  series: Array<{ bucket: string; shipments: number; cost_usd: number; avg_cost_usd: number }>
+}
+
+export interface Shipping3plRoi {
+  window: ShippingWindow
+  current_warehouse: { city: string; state: string; lat: number; lon: number }
+  totals: { shipments_in_window: number; actual_cost_usd: number }
+  candidates: Array<{
+    name: string; state: string; estimated_annual_savings_usd: number; in_window_savings_usd: number
+    shipments_better_served: number; savings_pct: number
+  }>
+  method_note: string
+}
+
+export interface ShippingCxCorrelation {
+  window: ShippingWindow
+  totals: {
+    tickets_in_window: number
+    wismo_tickets: number
+    wismo_ratio_pct: number
+    wismo_matched_to_shipment: number
+    wismo_unshipped_at_ticket_time: number
+    median_ship_to_wismo_hours: number | null
+    late_tracking_signal_count: number
+  }
+  by_carrier: Array<{ carrier: string; wismo_tickets: number }>
+  wismo_tickets: Array<{
+    ticket_id: string; subject: string; created_at: string | null; resolved_at: string | null
+    first_response_hours: number | null; resolution_hours: number | null
+    extracted_order_number: string | null
+    matched_shipment: { ship_date: string | null; carrier: string | null; tracking_number: string | null; shipment_cost: number } | null
+    shipped: boolean
+  }>
 }
 
 export interface KpiTargetRow {

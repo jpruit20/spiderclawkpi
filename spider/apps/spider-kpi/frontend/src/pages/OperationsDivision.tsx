@@ -8,6 +8,7 @@ import { DivisionHero } from '../components/DivisionHero'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
+import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { Link } from 'react-router-dom'
 
@@ -108,6 +109,7 @@ export function OperationsDivision() {
       {/* SharePoint Project Management activity — POs, quotations,
           master trackers, vendor specs from AMW's per-product
           sites. */}
+      <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
       <SharepointIntelligenceCard division="operations" />
       <SharepointActivityCard division="operations" />
 
