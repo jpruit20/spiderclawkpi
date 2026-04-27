@@ -27,6 +27,7 @@ STALE_MINUTES_BY_SOURCE = {
     # a 36h freshness threshold so a single missed run doesn't page.
     "klaviyo": 2160,
     "sharepoint": 2160,
+    "shipstation": 360,
 }
 SOURCE_TYPES = {
     "shopify": "connector",
@@ -38,6 +39,7 @@ SOURCE_TYPES = {
     "aws_telemetry_stream": "connector",
     "klaviyo": "connector",
     "sharepoint": "connector",
+    "shipstation": "connector",
     "decision-engine": "compute",
 }
 

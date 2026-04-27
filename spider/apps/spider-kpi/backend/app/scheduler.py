@@ -112,7 +112,7 @@ def run_syncs() -> None:
     # implicit ordering (e.g. freshdesk should land before downstream
     # consumers read it) is preserved.
     targets = [
-        "shopify", "triplewhale", "freshdesk", "ga4", "klaviyo", "sharepoint",
+        "shopify", "triplewhale", "freshdesk", "ga4", "klaviyo", "shipstation", "sharepoint",
         # sharepoint_intelligence runs immediately after sharepoint so any
         # newly-ingested doc gets classified + BOM-extracted in the same
         # sweep. Cheap (~bulk UPDATE on classify, ~1-3s/file on extract);

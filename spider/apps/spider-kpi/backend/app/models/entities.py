@@ -2130,6 +2130,62 @@ class AiNarrative(TimestampMixin, Base):
     requested_by: Mapped[Optional[str]] = mapped_column(String(128))
 
 
+class ShipstationStore(Base):
+    """One row per ShipStation store. Spider-only stores have
+    ``included_in_spider=True`` and are the allowlist the connector
+    pulls shipments for. Other companies sharing the same ShipStation
+    account stay out of our data."""
+    __tablename__ = "shipstation_stores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ss_store_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    store_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    marketplace: Mapped[Optional[str]] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    included_in_spider: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    first_shipment_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_shipment_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ShipstationShipment(Base):
+    """Mirror of one ShipStation shipment for a Spider order. Powers
+    the shipping-cost-into-COGS rollup; ``shipment_cost`` +
+    ``insurance_cost`` is what the gross-profit calculator subtracts.
+    ``ss_order_number`` is the customer-facing order id which we match
+    back to Shopify orders for per-order attribution."""
+    __tablename__ = "shipstation_shipments"
+    __table_args__ = (
+        Index("ix_shipstation_shipments_ship_date_store", "ship_date", "ss_store_id"),
+        Index("ix_shipstation_shipments_create_date_store", "create_date", "ss_store_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ss_shipment_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    ss_order_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    ss_order_number: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    ss_store_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    customer_email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    shipment_cost: Mapped[float] = mapped_column(Numeric(10, 4), default=0, nullable=False)
+    insurance_cost: Mapped[float] = mapped_column(Numeric(10, 4), default=0, nullable=False)
+    carrier_code: Mapped[Optional[str]] = mapped_column(String(64))
+    service_code: Mapped[Optional[str]] = mapped_column(String(64))
+    package_code: Mapped[Optional[str]] = mapped_column(String(64))
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(255))
+    ship_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    create_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    void_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    voided: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    weight_oz: Mapped[Optional[float]] = mapped_column(Numeric(10, 3))
+    dimensions_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    warehouse_id: Mapped[Optional[int]] = mapped_column(Integer)
+    ship_to_state: Mapped[Optional[str]] = mapped_column(String(64))
+    ship_to_country: Mapped[Optional[str]] = mapped_column(String(8))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class KpiTarget(Base):
     """Operator-set target for a KPI metric, optionally bounded to a
     seasonal window. One row per (metric, period). Active resolution

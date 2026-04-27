@@ -58,6 +58,8 @@ from app.models.entities import (
     SharepointListItem,
     SharepointProductIntelligence,
     SharepointSite,
+    ShipstationShipment,
+    ShipstationStore,
     LoreEvent,
     NotificationSend,
     Recommendation,

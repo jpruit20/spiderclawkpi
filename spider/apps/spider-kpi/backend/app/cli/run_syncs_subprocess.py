@@ -120,6 +120,32 @@ def _run_ga4(db) -> None:
     sync_ga4(db, days=7)
 
 
+def _run_shipstation(db) -> None:
+    """ShipStation v1 ingest, Spider-only stores. Cheap on delta runs;
+    backfill mode (empty table) walks 4y history in 30-day windows
+    and can take ~10-20 min depending on shipment volume.
+    Self-gates via shipstation_sync_interval_minutes."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    if not (settings.shipstation_api_key and settings.shipstation_api_secret):
+        return  # not configured
+    if not _gate_due(db, "shipstation", settings.shipstation_sync_interval_minutes):
+        return
+    if _gate_already_running(db, "shipstation"):
+        return
+    from app.services.source_health import finish_sync_run, start_sync_run, upsert_source_config
+    upsert_source_config(db, "shipstation", configured=True, enabled=True, sync_mode="poll")
+    run = start_sync_run(db, "shipstation", "scheduled")
+    try:
+        from app.ingestion.connectors.shipstation import sync_shipstation
+        result = sync_shipstation(db)
+        records = result.get("shipments", {}).get("upserted", 0) if isinstance(result.get("shipments"), dict) else 0
+        finish_sync_run(db, run, status="success", records_processed=records)
+    except Exception as exc:
+        finish_sync_run(db, run, status="failed", error_message=str(exc)[:500])
+        raise
+
+
 def _run_sharepoint(db) -> None:
     """SharePoint multi-tenant ingest. Cheap (~30-100 MB) — small
     document libraries on the AMW side. Self-gates due-checks via
@@ -356,6 +382,7 @@ TARGETS = {
     "freshdesk": _run_freshdesk,
     "ga4": _run_ga4,
     "klaviyo": _run_klaviyo,
+    "shipstation": _run_shipstation,
     "sharepoint": _run_sharepoint,
     "sharepoint_intelligence": _run_sharepoint_intelligence,
     "sharepoint_deep_analysis": _run_sharepoint_deep_analysis,

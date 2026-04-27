@@ -157,6 +157,22 @@ class Settings(BaseSettings):
     ms_graph_default_tenant_id: Optional[str] = None
     sharepoint_sync_interval_minutes: int = 60
 
+    # ShipStation (v1 / legacy API at ssapi.shipstation.com). Same
+    # account ships products for multiple companies sharing infrastructure;
+    # the connector filters on the explicit Spider store allowlist below
+    # so we never ingest non-Spider rows.
+    shipstation_api_key: Optional[str] = None
+    shipstation_api_secret: Optional[str] = None
+    shipstation_sync_interval_minutes: int = 60
+    # Hours of historical lookback when seeding from empty. Default
+    # 4 years covers Spider's full Shopify+Amazon shipment history.
+    shipstation_initial_backfill_days: int = 4 * 365
+    # Allowlist of ShipStation storeIds we're authorized to mirror.
+    # Spider Amazon, Spider Grills Shopify, Spider Manual.
+    shipstation_spider_store_ids: list[int] = Field(
+        default_factory=lambda: [347763, 347804, 373275],
+    )
+
     # Klaviyo (Spider Grills account — public key XEp4CM). Agustin wires
     # the native app to this account via the Klaviyo Mobile SDK; the
     # dashboard reads it as an intermediary so we get user-level device

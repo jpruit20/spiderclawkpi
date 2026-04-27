@@ -254,6 +254,80 @@ def units_by_product_in_window(
 DEFAULT_ACCESSORY_COGS_RATIO = 0.50
 
 
+def shipping_cost_in_window(
+    db: Session,
+    *,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+) -> dict[str, Any]:
+    """Sum carrier shipping cost from ShipStation shipments within
+    [start, end). Voided shipments are excluded. Filtered to the
+    Spider store allowlist (defense-in-depth — connector also filters
+    server-side, but we re-filter here in case rows from another
+    company's stores ever leak in).
+
+    Returns:
+      total_cost: shipment_cost + insurance_cost summed
+      shipment_count, voided_count
+      by_store: per-store breakdown
+      by_order: {ss_order_number: cost} for per-order attribution
+    """
+    where = [
+        "voided = FALSE",
+        "ss_store_id = ANY(:allowlist)",
+    ]
+    params: dict[str, Any] = {
+        "allowlist": list(get_settings().shipstation_spider_store_ids or []),
+    }
+    if start is not None:
+        where.append("ship_date >= :start_d")
+        params["start_d"] = start
+    if end is not None:
+        where.append("ship_date < :end_d")
+        params["end_d"] = end
+
+    where_sql = " AND ".join(where)
+    rows = db.execute(text(f"""
+        SELECT
+            ss_store_id,
+            ss_order_number,
+            COALESCE(shipment_cost, 0) + COALESCE(insurance_cost, 0) AS total_cost
+        FROM shipstation_shipments
+        WHERE {where_sql}
+    """), params).all()
+
+    total = 0.0
+    by_store: dict[int, float] = {}
+    by_order: dict[str, float] = {}
+    for r in rows:
+        c = float(r.total_cost or 0)
+        total += c
+        by_store[r.ss_store_id] = by_store.get(r.ss_store_id, 0.0) + c
+        if r.ss_order_number:
+            by_order[r.ss_order_number] = by_order.get(r.ss_order_number, 0.0) + c
+
+    voided = db.execute(text(f"""
+        SELECT count(*) FROM shipstation_shipments
+        WHERE ss_store_id = ANY(:allowlist) AND voided = TRUE
+        {("AND ship_date >= :start_d" if start else "")}
+        {("AND ship_date < :end_d" if end else "")}
+    """), params).scalar() or 0
+
+    return {
+        "total_cost_usd": round(total, 2),
+        "shipment_count": len(rows),
+        "voided_count": int(voided),
+        "by_store": {int(k): round(v, 2) for k, v in by_store.items()},
+        "by_order": by_order,
+    }
+
+
+def get_settings():
+    """Lazy import — avoids circular dep at module load time."""
+    from app.core.config import get_settings as _gs
+    return _gs()
+
+
 def compute_gross_profit(
     db: Session,
     *,
@@ -282,6 +356,7 @@ def compute_gross_profit(
     cogs_table = get_canonical_cogs(db)
     units_data = units_by_product_in_window(db, start=start, end=end)
     rows_by_product = units_data["by_product"]
+    shipping_data = shipping_cost_in_window(db, start=start, end=end)
 
     by_product: list[dict[str, Any]] = []
     total_revenue = 0.0
@@ -336,7 +411,29 @@ def compute_gross_profit(
     unclassified_rev = float(units_data["unclassified_revenue"])
     accessory_cogs = unclassified_rev * accessory_cogs_ratio
     total_revenue_with_unclassified = total_revenue + unclassified_rev
-    total_cogs_with_estimate = total_cogs + accessory_cogs
+    # Shipping cost (ShipStation) gets folded into applied COGS.
+    # Allocate per-product proportionally to product revenue so each
+    # product's margin reflects its fair share of carrier cost.
+    shipping_total = float(shipping_data.get("total_cost_usd", 0.0))
+    shipping_count = int(shipping_data.get("shipment_count", 0))
+    if shipping_total > 0 and total_revenue_with_unclassified > 0:
+        # Re-apportion across already-emitted by_product rows so shipping
+        # is reflected in per-product gross_profit + margin.
+        ship_share_total = 0.0
+        for entry in by_product:
+            r_share = float(entry["revenue_usd"]) / total_revenue_with_unclassified
+            ship_share = round(shipping_total * r_share, 2)
+            entry["applied_shipping_usd"] = ship_share
+            entry["applied_cogs_usd"] = round(float(entry["applied_cogs_usd"]) + ship_share, 2)
+            entry["gross_profit_usd"] = round(float(entry["revenue_usd"]) - float(entry["applied_cogs_usd"]), 2)
+            r_val = float(entry["revenue_usd"])
+            entry["gross_margin_pct"] = round((entry["gross_profit_usd"] / r_val * 100), 2) if r_val > 0 else None
+            ship_share_total += ship_share
+    else:
+        for entry in by_product:
+            entry["applied_shipping_usd"] = 0.0
+
+    total_cogs_with_estimate = total_cogs + accessory_cogs + shipping_total
     overall_gross_profit = total_revenue_with_unclassified - total_cogs_with_estimate
     overall_margin = (overall_gross_profit / total_revenue_with_unclassified * 100) if total_revenue_with_unclassified > 0 else None
 
@@ -348,6 +445,15 @@ def compute_gross_profit(
                 f"Accessory revenue (${unclassified_rev:,.0f}) has no extracted CBOM. "
                 f"Applied estimated COGS at {int(accessory_cogs_ratio * 100)}% of retail (${accessory_cogs:,.0f}). "
                 f"Replace with extracted accessory BOMs for exact margins."
+            ),
+        })
+    if shipping_total > 0:
+        flags.append({
+            "severity": "info",
+            "product": "shipping",
+            "issue": (
+                f"Carrier shipping cost (ShipStation, {shipping_count} shipments): ${shipping_total:,.2f} "
+                f"folded into COGS. Allocated to products proportionally to revenue."
             ),
         })
 
@@ -366,6 +472,7 @@ def compute_gross_profit(
             "applied_cogs_usd": round(total_cogs_with_estimate, 2),
             "applied_cogs_classified_usd": round(total_cogs, 2),
             "applied_cogs_accessory_estimate_usd": round(accessory_cogs, 2),
+            "applied_shipping_usd": round(shipping_total, 2),
             "gross_profit_usd": round(overall_gross_profit, 2),
             "gross_margin_pct": round(overall_margin, 2) if overall_margin is not None else None,
             "discounts_applied_usd": round(units_data.get("discounts_applied_usd", 0.0), 2),
@@ -375,6 +482,13 @@ def compute_gross_profit(
         "accessory_assumption": {
             "ratio": accessory_cogs_ratio,
             "note": "Accessories use estimated COGS — replace by extracting per-accessory CBOMs.",
+        },
+        "shipping": {
+            "total_cost_usd": round(shipping_total, 2),
+            "shipment_count": shipping_count,
+            "voided_count": int(shipping_data.get("voided_count", 0)),
+            "by_store": shipping_data.get("by_store", {}),
+            "note": "From ShipStation Spider stores (Amazon + Shopify + Manual). Allocated to products proportionally to revenue.",
         },
         "excluded": units_data.get("excluded", {}),
         "coverage": {
