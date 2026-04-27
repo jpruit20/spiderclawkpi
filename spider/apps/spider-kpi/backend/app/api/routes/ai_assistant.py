@@ -31,19 +31,24 @@ settings = get_settings()
 # ── rate limiting ──
 
 RATE_WINDOW_SECONDS = 3600  # 1 hour
-RATE_MAX_REQUESTS = 10
 _request_log: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _check_rate_limit(email: str) -> None:
+    """Per-role rate limit. Joseph: 200/hr. Division leads: 60/hr.
+    Viewers: 10/hr (conservative default). The cap comes from
+    services/ai_agent.get_role_tier so it stays in lockstep with
+    budget + model + tool tier."""
+    from app.services.ai_agent import get_role_tier
+    cap = int(get_role_tier(email).get("rate_per_hour", 10))
     now = time.time()
     log = _request_log[email]
     while log and log[0] < now - RATE_WINDOW_SECONDS:
         log.popleft()
-    if len(log) >= RATE_MAX_REQUESTS:
+    if len(log) >= cap:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="AI assistant rate limit reached. Please wait before sending more requests.",
+            detail=f"AI assistant rate limit reached ({cap}/hour for your role). Please wait before sending more requests.",
         )
     log.append(now)
 
@@ -78,11 +83,25 @@ class AiMessageRequest(BaseModel):
 
 @router.get("/access")
 def get_ai_access(user: AuthUser = Depends(_require_user)):
-    """Return the divisions this user may use the AI assistant on."""
+    """Return the divisions this user may use the AI assistant on,
+    plus the role tier (budget cap, rate limit, model, tools) so the
+    chat panel can render an accurate header."""
     if not getattr(settings, "ai_assistant_enabled", False):
         return {"enabled": False, "divisions": []}
+    from app.services.ai_agent import get_role_tier
     divisions = get_user_divisions(user.email, bool(user.is_admin))
-    return {"enabled": True, "divisions": divisions}
+    tier = get_role_tier(user.email)
+    return {
+        "enabled": True,
+        "divisions": divisions,
+        "tier": {
+            "name": tier["tier"],
+            "max_budget_usd": tier["max_budget_usd"],
+            "rate_per_hour": tier["rate_per_hour"],
+            "model": tier["model"],
+            "tools": tier["tools"].split(","),
+        },
+    }
 
 
 @router.post("/message")

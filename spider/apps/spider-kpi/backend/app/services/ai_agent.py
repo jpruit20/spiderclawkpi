@@ -25,7 +25,41 @@ CLI_TIMEOUT_SECONDS = 1800
 # even the most complex multi-step reasoning chains.
 CLI_IDLE_TIMEOUT_SECONDS = 600
 # Dollar cap per request (safety net).
+# Default budget cap. Per-role tiers in services/division_ownership.py
+# override this when the calling user is a division lead or Joseph.
 CLI_MAX_BUDGET_USD = 2.00
+
+
+def get_role_tier(email: str | None) -> dict:
+    """Per-role caps for the AI assistant. Joseph (platform owner)
+    gets unrestricted access; division leads get a generous tier;
+    everyone else hits the conservative default. Tunable via env
+    vars but the defaults are sensible for a 5-person ops team."""
+    from app.services.division_ownership import is_platform_owner, OWNER_DIVISION
+    e = (email or "").lower()
+    if is_platform_owner(e):
+        return {
+            "tier": "owner",
+            "max_budget_usd": 25.0,
+            "rate_per_hour": 200,
+            "model": "claude-opus-4-7",
+            "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
+        }
+    if e in OWNER_DIVISION:
+        return {
+            "tier": "division_lead",
+            "max_budget_usd": 10.0,
+            "rate_per_hour": 60,
+            "model": "claude-opus-4-7",  # was "sonnet"
+            "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
+        }
+    return {
+        "tier": "viewer",
+        "max_budget_usd": 2.0,
+        "rate_per_hour": 10,
+        "model": "claude-haiku-4-5",  # was "sonnet"
+        "tools": "Read,Glob,Grep",
+    }
 # asyncio.StreamReader default limit is 64KB — Claude CLI JSON lines routinely
 # exceed that when tool_result blocks contain file contents or large diffs.
 _SUBPROCESS_LINE_LIMIT = 2 * 1024 * 1024  # 2MB
@@ -157,6 +191,13 @@ async def run_cli_turn(
     from app.core.config import get_settings as _get_settings
     _settings = _get_settings()
 
+    # Per-role tier — Joseph gets owner caps, division leads get
+    # division_lead caps, everyone else hits the conservative viewer
+    # tier. Settings.ai_assistant_model still acts as a hard floor:
+    # if env explicitly pins a model, we honor it.
+    tier = get_role_tier(scope.email)
+    effective_model = _settings.ai_assistant_model if _settings.ai_assistant_model not in ("sonnet", "claude-sonnet-4-5") else tier["model"]
+
     # Build CLI command — tools must be comma-separated as one arg
     base_cmd = [claude_bin]
     if claude_bin.endswith("npx"):
@@ -165,14 +206,16 @@ async def run_cli_turn(
         "-p", prompt,
         "--output-format", "stream-json",
         "--verbose",
-        "--model", _settings.ai_assistant_model,
+        "--model", effective_model,
         "--bare",
         "--append-system-prompt", system_prompt,
-        "--allowedTools", "Read,Edit,Write,Glob,Grep",
-        "--max-budget-usd", str(CLI_MAX_BUDGET_USD),
+        "--allowedTools", tier["tools"],
+        "--max-budget-usd", str(tier["max_budget_usd"]),
     ]
 
-    logger.warning("AI agent start: user=%s division=%s binary=%s cwd=%s model=%s", scope.email, scope.division, claude_bin, workspace_root, _settings.ai_assistant_model)
+    logger.warning("AI agent start: user=%s tier=%s division=%s model=%s budget=%s tools=%s",
+                   scope.email, tier["tier"], scope.division, effective_model,
+                   tier["max_budget_usd"], tier["tools"])
     yield SSEEvent(event="status", data={"message": "Starting AI assistant..."})
 
     # systemd services have a minimal PATH that may not include node/npm.

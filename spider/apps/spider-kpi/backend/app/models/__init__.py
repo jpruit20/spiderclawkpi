@@ -46,6 +46,7 @@ from app.models.entities import (
     KPIDaily,
     KPIIntraday,
     KpiTarget,
+    PageConfig,
     KlaviyoEvent,
     KlaviyoProfile,
     MicrosoftTenant,

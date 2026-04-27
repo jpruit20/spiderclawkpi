@@ -2186,6 +2186,25 @@ class ShipstationShipment(Base):
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class PageConfig(Base):
+    """Per-user-per-division layout preferences. Each division lead
+    edits their own division's row; Joseph can edit any. Audit-logged
+    so changes are reversible."""
+    __tablename__ = "page_configs"
+    __table_args__ = (
+        UniqueConstraint("division", "owner_email", name="uq_page_configs_division_owner"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    division: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    owner_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    config_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    audit_log_json: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by: Mapped[Optional[str]] = mapped_column(String(255))
+
+
 class KpiTarget(Base):
     """Operator-set target for a KPI metric, optionally bounded to a
     seasonal window. One row per (metric, period). Active resolution
