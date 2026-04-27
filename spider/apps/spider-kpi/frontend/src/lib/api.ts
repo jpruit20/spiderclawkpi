@@ -1808,11 +1808,19 @@ export interface FinancialsGrossProfit {
     applied_cogs_usd: number
     applied_cogs_classified_usd?: number
     applied_cogs_accessory_estimate_usd?: number
+    applied_shipping_usd?: number
     gross_profit_usd: number
     gross_margin_pct: number | null
     discounts_applied_usd?: number
   }
   accessory_assumption?: { ratio: number; note: string }
+  shipping?: {
+    total_cost_usd: number
+    shipment_count: number
+    voided_count: number
+    by_store: Record<string, number>
+    note: string
+  }
   excluded?: { cancelled_orders: number; refunded_orders: number; refunded_revenue_usd: number; partially_refunded_orders: number }
   by_product: Array<{
     product: string
@@ -1820,6 +1828,7 @@ export interface FinancialsGrossProfit {
     revenue_usd: number
     unit_cogs_usd: number | null
     applied_cogs_usd: number
+    applied_shipping_usd?: number
     gross_profit_usd: number
     gross_margin_pct: number | null
     cogs_confidence: string | null

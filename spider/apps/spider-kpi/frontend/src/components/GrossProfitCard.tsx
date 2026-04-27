@@ -186,6 +186,7 @@ export function GrossProfitCard({ days = 30, compact = false, title }: Props) {
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>Units</th>
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>Revenue</th>
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>Unit COGS</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Ship alloc</th>
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>GP</th>
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>Margin</th>
                   <th style={{ padding: '4px 6px' }}>Conf</th>
@@ -203,6 +204,9 @@ export function GrossProfitCard({ days = 30, compact = false, title }: Props) {
                     <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtInt(p.units_sold)}</td>
                     <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtUSD(p.revenue_usd)}</td>
                     <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtUSD(p.unit_cogs_usd)}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--muted)' }} title="Shipping cost allocated to this product, proportional to revenue share">
+                      {p.applied_shipping_usd != null ? fmtUSD(p.applied_shipping_usd) : '—'}
+                    </td>
                     <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 600 }}>{fmtUSD(p.gross_profit_usd)}</td>
                     <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtPct(p.gross_margin_pct)}</td>
                     <td style={{ padding: '4px 6px', fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase' }}>{p.cogs_confidence ?? '—'}</td>
@@ -235,8 +239,11 @@ export function GrossProfitCard({ days = 30, compact = false, title }: Props) {
         {data.excluded && (data.excluded.cancelled_orders + data.excluded.refunded_orders + data.excluded.partially_refunded_orders) > 0 && (
           <>Excluded: {data.excluded.cancelled_orders} cancelled, {data.excluded.refunded_orders} refunded ({fmtUSD(data.excluded.refunded_revenue_usd)}), {data.excluded.partially_refunded_orders} partially refunded. </>
         )}
+        {data.shipping && data.shipping.total_cost_usd > 0 && (
+          <>Carrier shipping cost from ShipStation ({data.shipping.shipment_count} shipments across Spider Amazon/Shopify/Manual): <strong>{fmtUSD(data.shipping.total_cost_usd)}</strong> folded into COGS, allocated to products proportionally to revenue. </>
+        )}
         {data.accessory_assumption && data.totals.revenue_unclassified_usd > 0 && (
-          <>Accessory revenue ({fmtUSD(data.totals.revenue_unclassified_usd)}) is NOT a core grill SKU and has no extracted CBOM — applying estimated COGS at <strong>{(data.accessory_assumption.ratio * 100).toFixed(0)}%</strong> of retail (={fmtUSD(data.totals.applied_cogs_accessory_estimate_usd ?? 0)}). Per-product margins above are exact; blended margin uses this estimate. </>
+          <>Accessory revenue ({fmtUSD(data.totals.revenue_unclassified_usd)}) is NOT a core grill SKU and has no extracted CBOM — applying estimated COGS at <strong>{(data.accessory_assumption.ratio * 100).toFixed(0)}%</strong> of retail (={fmtUSD(data.totals.applied_cogs_accessory_estimate_usd ?? 0)}). Per-product margins above are exact (now including shipping); blended margin uses this estimate. </>
         )}
         {data.coverage.orders_total > 0 && (
           <>Coverage: {data.coverage.orders_with_line_items} / {data.coverage.orders_total} orders carry line-item data ({((data.coverage.orders_with_line_items / data.coverage.orders_total) * 100).toFixed(0)}%). </>
