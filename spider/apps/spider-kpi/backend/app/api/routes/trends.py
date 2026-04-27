@@ -7,7 +7,7 @@ can request all the trends a card needs in a single round-trip.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -62,7 +62,20 @@ def all_trends(
 ) -> dict[str, Any]:
     """Compute 7d-vs-prior-7d trend + 28d rolling-baseline anomaly for
     every registered metric. One round-trip; the frontend picks which
-    to render where."""
+    to render where.
+
+    The "current" value is the **mean of the trailing 7 daily values**;
+    "prior" is the mean of the 7 daily values before that. The arrow +
+    delta_pct is the change between those two daily-average means. The
+    "anomaly" compares current to the prior 28-day daily-mean baseline.
+
+    Active operator-set targets are embedded per metric (read from
+    ``kpi_targets`` with seasonal-window resolution). The frontend
+    uses these to color tiles green/red and show "% of target."
+    """
+    from app.services.kpi_targets import get_active_targets
+    active_targets = get_active_targets(db)
+
     out: dict[str, Any] = {}
     for key, spec in METRICS.items():
         try:
@@ -70,24 +83,49 @@ def all_trends(
         except Exception as exc:
             out[key] = {"error": str(exc)[:200]}
             continue
+        target = active_targets.get(key)
         if not series:
-            out[key] = {"label": spec["label"], "available": False}
+            out[key] = {"label": spec["label"], "available": False, "target": target}
             continue
         cur_7d, prior_7d = two_window_split(series, current_window_days=7)
         delta = trend_delta(cur_7d, prior_7d)
-        # Anomaly: how does the 7d-current value compare to the prior
-        # 28-day baseline (everything except the last 7d)?
         baseline_history = series[:-7] if len(series) > 7 else series
         anomaly = detect_anomaly(cur_7d, baseline_history)
+
+        # Compute "% of target" if a target exists. For min-direction
+        # (e.g. revenue), 100% means we're at target; >100% beat. For
+        # max-direction (e.g. tickets_created), 100% means we're at
+        # target; >100% over the cap (bad).
+        target_progress_pct: Optional[float] = None
+        target_hit: Optional[bool] = None
+        if target and target.get("target_value"):
+            tv = float(target["target_value"])
+            if tv > 0:
+                target_progress_pct = round((cur_7d / tv) * 100, 1)
+                if target.get("direction") == "max":
+                    target_hit = cur_7d <= tv
+                else:
+                    target_hit = cur_7d >= tv
+
         out[key] = {
             "label": spec["label"],
             "available": True,
             "up_is_good": spec["up_is_good"],
             "trend_7d": delta.to_dict(),
             "anomaly": anomaly.to_dict(),
+            "target": target,
+            "target_progress_pct": target_progress_pct,
+            "target_hit": target_hit,
         }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "methodology": {
+            "current": "mean of the 7 most-recent daily values",
+            "prior": "mean of the 7 daily values immediately before the current window",
+            "delta_pct": "(current - prior) / abs(prior) × 100",
+            "anomaly": "z-score of current vs the prior 28-day daily-mean baseline",
+            "target_progress_pct": "(current / target_value) × 100 — 100 means at target",
+        },
         "metrics": out,
     }
 

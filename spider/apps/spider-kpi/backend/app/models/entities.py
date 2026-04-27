@@ -2130,6 +2130,29 @@ class AiNarrative(TimestampMixin, Base):
     requested_by: Mapped[Optional[str]] = mapped_column(String(128))
 
 
+class KpiTarget(Base):
+    """Operator-set target for a KPI metric, optionally bounded to a
+    seasonal window. One row per (metric, period). Active resolution
+    in services/kpi_targets.py picks the narrowest matching window
+    for a given date, with most-recently-created as tiebreaker."""
+    __tablename__ = "kpi_targets"
+    __table_args__ = (
+        Index("ix_kpi_targets_metric_window", "metric_key", "effective_start", "effective_end"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_value: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False, default="min")  # min | max
+    effective_start: Mapped[Optional[date]] = mapped_column(Date)
+    effective_end: Mapped[Optional[date]] = mapped_column(Date)
+    season_label: Mapped[Optional[str]] = mapped_column(String(64))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class WeeklyGaugeSelection(TimestampMixin, Base):
     """Opus 4.7's weekly pick of the 8 most-important business gauges.
 
