@@ -1228,6 +1228,23 @@ export const api = {
     const qs = q.toString()
     return request<FinancialsGrossProfit>(`/api/financials/gross-profit${qs ? `?${qs}` : ''}`, { signal })
   },
+  // Per-division page configuration (layout, visibility, defaults)
+  pageConfigGet: (division: string, signal?: AbortSignal) =>
+    request<PageConfigResponse>(`/api/page-configs/${division}`, { signal }),
+  pageConfigUpsert: (
+    division: string,
+    config_json: Record<string, any>,
+    change_summary?: string,
+    signal?: AbortSignal,
+  ) =>
+    request<PageConfigResponse>(`/api/page-configs/${division}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config_json, change_summary }),
+      signal,
+    }),
+  pageConfigReset: (division: string, signal?: AbortSignal) =>
+    request<{ ok: boolean; reset: boolean | string }>(`/api/page-configs/${division}`, { method: 'DELETE', signal }),
   // KPI targets — seasonal operator-set targets per metric
   kpiTargetsList: (
     opts: { metric_key?: string; division?: string | null; include_global?: boolean } = {},
@@ -1831,6 +1848,29 @@ export interface ShippingCxCorrelation {
     matched_shipment: { ship_date: string | null; carrier: string | null; tracking_number: string | null; shipment_cost: number } | null
     shipped: boolean
   }>
+}
+
+export interface PageConfigCardOverride {
+  visible?: boolean
+  order?: number
+  title?: string | null
+  default_window_days?: number | null
+}
+
+export interface PageConfigResponse {
+  division: string
+  owner_email: string
+  config_json: {
+    card_overrides?: Record<string, PageConfigCardOverride>
+    default_window_days?: number
+    accent_color?: string | null
+    notes?: string | null
+  }
+  exists?: boolean
+  updated_at: string | null
+  updated_by: string | null
+  can_edit: boolean
+  audit_log?: Array<{ at: string; by: string; change_summary: string }>
 }
 
 export interface KpiTargetRow {

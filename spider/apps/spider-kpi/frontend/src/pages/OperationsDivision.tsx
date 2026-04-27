@@ -11,6 +11,9 @@ import { SharepointIntelligenceCard } from '../components/SharepointIntelligence
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
+import { CustomizableCard } from '../components/CustomizableCard'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { usePageConfig } from '../lib/usePageConfig'
 import { Link } from 'react-router-dom'
 
 // 24h auto-expire. New requester-facing builds should replace this
@@ -54,9 +57,11 @@ function OrderAgingRequestBanner() {
 }
 
 export function OperationsDivision() {
+  const cfg = usePageConfig('operations')
   return (
     <>
       <OrderAgingRequestBanner />
+      <DivisionPageHeader cfg={cfg} divisionLabel="Operations · Conor" />
       {/* ── DIVISION HERO — signature: throughput ─────────────────────
           Horizontal flow bar with animated shimmer. Stays in a muted
           "awaiting feed" state until Business Central is live;
@@ -104,23 +109,29 @@ export function OperationsDivision() {
           { label: 'Late-ship reasons', value: '—', state: 'neutral' },
         ]}
       />
-      {/* Top-of-page actionable recommendations. */}
-      <RecommendationsCard division="operations" />
+      <CustomizableCard id="recommendations" defaultTitle="Recommendations" cfg={cfg}>
+        <RecommendationsCard division="operations" />
+      </CustomizableCard>
 
-      {/* SharePoint Project Management activity — POs, quotations,
-          master trackers, vendor specs from AMW's per-product
-          sites. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <DivisionTargetsButton division="operations" metrics={["orders", "tickets_created"]} label="Operations targets" />
       </div>
-      <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
-      <SharepointIntelligenceCard division="operations" />
-      <SharepointActivityCard division="operations" />
 
-      {/* Order aging — Conor's 2026-04-21 ask. Lives here as a real ops
-          KPI while the broader BC/ERP integration is still pending.
-          Also rendered compact on the CX page for WISMO correlation. */}
-      <OrderAgingCard variant="full" trendDays={14} />
+      <CustomizableCard id="shipping_intelligence" defaultTitle="Shipping intelligence" cfg={cfg}>
+        <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
+      </CustomizableCard>
+
+      <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>
+        <SharepointIntelligenceCard division="operations" />
+      </CustomizableCard>
+
+      <CustomizableCard id="sharepoint_activity" defaultTitle="SharePoint activity feed" cfg={cfg}>
+        <SharepointActivityCard division="operations" />
+      </CustomizableCard>
+
+      <CustomizableCard id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}>
+        <OrderAgingCard variant="full" trendDays={14} />
+      </CustomizableCard>
       <BlockedDivisionPage
         title="Operations"
         owner="Conor"
@@ -151,36 +162,42 @@ export function OperationsDivision() {
         ]}
         drilldowns={[{ label: 'Open Financial / Revenue', href: '/revenue' }, { label: 'Open System Health', href: '/system-health' }]}
       />
-      {/* ClickUp tasks — Operations view. Until an ERP feed lands, ClickUp
-          is the most honest source of live operational commitments. */}
       <div className="page-grid" style={{ marginTop: 16 }}>
-        <ClickUpTasksCard
-          title="ClickUp tasks — Operations"
-          subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize). A real ops feed will supplement, not replace, this."
-          defaultFilter={{ limit: 30 }}
-        />
-        <ClickUpVelocityCard
-          title="Team velocity — all ClickUp"
-          subtitle="Throughput + cycle time across every space until an Ops space is stood up."
-        />
-        <ClickUpComplianceCard
-          title="Tagging compliance — all ClickUp"
-          subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
-        />
-        <SlackPulseCard
-          title="Slack pulse — Inventory / Wholesale"
-          subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
-          defaultChannelName="inventory-updates"
-        />
-        {/* Email archive pulse — leads with shipment/logistics escalations.
-            Best operational signal we have until an ERP feed lands. */}
-        <EmailPulseCard
-          range={{
-            startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-            endDate: new Date().toISOString().slice(0, 10),
-          }}
-          highlightArchetype="shipment_logistics"
-        />
+        <CustomizableCard id="clickup_tasks" defaultTitle="ClickUp tasks — Operations" cfg={cfg}>
+          <ClickUpTasksCard
+            title={cfg.cardTitle('clickup_tasks', 'ClickUp tasks — Operations')}
+            subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize)."
+            defaultFilter={{ limit: 30 }}
+          />
+        </CustomizableCard>
+        <CustomizableCard id="clickup_velocity" defaultTitle="Team velocity — all ClickUp" cfg={cfg}>
+          <ClickUpVelocityCard
+            title={cfg.cardTitle('clickup_velocity', 'Team velocity — all ClickUp')}
+            subtitle="Throughput + cycle time across every space until an Ops space is stood up."
+          />
+        </CustomizableCard>
+        <CustomizableCard id="clickup_compliance" defaultTitle="Tagging compliance — all ClickUp" cfg={cfg}>
+          <ClickUpComplianceCard
+            title={cfg.cardTitle('clickup_compliance', 'Tagging compliance — all ClickUp')}
+            subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
+          />
+        </CustomizableCard>
+        <CustomizableCard id="slack_pulse" defaultTitle="Slack pulse — Inventory / Wholesale" cfg={cfg}>
+          <SlackPulseCard
+            title={cfg.cardTitle('slack_pulse', 'Slack pulse — Inventory / Wholesale')}
+            subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
+            defaultChannelName="inventory-updates"
+          />
+        </CustomizableCard>
+        <CustomizableCard id="email_pulse" defaultTitle="Email pulse — shipment / logistics" cfg={cfg}>
+          <EmailPulseCard
+            range={{
+              startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+              endDate: new Date().toISOString().slice(0, 10),
+            }}
+            highlightArchetype="shipment_logistics"
+          />
+        </CustomizableCard>
       </div>
     </>
   )

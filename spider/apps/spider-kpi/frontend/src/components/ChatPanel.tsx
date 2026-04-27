@@ -38,6 +38,17 @@ export function ChatPanel() {
 
   const aiDivisions = user?.ai_divisions ?? []
   const aiEnabled = user?.ai_enabled ?? false
+  const [tier, setTier] = useState<{ name: string; max_budget_usd: number; rate_per_hour: number; model: string; tools: string[] } | null>(null)
+
+  useEffect(() => {
+    if (!aiEnabled) return
+    const ctl = new AbortController()
+    fetch('/api/ai/access', { signal: ctl.signal, credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (d?.tier) setTier(d.tier) })
+      .catch(() => undefined)
+    return () => ctl.abort()
+  }, [aiEnabled])
 
   // Only render if user has AI divisions assigned
   if (aiDivisions.length === 0) return null
@@ -209,6 +220,24 @@ export function ChatPanel() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
+          {tier && (
+            <span
+              title={`Tier: ${tier.name} · model: ${tier.model} · budget $${tier.max_budget_usd}/turn · rate ${tier.rate_per_hour}/hour · tools: ${tier.tools.join(', ')}`}
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                padding: '2px 6px',
+                borderRadius: 3,
+                marginRight: 6,
+                background: tier.name === 'owner' ? 'var(--green)' : tier.name === 'division_lead' ? 'var(--blue)' : 'var(--muted)',
+                color: '#fff',
+                textTransform: 'uppercase',
+              }}
+            >
+              {tier.name === 'division_lead' ? 'LEAD' : tier.name === 'owner' ? 'OWNER' : 'VIEWER'} · {tier.model.includes('opus') ? 'OPUS' : tier.model.includes('haiku') ? 'HAIKU' : tier.model.toUpperCase().slice(0, 6)}
+            </span>
+          )}
           {showPicker ? (
             <select
               className="chat-division-select"
