@@ -30,36 +30,62 @@ CLI_IDLE_TIMEOUT_SECONDS = 600
 CLI_MAX_BUDGET_USD = 2.00
 
 
-def get_role_tier(email: str | None) -> dict:
-    """Per-role caps for the AI assistant. Joseph (platform owner)
-    gets unrestricted access; division leads get a generous tier;
-    everyone else hits the conservative default. Tunable via env
-    vars but the defaults are sensible for a 5-person ops team."""
-    from app.services.division_ownership import is_platform_owner, OWNER_DIVISION
-    e = (email or "").lower()
-    if is_platform_owner(e):
-        return {
-            "tier": "owner",
-            "max_budget_usd": 25.0,
-            "rate_per_hour": 200,
-            "model": "claude-opus-4-7",
-            "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
-        }
-    if e in OWNER_DIVISION:
-        return {
-            "tier": "division_lead",
-            "max_budget_usd": 10.0,
-            "rate_per_hour": 60,
-            "model": "claude-opus-4-7",  # was "sonnet"
-            "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
-        }
-    return {
+# Per-email tier overrides. Useful for temporarily elevating a
+# specific lead's caps during a heavy build phase, then reverting.
+# Keys are lowercased emails; values are tier names from TIER_TABLE.
+#
+# Joseph: "Bump Conor up to $25/turn, 200/hr, Opus 4.7 during dashboard
+# development. Once we're done, we can turn that back down to $10."
+# To revert Conor: remove the entry from this dict.
+TIER_OVERRIDES: dict[str, str] = {
+    "conor@spidergrills.com": "owner",  # TEMPORARY — revert to default 'division_lead' after dashboard build wraps
+}
+
+
+TIER_TABLE: dict[str, dict] = {
+    "owner": {
+        "tier": "owner",
+        "max_budget_usd": 25.0,
+        "rate_per_hour": 200,
+        "model": "claude-opus-4-7",
+        "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
+    },
+    "division_lead": {
+        "tier": "division_lead",
+        "max_budget_usd": 10.0,
+        "rate_per_hour": 60,
+        "model": "claude-opus-4-7",
+        "tools": "Read,Edit,Write,Glob,Grep,Bash,WebFetch",
+    },
+    "viewer": {
         "tier": "viewer",
         "max_budget_usd": 2.0,
         "rate_per_hour": 10,
-        "model": "claude-haiku-4-5",  # was "sonnet"
+        "model": "claude-haiku-4-5",
         "tools": "Read,Glob,Grep",
-    }
+    },
+}
+
+
+def get_role_tier(email: str | None) -> dict:
+    """Per-role caps for the AI assistant.
+
+    Resolution order:
+      1. Per-email override (TIER_OVERRIDES) — used to temporarily
+         elevate a specific user during a build push.
+      2. Joseph (platform owner) → owner tier.
+      3. Division leads → division_lead tier.
+      4. Everyone else → viewer tier.
+    """
+    from app.services.division_ownership import is_platform_owner, OWNER_DIVISION
+    e = (email or "").lower()
+    if e in TIER_OVERRIDES:
+        return dict(TIER_TABLE[TIER_OVERRIDES[e]])
+    if is_platform_owner(e):
+        return dict(TIER_TABLE["owner"])
+    if e in OWNER_DIVISION:
+        return dict(TIER_TABLE["division_lead"])
+    return dict(TIER_TABLE["viewer"])
 # asyncio.StreamReader default limit is 64KB — Claude CLI JSON lines routinely
 # exceed that when tool_result blocks contain file contents or large diffs.
 _SUBPROCESS_LINE_LIMIT = 2 * 1024 * 1024  # 2MB
