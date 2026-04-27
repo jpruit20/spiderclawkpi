@@ -1229,10 +1229,24 @@ export const api = {
     return request<FinancialsGrossProfit>(`/api/financials/gross-profit${qs ? `?${qs}` : ''}`, { signal })
   },
   // KPI targets — seasonal operator-set targets per metric
-  kpiTargetsList: (metric_key?: string, signal?: AbortSignal) => {
-    const qs = metric_key ? `?metric_key=${encodeURIComponent(metric_key)}` : ''
-    return request<{ targets: KpiTargetRow[] }>(`/api/kpi-targets${qs}`, { signal })
+  kpiTargetsList: (
+    opts: { metric_key?: string; division?: string | null; include_global?: boolean } = {},
+    signal?: AbortSignal,
+  ) => {
+    const q = new URLSearchParams()
+    if (opts.metric_key) q.set('metric_key', opts.metric_key)
+    if (opts.division != null) q.set('division', opts.division)
+    if (opts.include_global != null) q.set('include_global', String(opts.include_global))
+    const qs = q.toString()
+    return request<{ targets: KpiTargetRow[] }>(`/api/kpi-targets${qs ? `?${qs}` : ''}`, { signal })
   },
+  kpiTargetsPermissions: (signal?: AbortSignal) =>
+    request<{
+      user_email: string | null
+      is_platform_owner: boolean
+      editable_divisions: Array<{ code: string | null; label: string }>
+      division_owners: Array<{ division: string; label: string; owner_email: string }>
+    }>(`/api/kpi-targets/permissions`, { signal }),
   kpiTargetsActive: (signal?: AbortSignal) =>
     request<{ active: Record<string, KpiTargetRow> }>(`/api/kpi-targets/active`, { signal }),
   kpiTargetUpsert: (payload: KpiTargetUpsertPayload, signal?: AbortSignal) =>
@@ -1828,6 +1842,8 @@ export interface KpiTargetRow {
   effective_end: string | null
   season_label: string | null
   notes: string | null
+  division: string | null
+  owner_email: string | null
   created_by: string | null
   created_at: string | null
   updated_at: string | null
@@ -1842,6 +1858,7 @@ export interface KpiTargetUpsertPayload {
   effective_end?: string | null
   season_label?: string | null
   notes?: string | null
+  division?: string | null
 }
 
 export interface FinancialsCogsTableRow {
@@ -1874,6 +1891,10 @@ export interface FinancialsGrossProfit {
     gross_profit_usd: number
     gross_margin_pct: number | null
     discounts_applied_usd?: number
+    ad_spend_usd?: number
+    contribution_margin_usd?: number
+    contribution_margin_pct?: number | null
+    refunds_in_kpi_daily_usd?: number
   }
   accessory_assumption?: { ratio: number; note: string }
   shipping?: {

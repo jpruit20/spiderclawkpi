@@ -11,6 +11,8 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ChannelMixCard } from '../components/ChannelMixCard'
 import { ChannelTrendsCard, MarketingPacingCard, MerHealthCard } from '../components/MarketingIntelligenceCards'
 import { GrossProfitCard } from '../components/GrossProfitCard'
+import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
+import { MarketingContributionStrip } from '../components/MarketingContributionStrip'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -190,10 +192,11 @@ export function MarketingDivision() {
   const priorConversion = priorSessions ? (priorOrders / priorSessions) * 100 : 0
   const mer = adSpend ? revenue / adSpend : 0
   const priorMer = priorAdSpend ? priorRevenue / priorAdSpend : 0
-  const grossProfitProxy = revenue - refunds
-  const priorGrossProfitProxy = priorRevenue - priorRefunds
-  const contributionProxy = grossProfitProxy - adSpend
-  const priorContributionProxy = priorGrossProfitProxy - priorAdSpend
+  // Removed orphan grossProfitProxy / contributionProxy — they computed
+  // GP = revenue − refunds (no COGS, no shipping) and were unused in the
+  // page. The real numbers now come from <MarketingContributionStrip />
+  // which reads /api/financials/gross-profit (canonical: SharePoint COGS
+  // + ShipStation shipping + ad spend folded in).
 
   /* ---- funnel estimates ---- */
   const addToCartRate = currentRows.length
@@ -594,7 +597,15 @@ export function MarketingDivision() {
         )
       })()}
 
-      <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <RangeToolbar rows={rows} range={range} onChange={setRange} anchorDate={todayDate} />
+        <DivisionTargetsButton division="marketing" metrics={["revenue", "orders", "csat"]} label="Marketing targets" />
+      </div>
+      {/* Marketing-side contribution margin: pulls SharePoint COGS +
+          ShipStation shipping + ad spend from /api/financials/gross-profit
+          so the same canonical figures show up here as on Executive +
+          Commercial pages. */}
+      <MarketingContributionStrip days={30} />
       <CompareToolbar mode={compareMode} onChange={setCompareMode as (mode: CompareMode) => void} />
       {/* Apples-to-apples comparison hint. When today is partial,
           the backend clips the prior window's matching day to the

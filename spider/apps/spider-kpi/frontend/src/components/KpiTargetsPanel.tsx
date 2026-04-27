@@ -18,6 +18,8 @@ import { METRIC_DIRECTION_DEFAULT, METRIC_LABELS } from './TrendSnapshotCard'
 interface Props {
   metrics: string[]
   onClose: () => void
+  /** Division scope for this panel. null = global (Command Center; only Joseph can edit). */
+  division?: string | null
 }
 
 const SEASON_PRESETS = [
@@ -27,19 +29,35 @@ const SEASON_PRESETS = [
   { label: 'Winter off-season (Dec 1 – Mar 31)', start: '-12-01', end: '-04-01' },
 ]
 
-export function KpiTargetsPanel({ metrics, onClose }: Props) {
+export function KpiTargetsPanel({ metrics, onClose, division = null }: Props) {
   const [rows, setRows] = useState<KpiTargetRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Partial<KpiTargetRow & { metric_key: string }> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [permissions, setPermissions] = useState<{
+    user_email: string | null
+    is_platform_owner: boolean
+    editable_divisions: Array<{ code: string | null; label: string }>
+  } | null>(null)
+
+  // What can the calling user edit?
+  const canEditThisDivision = useMemo(() => {
+    if (!permissions) return false
+    if (permissions.is_platform_owner) return true
+    return permissions.editable_divisions.some(d => d.code === division)
+  }, [permissions, division])
 
   async function refresh() {
     setLoading(true)
     setError(null)
     try {
-      const r = await api.kpiTargetsList()
-      setRows(r.targets)
+      const [tgts, perms] = await Promise.all([
+        api.kpiTargetsList({ division: division ?? undefined, include_global: true }),
+        api.kpiTargetsPermissions().catch(() => null),
+      ])
+      setRows(tgts.targets)
+      if (perms) setPermissions(perms)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load')
     } finally {
@@ -47,7 +65,7 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
     }
   }
 
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => { void refresh() }, [division])
 
   const groupedByMetric = useMemo(() => {
     const map: Record<string, KpiTargetRow[]> = {}
@@ -70,6 +88,7 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
         effective_end: editing.effective_end || null,
         season_label: editing.season_label || null,
         notes: editing.notes || null,
+        division: editing.division ?? division,
       }
       await api.kpiTargetUpsert(payload)
       setEditing(null)
@@ -141,11 +160,26 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: 16 }}>KPI targets</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              KPI targets
+              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
+                {division === null ? '· Global (Command Center)' : `· ${division.toUpperCase()}`}
+              </span>
+            </h3>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
               Set per-metric targets. Use date windows for seasonal swings (e.g. raise Revenue target Apr–Sep,
-              lower it Oct–Mar). The narrowest matching window wins on a given day; the dashboard tile
-              auto-resolves which target is active.
+              lower it Oct–Mar). Narrowest matching window wins.
+              {permissions && (
+                <span style={{ display: 'block', marginTop: 4, color: canEditThisDivision ? 'var(--green)' : 'var(--orange)' }}>
+                  {canEditThisDivision
+                    ? `✓ You (${permissions.user_email}) can edit ${division === null ? 'global' : division} targets.`
+                    : `🔒 Read-only — ${permissions.user_email || 'unknown'} cannot edit ${division === null ? 'global' : division} targets. ${
+                        division === null
+                          ? 'Global targets are platform-owner-only.'
+                          : 'Each division lead controls their own division.'
+                      }`}
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -165,12 +199,14 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
               <div key={m} style={{ background: 'var(--panel-2)', borderRadius: 6, padding: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                   <strong style={{ fontSize: 13 }}>{METRIC_LABELS[m] || m}</strong>
-                  <button
-                    onClick={() => startCreate(m)}
-                    style={{ background: 'var(--blue)', border: 'none', color: '#fff', padding: '3px 8px', borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
-                  >
-                    + Add target
-                  </button>
+                  {canEditThisDivision && (
+                    <button
+                      onClick={() => startCreate(m)}
+                      style={{ background: 'var(--blue)', border: 'none', color: '#fff', padding: '3px 8px', borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      + Add target
+                    </button>
+                  )}
                 </div>
                 {groupedByMetric[m]?.length ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
@@ -184,9 +220,25 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
                             ? `${r.effective_start || '∞'} → ${r.effective_end || '∞'}`
                             : 'Always active'}
                           {r.season_label && <> · {r.season_label}</>}
+                          <span style={{ marginLeft: 6, fontSize: 9, padding: '0 5px', borderRadius: 3, background: r.division ? 'var(--panel-2)' : 'rgba(110,168,255,0.12)', color: r.division ? 'var(--muted)' : 'var(--blue)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>
+                            {r.division ?? 'global'}
+                          </span>
+                          {r.owner_email && (
+                            <span style={{ marginLeft: 4, fontSize: 9, color: 'var(--muted)' }}>
+                              · {r.owner_email.split('@')[0]}
+                            </span>
+                          )}
                         </span>
-                        <button onClick={() => startEdit(r)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)', padding: '1px 6px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>edit</button>
-                        <button onClick={() => remove(r.id)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--red)', padding: '1px 6px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>×</button>
+                        {(permissions?.is_platform_owner || (canEditThisDivision && r.division === division)) ? (
+                          <>
+                            <button onClick={() => startEdit(r)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)', padding: '1px 6px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>edit</button>
+                            <button onClick={() => remove(r.id)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--red)', padding: '1px 6px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>×</button>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ fontSize: 10, color: 'var(--muted)', gridColumn: '3 / 5', textAlign: 'right' }}>read-only</span>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -285,8 +337,8 @@ export function KpiTargetsPanel({ metrics, onClose }: Props) {
               </button>
               <button
                 onClick={save}
-                disabled={saving || !editing.target_value}
-                style={{ background: 'var(--blue)', border: 'none', color: '#fff', padding: '5px 14px', borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                disabled={saving || !editing.target_value || !canEditThisDivision}
+                style={{ background: canEditThisDivision ? 'var(--blue)' : 'var(--muted)', border: 'none', color: '#fff', padding: '5px 14px', borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: canEditThisDivision ? 'pointer' : 'not-allowed' }}
               >
                 {saving ? 'Saving…' : (editing.id ? 'Update' : 'Create')}
               </button>

@@ -3,6 +3,7 @@ import { DivisionHero } from '../components/DivisionHero'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
+import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 
 export function ProductionManufacturingDivision() {
   return (
@@ -59,6 +60,9 @@ export function ProductionManufacturingDivision() {
           sites' "Production and QC" folders. First real manufacturing
           data on this page; production output / yield / defect feeds
           remain blocked below until MES integration lands. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <DivisionTargetsButton division="manufacturing" metrics={["orders", "tickets_created"]} label="Manufacturing targets" />
+      </div>
       <SharepointIntelligenceCard division="manufacturing" />
       <SharepointActivityCard division="manufacturing" />
 

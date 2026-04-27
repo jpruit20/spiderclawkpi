@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { BarIndicator } from '../components/BarIndicator'
 import { Card } from '../components/Card'
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
+import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
@@ -743,6 +744,10 @@ export function CustomerExperienceDivision() {
             variant="compact"
             subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
           />
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <DivisionTargetsButton division="cx" metrics={["tickets_created", "csat", "first_response_time"]} label="CX targets" />
+          </div>
 
           {/* Top-of-page actionable recommendations. */}
           <RecommendationsCard division="cx" />
