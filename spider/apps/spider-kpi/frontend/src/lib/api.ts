@@ -1228,6 +1228,22 @@ export const api = {
     const qs = q.toString()
     return request<FinancialsGrossProfit>(`/api/financials/gross-profit${qs ? `?${qs}` : ''}`, { signal })
   },
+  // KPI targets — seasonal operator-set targets per metric
+  kpiTargetsList: (metric_key?: string, signal?: AbortSignal) => {
+    const qs = metric_key ? `?metric_key=${encodeURIComponent(metric_key)}` : ''
+    return request<{ targets: KpiTargetRow[] }>(`/api/kpi-targets${qs}`, { signal })
+  },
+  kpiTargetsActive: (signal?: AbortSignal) =>
+    request<{ active: Record<string, KpiTargetRow> }>(`/api/kpi-targets/active`, { signal }),
+  kpiTargetUpsert: (payload: KpiTargetUpsertPayload, signal?: AbortSignal) =>
+    request<KpiTargetRow>(`/api/kpi-targets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  kpiTargetDelete: (id: number, signal?: AbortSignal) =>
+    request<{ ok: boolean; deleted_id: number }>(`/api/kpi-targets/${id}`, { method: 'DELETE', signal }),
   klaviyoBetaCustomers: (limit: number = 500, signal?: AbortSignal) =>
     request<KlaviyoBetaCustomers>(`/api/klaviyo/beta-customers?limit=${limit}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1739,6 +1755,31 @@ export interface SharepointFileAnalysesResponse {
   generated_at: string
   filters: { spider_product: string | null; division: string | null; semantic_type: string | null }
   files: SharepointFileAnalysisRow[]
+}
+
+export interface KpiTargetRow {
+  id: number
+  metric_key: string
+  target_value: number
+  direction: 'min' | 'max' | string
+  effective_start: string | null
+  effective_end: string | null
+  season_label: string | null
+  notes: string | null
+  created_by: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface KpiTargetUpsertPayload {
+  id?: number | null
+  metric_key: string
+  target_value: number
+  direction: 'min' | 'max'
+  effective_start?: string | null
+  effective_end?: string | null
+  season_label?: string | null
+  notes?: string | null
 }
 
 export interface FinancialsCogsTableRow {
