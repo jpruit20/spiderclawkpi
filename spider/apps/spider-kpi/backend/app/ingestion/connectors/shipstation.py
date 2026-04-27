@@ -208,8 +208,10 @@ def _shipments_iter(
     create_date_start: datetime,
     create_date_end: datetime,
 ) -> Iterator[dict[str, Any]]:
-    """Paginate /shipments for one store + window. ShipStation returns
-    ``shipments``, ``total``, ``page``, ``pages``."""
+    """Paginate /shipments for one store + window. ShipStation v1 omits
+    ``storeId`` from each row when the query is already filtered by it
+    (the field is implicit). We inject it back into the payload so
+    downstream persist code can rely on it being present."""
     page = 1
     while True:
         body = _get("/shipments", params={
@@ -222,6 +224,11 @@ def _shipments_iter(
         })
         rows = body.get("shipments") or []
         for r in rows:
+            # ShipStation v1 quirk: when filtered by storeId, the field is
+            # missing/None on each row. Inject the queried store_id so the
+            # client-side allowlist check + DB persistence find it.
+            if r.get("storeId") in (None, 0):
+                r["storeId"] = store_id
             yield r
         pages = int(body.get("pages") or 1)
         if page >= pages:
