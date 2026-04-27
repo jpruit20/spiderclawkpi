@@ -125,9 +125,13 @@ def units_by_product_in_window(
 
     Other correctness:
     - Polls the same order multiple times — dedupe by order_id taking
-      the LATEST snapshot.
-    - Window filter uses event_timestamp (the order's source-side
-      timestamp), not business_date.
+      the LATEST snapshot (so we get the freshest line_items).
+    - Window filter uses **business_date** (the order's actual
+      creation date from Shopify), NOT event_timestamp. event_timestamp
+      reflects the latest *poll/update* time — when an old order is
+      re-polled today (refund, fulfillment update), event_timestamp
+      jumps to today and the order would falsely count in today's
+      revenue. business_date ties revenue to when the order was placed.
     """
     where_parts = [
         "event_type = 'poll.order_snapshot'",
@@ -135,11 +139,11 @@ def units_by_product_in_window(
     ]
     params: dict[str, Any] = {}
     if start is not None:
-        where_parts.append("event_timestamp >= :start_ts")
-        params["start_ts"] = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
+        where_parts.append("business_date >= :start_d")
+        params["start_d"] = start
     if end is not None:
-        where_parts.append("event_timestamp < :end_ts")
-        params["end_ts"] = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc)
+        where_parts.append("business_date < :end_d")
+        params["end_d"] = end
     where_sql = " AND ".join(where_parts)
 
     # Pull (order, line) pairs for non-cancelled, non-fully-refunded orders.
