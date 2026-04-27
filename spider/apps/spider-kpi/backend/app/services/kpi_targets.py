@@ -77,10 +77,21 @@ def get_active_targets(db: Session, *, on_date: Optional[date] = None) -> dict[s
     return out
 
 
-def list_targets(db: Session, *, metric_key: Optional[str] = None) -> list[dict[str, Any]]:
+def list_targets(
+    db: Session,
+    *,
+    metric_key: Optional[str] = None,
+    division: Optional[str] = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
     q = select(KpiTarget)
     if metric_key:
         q = q.where(KpiTarget.metric_key == metric_key)
+    if division is not None:
+        if include_global:
+            q = q.where((KpiTarget.division == division) | (KpiTarget.division.is_(None)))
+        else:
+            q = q.where(KpiTarget.division == division)
     q = q.order_by(KpiTarget.metric_key, KpiTarget.effective_start.asc().nulls_first())
     rows = db.execute(q).scalars().all()
     return [_serialize(r) for r in rows]
@@ -97,6 +108,7 @@ def upsert_target(
     season_label: Optional[str] = None,
     notes: Optional[str] = None,
     user: Optional[str] = None,
+    division: Optional[str] = None,
     target_id: Optional[int] = None,
 ) -> KpiTarget:
     """Create a new target or update an existing one by id."""
@@ -115,6 +127,8 @@ def upsert_target(
     row.effective_end = effective_end
     row.season_label = season_label
     row.notes = notes
+    row.division = division
+    row.owner_email = user or row.owner_email
     row.created_by = user or row.created_by
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -141,6 +155,8 @@ def _serialize(t: KpiTarget) -> dict[str, Any]:
         "effective_end": t.effective_end.isoformat() if t.effective_end else None,
         "season_label": t.season_label,
         "notes": t.notes,
+        "division": t.division,
+        "owner_email": t.owner_email,
         "created_by": t.created_by,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,

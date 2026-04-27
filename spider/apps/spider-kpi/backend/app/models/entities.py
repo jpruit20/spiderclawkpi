@@ -2204,6 +2204,8 @@ class KpiTarget(Base):
     effective_end: Mapped[Optional[date]] = mapped_column(Date)
     season_label: Mapped[Optional[str]] = mapped_column(String(64))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    division: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    owner_email: Mapped[Optional[str]] = mapped_column(String(255))
     created_by: Mapped[Optional[str]] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

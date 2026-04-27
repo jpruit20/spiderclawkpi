@@ -376,6 +376,23 @@ def compute_gross_profit(
     rows_by_product = units_data["by_product"]
     shipping_data = shipping_cost_in_window(db, start=start, end=end)
 
+    # Ad spend in the same window from kpi_daily — used to compute
+    # contribution margin (revenue - all_cogs - ad_spend) so marketing
+    # surfaces "what's actually left after we acquired customers."
+    ad_spend_total = 0.0
+    refunds_total = 0.0
+    if start and end:
+        row = db.execute(text("""
+            SELECT
+                COALESCE(SUM(ad_spend), 0)::numeric AS ad_spend,
+                COALESCE(SUM(refunds), 0)::numeric AS refunds
+            FROM kpi_daily
+            WHERE business_date >= :start AND business_date < :end
+        """), {"start": start, "end": end}).first()
+        if row:
+            ad_spend_total = float(row.ad_spend or 0)
+            refunds_total = float(row.refunds or 0)
+
     by_product: list[dict[str, Any]] = []
     total_revenue = 0.0
     total_units = 0
@@ -494,6 +511,14 @@ def compute_gross_profit(
             "gross_profit_usd": round(overall_gross_profit, 2),
             "gross_margin_pct": round(overall_margin, 2) if overall_margin is not None else None,
             "discounts_applied_usd": round(units_data.get("discounts_applied_usd", 0.0), 2),
+            # Marketing-side contribution: GP minus ad spend
+            "ad_spend_usd": round(ad_spend_total, 2),
+            "contribution_margin_usd": round(overall_gross_profit - ad_spend_total, 2),
+            "contribution_margin_pct": (
+                round((overall_gross_profit - ad_spend_total) / total_revenue_with_unclassified * 100, 2)
+                if total_revenue_with_unclassified > 0 else None
+            ),
+            "refunds_in_kpi_daily_usd": round(refunds_total, 2),
         },
         "by_product": by_product,
         "data_quality_flags": flags,
