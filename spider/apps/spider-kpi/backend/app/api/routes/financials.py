@@ -42,10 +42,13 @@ def gross_profit(
     days: Optional[int] = Query(None, ge=1, le=730),
     start: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     end: Optional[str] = Query(None, description="YYYY-MM-DD exclusive"),
+    accessory_cogs_ratio: float = Query(0.50, ge=0.0, le=1.0, description="Estimated COGS ratio for accessory line items (no CBOM extracted)"),
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
-    """Cross-platform gross-profit. Returns revenue, units sold by
-    product, applied COGS, gross profit, gross margin %.
+    """Cross-platform gross-profit. Returns net revenue (after discounts,
+    excluding cancelled + fully refunded orders), units sold by product,
+    applied COGS (per-product canonical + estimated accessory), gross
+    profit, gross margin %.
 
     Default (no args) = lifetime. Pass ``days`` for trailing N days,
     or explicit ``start`` and ``end`` for a custom window.
@@ -53,4 +56,4 @@ def gross_profit(
     from datetime import date as _date
     s = _date.fromisoformat(start) if start else None
     e = _date.fromisoformat(end) if end else None
-    return compute_gross_profit(db, days=days, start=s, end=e)
+    return compute_gross_profit(db, days=days, start=s, end=e, accessory_cogs_ratio=accessory_cogs_ratio)

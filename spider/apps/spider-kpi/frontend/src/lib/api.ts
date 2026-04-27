@@ -1765,9 +1765,14 @@ export interface FinancialsGrossProfit {
     revenue_unclassified_usd: number
     units_sold: number
     applied_cogs_usd: number
+    applied_cogs_classified_usd?: number
+    applied_cogs_accessory_estimate_usd?: number
     gross_profit_usd: number
     gross_margin_pct: number | null
+    discounts_applied_usd?: number
   }
+  accessory_assumption?: { ratio: number; note: string }
+  excluded?: { cancelled_orders: number; refunded_orders: number; refunded_revenue_usd: number; partially_refunded_orders: number }
   by_product: Array<{
     product: string
     units_sold: number

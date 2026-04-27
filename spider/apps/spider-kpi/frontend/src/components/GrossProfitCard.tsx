@@ -225,13 +225,23 @@ export function GrossProfitCard({ days = 30, compact = false, title }: Props) {
         </div>
       )}
 
-      {/* Coverage footnote */}
-      {data.coverage.orders_total > 0 && (
-        <div style={{ marginTop: 8, fontSize: 10, color: 'var(--muted)' }}>
-          Coverage: {data.coverage.orders_with_line_items} / {data.coverage.orders_total} orders carry line-item data
-          ({((data.coverage.orders_with_line_items / data.coverage.orders_total) * 100).toFixed(0)}%).
-        </div>
-      )}
+      {/* Methodology footnote — explicit so the number is auditable */}
+      <div style={{ marginTop: 10, fontSize: 10, color: 'var(--muted)', lineHeight: 1.6 }}>
+        <strong>How this is computed:</strong> net revenue after order + line discounts; cancelled and fully-refunded orders excluded.
+        {' '}
+        {data.totals.discounts_applied_usd != null && data.totals.discounts_applied_usd > 0 && (
+          <>Discounts applied this window: {fmtUSD(data.totals.discounts_applied_usd)}. </>
+        )}
+        {data.excluded && (data.excluded.cancelled_orders + data.excluded.refunded_orders + data.excluded.partially_refunded_orders) > 0 && (
+          <>Excluded: {data.excluded.cancelled_orders} cancelled, {data.excluded.refunded_orders} refunded ({fmtUSD(data.excluded.refunded_revenue_usd)}), {data.excluded.partially_refunded_orders} partially refunded. </>
+        )}
+        {data.accessory_assumption && data.totals.revenue_unclassified_usd > 0 && (
+          <>Accessory revenue ({fmtUSD(data.totals.revenue_unclassified_usd)}) is NOT a core grill SKU and has no extracted CBOM — applying estimated COGS at <strong>{(data.accessory_assumption.ratio * 100).toFixed(0)}%</strong> of retail (={fmtUSD(data.totals.applied_cogs_accessory_estimate_usd ?? 0)}). Per-product margins above are exact; blended margin uses this estimate. </>
+        )}
+        {data.coverage.orders_total > 0 && (
+          <>Coverage: {data.coverage.orders_with_line_items} / {data.coverage.orders_total} orders carry line-item data ({((data.coverage.orders_with_line_items / data.coverage.orders_total) * 100).toFixed(0)}%). </>
+        )}
+      </div>
     </section>
   )
 }

@@ -110,22 +110,29 @@ def units_by_product_in_window(
     start: Optional[date] = None,
     end: Optional[date] = None,
 ) -> dict[str, dict[str, Any]]:
-    """Sum Shopify line-item quantities by product family within
-    [start, end). Returns ``{product: {units, revenue}}`` plus
-    coverage stats.
+    """Sum NET line-item revenue by product family within [start, end).
 
-    Two correctness considerations:
-    1. ``shopify_order_events`` polls the same order multiple times —
-       each ``poll.order_snapshot`` row carries the full line_items
-       array. We dedupe by ``order_id`` and take the LATEST snapshot
-       so units don't multi-count.
-    2. Window filtering uses ``event_timestamp`` (the order's source
-       timestamp from Shopify), not ``business_date`` (a derived
-       date). The earlier draft referenced ``created_at_source``,
-       which doesn't exist on this table — that was a copy from the
-       Freshdesk ticket schema.
+    Net revenue means: per-line ``price * quantity`` MINUS line-level
+    discount, MINUS the line's pro-rata share of order-level discount
+    (when ``line.total_discount`` doesn't already absorb it).
+
+    Excluded from the rollup:
+    - Cancelled orders (``cancelled_at`` set)
+    - Fully refunded orders (``financial_status='refunded'``)
+    Partially refunded orders stay in (Shopify's ``total_price`` is
+    pre-refund, so we subtract the refund amount in
+    ``compute_gross_profit`` per-order).
+
+    Other correctness:
+    - Polls the same order multiple times — dedupe by order_id taking
+      the LATEST snapshot.
+    - Window filter uses event_timestamp (the order's source-side
+      timestamp), not business_date.
     """
-    where_parts = ["event_type = 'poll.order_snapshot'", "order_id IS NOT NULL"]
+    where_parts = [
+        "event_type = 'poll.order_snapshot'",
+        "order_id IS NOT NULL",
+    ]
     params: dict[str, Any] = {}
     if start is not None:
         where_parts.append("event_timestamp >= :start_ts")
@@ -135,7 +142,8 @@ def units_by_product_in_window(
         params["end_ts"] = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc)
     where_sql = " AND ".join(where_parts)
 
-    # Dedupe to the latest snapshot per order_id, then expand line_items.
+    # Pull (order, line) pairs for non-cancelled, non-fully-refunded orders.
+    # Carry order-level fields so we can pro-rate discounts and subtract refunds.
     rows = db.execute(text(f"""
         WITH latest AS (
             SELECT DISTINCT ON (order_id)
@@ -146,49 +154,104 @@ def units_by_product_in_window(
             WHERE {where_sql}
             ORDER BY order_id, event_timestamp DESC NULLS LAST, id DESC
         ),
-        li AS (
-            SELECT jsonb_array_elements(raw_payload->'line_items') AS line
-            FROM latest
-            WHERE jsonb_typeof(raw_payload->'line_items') = 'array'
+        eligible AS (
+            SELECT * FROM latest
+            WHERE COALESCE(raw_payload->>'cancelled_at', '') = ''
+              AND COALESCE(raw_payload->>'financial_status', '') <> 'refunded'
+              AND jsonb_typeof(raw_payload->'line_items') = 'array'
         )
         SELECT
-            lower(coalesce(line->>'title', '')) AS title,
+            order_id,
+            COALESCE((raw_payload->>'total_discounts')::numeric, 0) AS order_disc,
+            COALESCE((raw_payload->>'financial_status')::text, '') AS fin_status,
+            line->>'title' AS title,
             COALESCE((line->>'quantity')::int, 0) AS qty,
-            COALESCE((line->>'price')::numeric, 0) AS unit_price
-        FROM li
+            COALESCE((line->>'price')::numeric, 0) AS unit_price,
+            COALESCE((line->>'total_discount')::numeric, 0) AS line_disc
+        FROM eligible, jsonb_array_elements(raw_payload->'line_items') AS line
     """), params).all()
+
+    # Group by order to allocate any leftover order-level discount across lines.
+    by_order: dict[str, list[dict[str, Any]]] = {}
+    order_discount: dict[str, float] = {}
+    for r in rows:
+        oid = r.order_id
+        by_order.setdefault(oid, []).append({
+            "title": r.title or "",
+            "qty": int(r.qty),
+            "unit_price": float(r.unit_price),
+            "line_disc": float(r.line_disc),
+        })
+        order_discount[oid] = float(r.order_disc)
 
     by_product: dict[str, dict[str, Any]] = {p: {"units": 0, "revenue": 0.0} for p in PRODUCTS}
     unclassified_units = 0
     unclassified_revenue = 0.0
-    for title, qty, unit_price in rows:
-        fam = _classify_line_item_title(title)
-        revenue = float(unit_price) * int(qty)
-        if fam is None:
-            unclassified_units += int(qty)
-            unclassified_revenue += revenue
-            continue
-        by_product[fam]["units"] += int(qty)
-        by_product[fam]["revenue"] += revenue
+    total_discount_applied = 0.0
 
-    # Coverage: distinct orders in window vs distinct orders carrying line_items.
-    cov_total = db.execute(text(f"""
-        SELECT count(DISTINCT order_id) FROM shopify_order_events
-        WHERE {where_sql}
-    """), params).scalar() or 0
-    cov_with = db.execute(text(f"""
-        SELECT count(DISTINCT order_id) FROM shopify_order_events
-        WHERE {where_sql}
-          AND jsonb_typeof(raw_payload->'line_items') = 'array'
-    """), params).scalar() or 0
+    for oid, lines in by_order.items():
+        gross_lines = [l["unit_price"] * l["qty"] for l in lines]
+        order_gross = sum(gross_lines) or 1.0  # avoid div0
+        line_disc_sum = sum(l["line_disc"] for l in lines)
+        # Any order-level discount NOT already represented in line.total_discount
+        # gets allocated proportionally across line gross.
+        order_disc_total = order_discount.get(oid, 0.0)
+        unallocated = max(0.0, order_disc_total - line_disc_sum)
+        for i, l in enumerate(lines):
+            gross = gross_lines[i]
+            allocated_extra = (gross / order_gross) * unallocated if order_gross else 0
+            net_line = max(0.0, gross - l["line_disc"] - allocated_extra)
+            total_discount_applied += (l["line_disc"] + allocated_extra)
+            fam = _classify_line_item_title(l["title"])
+            if fam is None:
+                unclassified_units += l["qty"]
+                unclassified_revenue += net_line
+            else:
+                by_product[fam]["units"] += l["qty"]
+                by_product[fam]["revenue"] += net_line
+
+    # Coverage / counts
+    counts = db.execute(text(f"""
+        WITH latest AS (
+            SELECT DISTINCT ON (order_id) order_id, raw_payload
+            FROM shopify_order_events
+            WHERE {where_sql}
+            ORDER BY order_id, event_timestamp DESC NULLS LAST, id DESC
+        )
+        SELECT
+            count(*) AS total_orders,
+            count(*) FILTER (WHERE jsonb_typeof(raw_payload->'line_items') = 'array') AS orders_with_lines,
+            count(*) FILTER (WHERE COALESCE(raw_payload->>'cancelled_at','') <> '') AS cancelled,
+            count(*) FILTER (WHERE raw_payload->>'financial_status' = 'refunded') AS refunded,
+            count(*) FILTER (WHERE raw_payload->>'financial_status' = 'partially_refunded') AS partial_refund,
+            COALESCE(SUM((raw_payload->>'total_price')::numeric) FILTER (WHERE raw_payload->>'financial_status' = 'refunded'), 0) AS refunded_amt
+        FROM latest
+    """), params).first()
 
     return {
         "by_product": by_product,
         "unclassified_units": unclassified_units,
         "unclassified_revenue": unclassified_revenue,
-        "coverage_orders_with_line_items": int(cov_with),
-        "coverage_orders_total": int(cov_total),
+        "discounts_applied_usd": total_discount_applied,
+        "excluded": {
+            "cancelled_orders": int(counts.cancelled or 0),
+            "refunded_orders": int(counts.refunded or 0),
+            "refunded_revenue_usd": float(counts.refunded_amt or 0),
+            "partially_refunded_orders": int(counts.partial_refund or 0),
+        },
+        "coverage_orders_with_line_items": int(counts.orders_with_lines or 0),
+        "coverage_orders_total": int(counts.total_orders or 0),
     }
+
+
+# Estimated cost-of-goods ratio applied to accessory line items (covers,
+# side shelves, rotisseries, lift kits, replacement parts, etc.) where
+# we don't have an extracted CBOM. 0.50 is the operator's stated prior:
+# "COGS is roughly 40-50% of retail" — staying at the high end keeps the
+# blended margin honest rather than rosy. Surface in the API response so
+# the dashboard footnotes "accessories estimated at X% COGS" and Joseph
+# can override if needed.
+DEFAULT_ACCESSORY_COGS_RATIO = 0.50
 
 
 def compute_gross_profit(
@@ -197,6 +260,7 @@ def compute_gross_profit(
     days: Optional[int] = None,
     start: Optional[date] = None,
     end: Optional[date] = None,
+    accessory_cogs_ratio: float = DEFAULT_ACCESSORY_COGS_RATIO,
 ) -> dict[str, Any]:
     """Cross-platform gross-profit calculator. Joins per-product unit
     counts with canonical COGS to produce revenue, COGS, gross profit,
@@ -205,6 +269,11 @@ def compute_gross_profit(
 
     Window precedence: explicit (start, end) > days-back from today.
     Default (no args) = lifetime.
+
+    Accessory revenue (line items that aren't a core grill/controller)
+    has no extracted CBOM, so we apply ``accessory_cogs_ratio`` (default
+    50%) as an estimate. The blended margin reflects that estimate;
+    classified per-product margins are exact.
     """
     if start is None and end is None and days is not None:
         end = date.today()
@@ -260,11 +329,27 @@ def compute_gross_profit(
             "cogs_source_web_url": cogs_row.get("source_web_url") if cogs_row else None,
         })
 
-    # Unclassified line items (accessories, etc.) count as revenue with 0 COGS
+    # Accessory line items have no extracted CBOM. Apply the operator's
+    # stated COGS prior (default 50% of retail) as an estimate so the
+    # blended margin reflects real economics rather than treating
+    # accessories as 100% margin.
     unclassified_rev = float(units_data["unclassified_revenue"])
+    accessory_cogs = unclassified_rev * accessory_cogs_ratio
     total_revenue_with_unclassified = total_revenue + unclassified_rev
-    overall_gross_profit = total_revenue_with_unclassified - total_cogs
+    total_cogs_with_estimate = total_cogs + accessory_cogs
+    overall_gross_profit = total_revenue_with_unclassified - total_cogs_with_estimate
     overall_margin = (overall_gross_profit / total_revenue_with_unclassified * 100) if total_revenue_with_unclassified > 0 else None
+
+    if unclassified_rev > 0:
+        flags.append({
+            "severity": "info",
+            "product": "accessories",
+            "issue": (
+                f"Accessory revenue (${unclassified_rev:,.0f}) has no extracted CBOM. "
+                f"Applied estimated COGS at {int(accessory_cogs_ratio * 100)}% of retail (${accessory_cogs:,.0f}). "
+                f"Replace with extracted accessory BOMs for exact margins."
+            ),
+        })
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -278,12 +363,20 @@ def compute_gross_profit(
             "revenue_classified_usd": round(total_revenue, 2),
             "revenue_unclassified_usd": round(unclassified_rev, 2),
             "units_sold": total_units,
-            "applied_cogs_usd": round(total_cogs, 2),
+            "applied_cogs_usd": round(total_cogs_with_estimate, 2),
+            "applied_cogs_classified_usd": round(total_cogs, 2),
+            "applied_cogs_accessory_estimate_usd": round(accessory_cogs, 2),
             "gross_profit_usd": round(overall_gross_profit, 2),
             "gross_margin_pct": round(overall_margin, 2) if overall_margin is not None else None,
+            "discounts_applied_usd": round(units_data.get("discounts_applied_usd", 0.0), 2),
         },
         "by_product": by_product,
         "data_quality_flags": flags,
+        "accessory_assumption": {
+            "ratio": accessory_cogs_ratio,
+            "note": "Accessories use estimated COGS — replace by extracting per-accessory CBOMs.",
+        },
+        "excluded": units_data.get("excluded", {}),
         "coverage": {
             "orders_with_line_items": units_data["coverage_orders_with_line_items"],
             "orders_total": units_data["coverage_orders_total"],
