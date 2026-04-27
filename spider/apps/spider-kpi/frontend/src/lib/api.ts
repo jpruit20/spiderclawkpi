@@ -1918,7 +1918,14 @@ export interface FinancialsCogsTable {
 
 export interface FinancialsGrossProfit {
   generated_at: string
-  window: { start: string | null; end: string | null; days: number | null }
+  window: {
+    start: string | null
+    end: string | null
+    days: number | null
+    requested_start?: string | null
+    clamped?: boolean
+    clamp_reason?: string | null
+  }
   totals: {
     revenue_usd: number
     revenue_classified_usd: number

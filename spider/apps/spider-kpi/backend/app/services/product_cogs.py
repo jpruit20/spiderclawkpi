@@ -357,23 +357,28 @@ def compute_gross_profit(
         end = date.today()
         start = end - timedelta(days=days)
 
-    # When no window is specified at all, the "lifetime" rollup is
-    # misleading because Shopify line_items capture only started 2026-
-    # 04-21 while ShipStation history goes back years. Constrain to
-    # the actual order-data coverage window so revenue and shipping
-    # are measured over the same span.
-    if start is None and end is None:
-        bounds = db.execute(text("""
-            SELECT
-                MIN(event_timestamp)::date AS start_d,
-                (MAX(event_timestamp) + INTERVAL '1 day')::date AS end_d
-            FROM shopify_order_events
-            WHERE event_type='poll.order_snapshot'
-              AND jsonb_typeof(raw_payload->'line_items') = 'array'
-        """)).first()
-        if bounds and bounds.start_d:
-            start = bounds.start_d
-            end = bounds.end_d
+    # Whatever window the caller asks for, we MUST measure revenue +
+    # COGS + shipping over the same calendar span — otherwise totals
+    # don't reconcile. Shopify line_items capture only started landing
+    # in late April 2026, so any window stretching earlier than that
+    # has zero revenue-side coverage but full shipping-cost coverage,
+    # which produces nonsense (GP > rev or large negative margins).
+    # Clamp start to the earliest order with line_items so every window
+    # is apples-to-apples. Surface the effective window in the response
+    # so the frontend can label it.
+    line_items_floor = db.execute(text("""
+        SELECT MIN(business_date)::date
+        FROM shopify_order_events
+        WHERE event_type='poll.order_snapshot'
+          AND jsonb_typeof(raw_payload->'line_items') = 'array'
+    """)).scalar()
+    requested_start = start
+    if line_items_floor is not None:
+        if start is None or start < line_items_floor:
+            start = line_items_floor
+        if end is None:
+            end = (date.today() + timedelta(days=1))
+    window_clamped = (requested_start is not None and requested_start != start)
 
     cogs_table = get_canonical_cogs(db)
     units_data = units_by_product_in_window(db, start=start, end=end)
@@ -502,6 +507,13 @@ def compute_gross_profit(
             "start": start.isoformat() if start else None,
             "end": end.isoformat() if end else None,
             "days": days,
+            "requested_start": requested_start.isoformat() if requested_start else None,
+            "clamped": window_clamped,
+            "clamp_reason": (
+                f"Window clamped to line_items coverage start ({start.isoformat() if start else 'unknown'}). "
+                "Shopify line_items capture only began on this date — revenue prior to it cannot be reconciled "
+                "to COGS/shipping at the line-item level. Pass a later start to see a sub-window."
+            ) if window_clamped else None,
         },
         "totals": {
             "revenue_usd": round(total_revenue_with_unclassified, 2),

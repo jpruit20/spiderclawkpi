@@ -231,6 +231,11 @@ export function GrossProfitCard({ days = 30, compact = false, title }: Props) {
 
       {/* Methodology footnote — explicit so the number is auditable */}
       <div style={{ marginTop: 10, fontSize: 10, color: 'var(--muted)', lineHeight: 1.6 }}>
+        {data.window.clamped && data.window.clamp_reason && (
+          <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid var(--orange)', padding: '6px 8px', borderRadius: 3, marginBottom: 6, color: 'var(--orange)' }}>
+            ⚠ <strong>Window clamped:</strong> requested {data.window.requested_start} → got {data.window.start} (line_items coverage starts here). Numbers reflect the {data.window.start} → {data.window.end} window so revenue, COGS, and shipping all measure the same span.
+          </div>
+        )}
         <strong>How this is computed:</strong> net revenue after order + line discounts; cancelled and fully-refunded orders excluded.
         {' '}
         {data.totals.discounts_applied_usd != null && data.totals.discounts_applied_usd > 0 && (
