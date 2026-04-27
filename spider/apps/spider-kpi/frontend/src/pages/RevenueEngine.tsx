@@ -14,6 +14,7 @@ import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { ChannelMixCard } from '../components/ChannelMixCard'
 import { DivisionHero } from '../components/DivisionHero'
 import { ApiError, api } from '../lib/api'
+import type { FinancialsGrossProfit } from '../lib/api'
 import { currency, deltaPct, deltaDirection, fmtPct, fmtInt } from '../lib/format'
 import { KPIDaily } from '../lib/types'
 import { buildPresetRange, filterRowsByRange, type RangeState } from '../lib/range'
@@ -78,6 +79,28 @@ export function RevenueEngine() {
     return compareMode === 'same_day_last_week' ? sameDayLastWeekRows(allRows, currentRows) : priorPeriodRows(allRows, currentRows)
   }, [allRows, currentRows, compareMode])
 
+  // Pull canonical gross profit for the active window — same numbers
+  // as Executive / Commercial / Marketing / Command Center pages.
+  // SharePoint COGS + ShipStation shipping + ad spend folded in.
+  const [gpCurrent, setGpCurrent] = useState<FinancialsGrossProfit | null>(null)
+  const [gpPrior, setGpPrior] = useState<FinancialsGrossProfit | null>(null)
+  useEffect(() => {
+    if (!currentRows.length) return
+    const ctl = new AbortController()
+    const cStart = currentRows[0].business_date
+    const cEnd = currentRows[currentRows.length - 1].business_date
+    // /gross-profit treats end as exclusive — bump by 1 day
+    const endDate = (() => { const d = new Date(cEnd); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10) })()
+    api.financialsGrossProfit({ start: cStart, end: endDate }, ctl.signal).then(setGpCurrent).catch(() => setGpCurrent(null))
+    if (priorRows.length) {
+      const pStart = priorRows[0].business_date
+      const pEnd = priorRows[priorRows.length - 1].business_date
+      const pEndPlus = (() => { const d = new Date(pEnd); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10) })()
+      api.financialsGrossProfit({ start: pStart, end: pEndPlus }, ctl.signal).then(setGpPrior).catch(() => setGpPrior(null))
+    }
+    return () => ctl.abort()
+  }, [currentRows, priorRows])
+
   const rev = sum(currentRows, 'revenue')
   const revPrior = sum(priorRows, 'revenue')
   const grossRev = sum(currentRows, 'gross_revenue')
@@ -95,17 +118,34 @@ export function RevenueEngine() {
   const aovPrior = avg(priorRows, 'average_order_value')
   const mer = adSpend > 0 ? rev / adSpend : 0
   const merPrior = sum(priorRows, 'ad_spend') > 0 ? revPrior / sum(priorRows, 'ad_spend') : 0
-  const grossProfit = rev - refunds - adSpend
-  const grossProfitPrior = revPrior - sum(priorRows, 'refunds') - sum(priorRows, 'ad_spend')
+  // Canonical GP from /api/financials/gross-profit (SharePoint COGS +
+  // ShipStation shipping subtracted). Falls back to revenue−refunds−adSpend
+  // ONLY while the canonical fetch is in flight, never as steady state.
+  const grossProfit = gpCurrent?.totals.gross_profit_usd ?? (rev - refunds - adSpend)
+  const grossProfitPrior = gpPrior?.totals.gross_profit_usd ?? (revPrior - sum(priorRows, 'refunds') - sum(priorRows, 'ad_spend'))
+  const grossMarginPct = gpCurrent?.totals.gross_margin_pct ?? (rev > 0 ? (grossProfit / rev) * 100 : 0)
+  const contributionMargin = gpCurrent?.totals.contribution_margin_usd ?? null
+  const contributionMarginPct = gpCurrent?.totals.contribution_margin_pct ?? null
+  const appliedCogs = gpCurrent?.totals.applied_cogs_usd ?? 0
+  const appliedShipping = gpCurrent?.totals.applied_shipping_usd ?? 0
+  const isCanonicalGp = gpCurrent != null
   const discountRate = rev > 0 ? (discounts / (rev + discounts)) * 100 : 0
 
   const kpiCards = useMemo<KpiCardDef[]>(() => [
     { label: 'Gross Sales', value: currency(grossRev), sub: 'Shopify total_price · matches Shopify admin "Total sales"', truthState: 'canonical', delta: { text: deltaPct(grossRev, grossRevPrior), direction: deltaDirection(grossRev, grossRevPrior) } },
     { label: 'Net Sales', value: currency(rev), sub: `${currentRows.length} days · post-refund, cancellations zeroed`, truthState: 'canonical', delta: { text: deltaPct(rev, revPrior), direction: deltaDirection(rev, revPrior) } },
-    { label: 'Gross Profit Proxy', value: currency(grossProfit), sub: `Net − refunds − ad spend${discounts > 0 ? ` · ${fmtPct(discountRate / 100, 1)} discount rate` : ''}`, truthState: 'proxy', delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) } },
+    {
+      label: 'Gross Profit',
+      value: currency(grossProfit),
+      sub: isCanonicalGp
+        ? `${grossMarginPct.toFixed(1)}% margin · CBOM COGS + shipping applied`
+        : 'loading canonical…',
+      truthState: isCanonicalGp ? 'canonical' : 'proxy',
+      delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) },
+    },
     { label: 'MER', value: mer > 0 ? `${mer.toFixed(1)}x` : '\u2014', sub: 'Net sales / ad spend', truthState: 'canonical', delta: merPrior > 0 ? { text: deltaPct(mer, merPrior), direction: deltaDirection(mer, merPrior) } : undefined },
     { label: 'Conversion', value: fmtPct(convAvg / 100, 2), sub: 'Period average', truthState: 'canonical', delta: { text: deltaPct(convAvg, convPrior), direction: deltaDirection(convAvg, convPrior) } },
-  ], [grossRev, grossRevPrior, rev, revPrior, grossProfit, grossProfitPrior, mer, merPrior, convAvg, convPrior, currentRows.length, discounts, discountRate])
+  ], [grossRev, grossRevPrior, rev, revPrior, grossProfit, grossProfitPrior, grossMarginPct, isCanonicalGp, mer, merPrior, convAvg, convPrior, currentRows.length])
 
   const chartData = useMemo(() => {
     return currentRows.map((r, i) => ({
@@ -126,7 +166,7 @@ export function RevenueEngine() {
       {(() => {
         const target = revPrior * 1.1  // +10% growth as the implicit plan
         const revProgress = target > 0 ? rev / target : 0
-        const marginPct = rev > 0 ? grossProfit / rev : 0
+        const marginPct = grossMarginPct / 100
         const revState: 'good' | 'warn' | 'bad' | 'neutral' =
           revProgress >= 1 ? 'good' : revProgress >= 0.85 ? 'warn' : revProgress > 0 ? 'bad' : 'neutral'
         const merState: 'good' | 'warn' | 'bad' | 'neutral' =
@@ -137,7 +177,7 @@ export function RevenueEngine() {
             accentColorSoft="#ec4899"
             signature="revenueDial"
             title="Revenue Engine"
-            subtitle="Financial scoreboard — revenue, margin, MER, AOV, conversion. Gross Profit is a proxy until COGS + shipping cost data land."
+            subtitle="Financial scoreboard — revenue, margin, MER, AOV, conversion. Gross profit pulls SharePoint-extracted CBOM COGS + ShipStation shipping from the canonical /api/financials/gross-profit endpoint."
             rightMeta={
               <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
                 <div>{range.preset ? `Range · ${range.preset}` : 'Custom range'}</div>
@@ -163,7 +203,9 @@ export function RevenueEngine() {
               {
                 label: 'Gross profit',
                 value: currency(grossProfit),
-                sublabel: grossProfitPrior !== 0 ? `${((grossProfit - grossProfitPrior) / Math.abs(grossProfitPrior) * 100).toFixed(0)}% vs prior` : undefined,
+                sublabel: isCanonicalGp
+                  ? `${grossMarginPct.toFixed(1)}% margin${grossProfitPrior !== 0 ? ` · ${((grossProfit - grossProfitPrior) / Math.abs(grossProfitPrior) * 100).toFixed(0)}% vs prior` : ''}`
+                  : 'loading canonical…',
                 state: grossProfit >= grossProfitPrior ? 'good' : 'warn',
               },
             ]}
@@ -220,10 +262,14 @@ export function RevenueEngine() {
 
           <ProvenanceBanner
             compact
-            truthState="proxy"
+            truthState={isCanonicalGp ? 'canonical' : 'proxy'}
             lastUpdated={currentRows.length ? currentRows[currentRows.length - 1]?.business_date : undefined}
-            scope={`${currentRows.length}-day window · Shopify + Triple Whale`}
-            caveat="Gross Profit is a proxy (revenue − refunds − ad spend). True margin requires COGS and shipping cost data not yet ingested. Discounts are pre-applied in Shopify's total_price."
+            scope={`${currentRows.length}-day window · Shopify + Triple Whale + SharePoint CBOMs + ShipStation`}
+            caveat={
+              isCanonicalGp
+                ? `Gross Profit = Net Revenue − ${currency(appliedCogs)} COGS (incl. ${currency(appliedShipping)} shipping) − applied accessory estimate. Same canonical figures as Executive / Commercial / Marketing pages.`
+                : 'Loading canonical /api/financials/gross-profit — temporary proxy displayed until response lands.'
+            }
           />
 
           {/* Auto-generated revenue insight */}
@@ -242,9 +288,12 @@ export function RevenueEngine() {
                 <div className="venom-breakdown-row"><span>Net Sales</span><span className="venom-breakdown-val">{currency(rev)}</span><TruthBadge state="canonical" /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>post-refund</span></div>
                 <div className="venom-breakdown-row"><span>Refunds</span><span className="venom-breakdown-val">{currency(refunds)}</span><TruthBadge state="canonical" /></div>
                 <div className="venom-breakdown-row"><span>Discounts</span><span className="venom-breakdown-val">{discounts > 0 ? currency(discounts) : '$0.00'}</span><TruthBadge state={discounts > 0 ? 'canonical' : 'proxy'} />{discounts > 0 && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>({fmtPct(discountRate / 100, 1)} of gross)</span>}</div>
+                <div className="venom-breakdown-row"><span>Product COGS</span><span className="venom-breakdown-val">{currency(gpCurrent?.totals.applied_cogs_classified_usd ?? 0)}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>SharePoint CBOMs</span></div>
+                <div className="venom-breakdown-row"><span>Accessory COGS (est)</span><span className="venom-breakdown-val">{currency(gpCurrent?.totals.applied_cogs_accessory_estimate_usd ?? 0)}</span><TruthBadge state={isCanonicalGp ? 'estimated' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>50% of accessory revenue</span></div>
+                <div className="venom-breakdown-row"><span>Shipping</span><span className="venom-breakdown-val">{currency(appliedShipping)}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>ShipStation carrier cost</span></div>
                 <div className="venom-breakdown-row"><span>Ad Spend</span><span className="venom-breakdown-val">{currency(adSpend)}</span><TruthBadge state="canonical" /></div>
-                <div className="venom-breakdown-row"><span>Gross Profit Proxy</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state="proxy" /></div>
-                <div className="venom-breakdown-row"><span>Contribution</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state="proxy" /></div>
+                <div className="venom-breakdown-row"><span>Gross Profit</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>{isCanonicalGp ? `${grossMarginPct.toFixed(1)}% margin` : 'loading…'}</span></div>
+                <div className="venom-breakdown-row"><span>Contribution Margin</span><span className="venom-breakdown-val">{contributionMargin != null ? currency(contributionMargin) : '—'}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>{contributionMarginPct != null ? `${contributionMarginPct.toFixed(1)}% · GP − ad spend` : 'GP − ad spend'}</span></div>
               </div>
             </section>
 
