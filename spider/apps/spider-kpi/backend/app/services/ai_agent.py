@@ -38,7 +38,8 @@ CLI_MAX_BUDGET_USD = 2.00
 # development. Once we're done, we can turn that back down to $10."
 # To revert Conor: remove the entry from this dict.
 TIER_OVERRIDES: dict[str, str] = {
-    "conor@spidergrills.com": "owner",  # TEMPORARY — revert to default 'division_lead' after dashboard build wraps
+    "conor@spidergrills.com": "owner",     # TEMPORARY — revert to default 'division_lead' after dashboard build wraps
+    "jeremiah@spidergrills.com": "owner",  # TEMPORARY — same as Conor; revert with him
 }
 
 
