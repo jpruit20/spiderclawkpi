@@ -23,6 +23,28 @@ def ensure_cx_action_storage(db: Session) -> None:
     raise RuntimeError('cx_actions table missing in production; apply Alembic migration 20260407_0005_cx_actions.py')
 
 
+def _coerce_snapshot_timestamp(snapshot: dict[str, Any] | None) -> None:
+    """The CX action evaluators are now called from the cache-first
+    /api/cx/snapshot route, which passes a JSON-round-tripped payload.
+    JSON has no datetime — `snapshot_timestamp` arrives as an ISO
+    string. Coerce it back to datetime so _build_signal's
+    `.isoformat()` call (and the ActionSignal model) keep working.
+
+    Tolerant: leaves None alone, leaves real datetimes alone, parses
+    Z-suffix and offset-aware ISO strings."""
+    if snapshot is None:
+        return
+    ts = snapshot.get('snapshot_timestamp')
+    if ts is None or isinstance(ts, datetime):
+        return
+    if isinstance(ts, str):
+        try:
+            # fromisoformat handles "+00:00" but not "Z" before py3.11.
+            snapshot['snapshot_timestamp'] = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+        except ValueError:
+            snapshot['snapshot_timestamp'] = None
+
+
 def _build_signal(metric: dict[str, Any], snapshot_timestamp: datetime, product_linked: bool) -> ActionSignal | None:
     if metric['status'] == 'green' or not metric.get('trigger_condition'):
         return None
@@ -51,6 +73,7 @@ def _build_signal(metric: dict[str, Any], snapshot_timestamp: datetime, product_
 def evaluateCustomerExperienceActions(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
     ensure_cx_action_storage(db)
     snapshot = snapshot or build_customer_experience_snapshot(db)
+    _coerce_snapshot_timestamp(snapshot)
     if snapshot.get('snapshot_timestamp') is None:
         return []
     grid_metrics = snapshot['grid_metrics']
@@ -69,6 +92,7 @@ def evaluateCustomerExperienceActions(db: Session, snapshot: dict[str, Any] | No
 def evaluateActionClosure(db: Session, snapshot: dict[str, Any] | None = None) -> list[CXAction]:
     ensure_cx_action_storage(db)
     snapshot = snapshot or build_customer_experience_snapshot(db)
+    _coerce_snapshot_timestamp(snapshot)
     if snapshot.get('snapshot_timestamp') is None:
         return []
     metric_map = {metric['key']: metric for metric in snapshot['grid_metrics']}
