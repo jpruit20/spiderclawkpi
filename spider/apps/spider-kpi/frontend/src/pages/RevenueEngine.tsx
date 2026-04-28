@@ -5,6 +5,9 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
+import { usePageConfig } from '../lib/usePageConfig'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
 import { BaselineBand } from '../components/BaselineBand'
@@ -46,6 +49,7 @@ function generateRevenueInsight(rev: number, revPrior: number, sessions: number,
 }
 
 export function RevenueEngine() {
+  const cfg = usePageConfig('revenue')
   const [allRows, setAllRows] = useState<KPIDaily[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -237,6 +241,8 @@ export function RevenueEngine() {
 
       {!loading && !error ? (
         <>
+          <DivisionPageHeader cfg={cfg} divisionLabel="Revenue Engine · Joseph" />
+
           <div className="toolbar">
             <RangeToolbar rows={allRows} range={range} onChange={setRange} />
             <CompareToolbar mode={compareMode} onChange={setCompareMode} />
@@ -351,39 +357,50 @@ export function RevenueEngine() {
             </CollapsibleSection>
           )}
 
-          {/* Trend Chart */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Revenue Trend</strong>
-              <span className="venom-panel-hint">{currentRows.length} days</span>
-            </div>
-            {chartData.length > 0 ? (
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height={320}>
-                  <ComposedChart data={chartData}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                    <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="left" stroke="#9fb0d4" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
-                    <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" />
-                    <Tooltip />
-                    <Legend />
-                    <Area yAxisId="left" type="monotone" name="Revenue" dataKey="revenue" fill="rgba(110,168,255,0.12)" stroke="var(--blue)" strokeWidth={2} />
-                    <Line yAxisId="left" type="monotone" name="Prior revenue" dataKey="prior_revenue" stroke="var(--blue)" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
-                    <Line yAxisId="right" type="monotone" name="Sessions" dataKey="sessions" stroke="var(--orange)" strokeWidth={1.5} dot={false} />
-                    <Line yAxisId="right" type="monotone" name="Orders" dataKey="orders" stroke="var(--green)" strokeWidth={1.5} dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            ) : <div className="state-message">No trend data available.</div>}
-          </section>
-
-          {/* Duplicate "Insight" card removed — same insight already
-              renders inline above the composition fold. */}
-
-          {/* Channel spend mix — Triple Whale */}
-          {range.startDate && range.endDate ? (
-            <ChannelMixCard range={{ startDate: range.startDate, endDate: range.endDate }} />
-          ) : null}
+          {/* Editing layer — trend chart + channel mix are draggable
+              when Joseph turns on Customize via the header above. */}
+          <GridEditor
+            cfg={cfg}
+            items={[
+              {
+                id: 'revenue_trend',
+                defaultH: 14,
+                node: (
+                  <section className="card" style={{ height: '100%' }}>
+                    <div className="venom-panel-head">
+                      <strong>Revenue Trend</strong>
+                      <span className="venom-panel-hint">{currentRows.length} days</span>
+                    </div>
+                    {chartData.length > 0 ? (
+                      <div className="chart-wrap">
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ComposedChart data={chartData}>
+                            <CartesianGrid stroke="rgba(255,255,255,0.08)" />
+                            <XAxis dataKey="date" stroke="#9fb0d4" tick={{ fontSize: 11 }} />
+                            <YAxis yAxisId="left" stroke="#9fb0d4" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#9fb0d4" />
+                            <Tooltip />
+                            <Legend />
+                            <Area yAxisId="left" type="monotone" name="Revenue" dataKey="revenue" fill="rgba(110,168,255,0.12)" stroke="var(--blue)" strokeWidth={2} />
+                            <Line yAxisId="left" type="monotone" name="Prior revenue" dataKey="prior_revenue" stroke="var(--blue)" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+                            <Line yAxisId="right" type="monotone" name="Sessions" dataKey="sessions" stroke="var(--orange)" strokeWidth={1.5} dot={false} />
+                            <Line yAxisId="right" type="monotone" name="Orders" dataKey="orders" stroke="var(--green)" strokeWidth={1.5} dot={false} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : <div className="state-message">No trend data available.</div>}
+                  </section>
+                ),
+              },
+              ...(range.startDate && range.endDate
+                ? [{
+                    id: 'channel_mix',
+                    defaultH: 12,
+                    node: <ChannelMixCard range={{ startDate: range.startDate, endDate: range.endDate }} />,
+                  }] satisfies GridEditorItem[]
+                : []),
+            ] satisfies GridEditorItem[]}
+          />
 
           {/* Slim drill-down strip — folded by default. */}
           <CollapsibleSection

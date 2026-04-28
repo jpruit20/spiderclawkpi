@@ -5,6 +5,8 @@ import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { usePageConfig } from '../lib/usePageConfig'
 import { fmtPct, fmtInt, formatFreshness } from '../lib/format'
 import { ApiError, api } from '../lib/api'
 import { frictionRankingScore } from '../lib/operatingModel'
@@ -32,6 +34,7 @@ const DRILL_ROUTES: { path: string; label: string; icon: string }[] = [
 ]
 
 export function IssueRadar() {
+  const cfg = usePageConfig('issue_radar')
   const [data, setData] = useState<IssueRadarResponse>({
     signals: [],
     clusters: [],
@@ -211,6 +214,8 @@ export function IssueRadar() {
 
       {!loading && !error ? (
         <>
+          <DivisionPageHeader cfg={cfg} divisionLabel="Issue Radar · Joseph" />
+
           {/* TruthLegend folded — viewers click in when they need the
               canonical/proxy/estimated key. */}
           <CollapsibleSection

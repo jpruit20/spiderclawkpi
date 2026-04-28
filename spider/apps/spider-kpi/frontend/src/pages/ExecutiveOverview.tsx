@@ -16,7 +16,10 @@ import { EventAnnotationList } from '../components/EventAnnotationList'
 import { StatePanel } from '../components/StatePanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
 import { ApiError, api } from '../lib/api'
+import { usePageConfig } from '../lib/usePageConfig'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
 import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
 import { useUrlRange } from '../lib/urlRange'
@@ -55,6 +58,7 @@ function isIncompleteLatestDay(row?: KPIDaily) {
 }
 
 export function ExecutiveOverview() {
+  const cfg = usePageConfig('executive')
   const todayDate = businessTodayDate()
   const [data, setData] = useState<OverviewResponse | null>(null)
   const [intraday, setIntraday] = useState<KPIIntraday | null>(null)
@@ -262,6 +266,8 @@ export function ExecutiveOverview() {
         <p>Truthful KPI scope, clear intraday status, and source health that reflects what is actually live.</p>
       </div>
 
+      <DivisionPageHeader cfg={cfg} divisionLabel="Executive Overview · Joseph" />
+
       <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
       <StaleDataBanner rows={liveConnectors} />
 
@@ -270,9 +276,25 @@ export function ExecutiveOverview() {
 
       {!loading && !error && data ? (
         <>
-          <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
-          <GrossProfitCard days={30} />
-          <ActionBlock items={actionItems} />
+          {/* Editing layer — KpiGrid / GrossProfit / ActionBlock are
+              draggable + resizable when Joseph turns on Customize.
+              Larger conditional blocks (trend charts, baseline band,
+              event timeline) stay outside for now to avoid layout
+              regressions on small viewports. */}
+          <GridEditor
+            cfg={cfg}
+            items={[
+              {
+                id: 'kpi_grid',
+                defaultH: 14,
+                node: (
+                  <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
+                ),
+              },
+              { id: 'gross_profit', defaultH: 10, node: <GrossProfitCard days={30} /> },
+              { id: 'action_block', defaultH: 10, node: <ActionBlock items={actionItems} /> },
+            ] satisfies GridEditorItem[]}
+          />
           <CollapsibleSection
             id="exec-thresholds"
             title="Threshold tripwires"

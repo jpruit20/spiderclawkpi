@@ -4,6 +4,8 @@ import { Card } from '../components/Card'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { usePageConfig } from '../lib/usePageConfig'
 import { DivisionHero } from '../components/DivisionHero'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
@@ -74,6 +76,7 @@ function timeAgo(dateStr: string | undefined): string {
 }
 
 export function SocialIntelligence() {
+  const cfg = usePageConfig('social')
   const [pulse, setPulse] = useState<SocialPulse | null>(null)
   const [trends, setTrends] = useState<SocialTrendsResponse | null>(null)
   const [mentions, setMentions] = useState<SocialMention[]>([])
@@ -272,6 +275,8 @@ export function SocialIntelligence() {
 
       {!loading && !error ? (
         <>
+          <DivisionPageHeader cfg={cfg} divisionLabel="Social Intelligence · Joseph" />
+
           {/* Section nav rendered once in the DivisionHero rightMeta;
               the duplicate row that used to appear here was removed. */}
 

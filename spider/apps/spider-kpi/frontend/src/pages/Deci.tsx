@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../components/AuthGate'
 import { Card } from '../components/Card'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { usePageConfig } from '../lib/usePageConfig'
 import { DeciDraftsCard } from '../components/DeciDraftsCard'
 import { DivisionHero } from '../components/DivisionHero'
 import { TruthBadge } from '../components/TruthBadge'
@@ -73,6 +75,7 @@ function formatDate(dateStr: string | undefined): string {
 
 // ── Main Component ──
 export function Deci() {
+  const cfg = usePageConfig('deci')
   const [view, setView] = useState<DeciView>('overview')
   const [overview, setOverview] = useState<DeciOverview | null>(null)
   const [decisions, setDecisions] = useState<DeciDecision[]>([])
@@ -211,6 +214,7 @@ export function Deci() {
 
       {!loading && !error ? (
         <>
+          <DivisionPageHeader cfg={cfg} divisionLabel="DECI · Joseph" />
           {view === 'overview' ? <OverviewView overview={overview} decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} /> : null}
           {view === 'map' ? <DecisionMapView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} /> : null}
           {view === 'decisions' ? <ActiveDecisionsView decisions={decisions} team={team} domains={domains} onOpenDetail={openDetail} onReload={silentReload} filterStatus={filterStatus} setFilterStatus={setFilterStatus} filterDept={filterDept} setFilterDept={setFilterDept} filterPriority={filterPriority} setFilterPriority={setFilterPriority} filterDomain={filterDomain} setFilterDomain={setFilterDomain} /> : null}

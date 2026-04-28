@@ -10,6 +10,9 @@ import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 import { AISelfGradeCard } from '../components/AISelfGradeCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
+import { usePageConfig } from '../lib/usePageConfig'
 import { CommandCenterHero } from '../components/CommandCenterHero'
 import { MorningBriefingCard } from '../components/MorningBriefingCard'
 import { TrendSnapshotCard } from '../components/TrendSnapshotCard'
@@ -79,6 +82,9 @@ function prettyMetric(metric: string): string {
  *   5) Today's 3 things — compact triage
  */
 export function CommandCenter() {
+  // Synthetic division name for page-config — only Joseph (platform
+  // owner) can edit. Division leaders see read-only on company pages.
+  const cfg = usePageConfig('command_center')
   const [data, setData] = useState<MorningBriefResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -120,6 +126,87 @@ export function CommandCenter() {
   const mkt = deriveMarketingStatus(data)
   const ops = deriveOpsStatus()
 
+  // Build a stable, conditionally-populated list of anomaly content
+  // so the GridEditor item can reference it cleanly.
+  const anomalyNode = (() => {
+    if ((data.anomalies?.length ?? 0) === 0) return null
+    const priorityRank: Record<TileState, number> = {
+      bad: 0, warn: 1, info: 2, neutral: 3, good: 4,
+    }
+    const sorted = [...data.anomalies]
+      .map(a => ({ a, tier: calibratedAnomalySeverity(a) }))
+      .sort((x, y) => priorityRank[x.tier] - priorityRank[y.tier])
+    const top = sorted.slice(0, 4)
+    const anyAlerting = sorted.some(x => x.tier === 'bad' || x.tier === 'warn')
+    const accent = anyAlerting ? 'var(--orange)' : '#4a7aff'
+    return (
+      <section className="card" style={{ borderLeft: `3px solid ${accent}`, height: '100%' }}>
+        <div className="venom-panel-head">
+          <strong>Telemetry anomalies</strong>
+          <Link to="/division/product-engineering" className="analysis-link">
+            Product Engineering →
+          </Link>
+        </div>
+        <div style={{ display: 'grid', gap: 6 }}>
+          {top.map(({ a, tier }) => (
+            <div key={a.id} style={{ display: 'grid', gap: 2 }}>
+              <AnomalyBar
+                metric={a.metric}
+                direction={a.direction}
+                severity={tier}
+                zScore={a.modified_z_score}
+                businessDate={a.business_date}
+                summary={a.summary || (tier === 'info' ? 'non-impact metric — informational only' : undefined)}
+                href="/division/product-engineering"
+              />
+              <div style={{ paddingLeft: 18 }}>
+                <NearbyEventsBadge businessDate={a.business_date} division="product-engineering" />
+              </div>
+            </div>
+          ))}
+        </div>
+        {sorted.length > 4 && (
+          <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', textAlign: 'right' }}>
+            + {sorted.length - 4} more — click through to see all
+          </p>
+        )}
+      </section>
+    )
+  })()
+
+  // Division tile grid — extracted so it can live as a single
+  // GridEditor item Joseph can drag/resize.
+  const divisionTilesNode = (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+        Jump to a division
+      </div>
+      <TileGrid cols={3}>
+        <DivisionTile name="Product / Engineering" icon="⚙" href="/division/product-engineering" state={pe.state} primary={pe.primary} secondary={pe.secondary} />
+        <DivisionTile name="Customer Experience" icon="☎" href="/division/customer-experience" state={cx.state} primary={cx.primary} secondary={cx.secondary} />
+        <DivisionTile name="Marketing" icon="📣" href="/division/marketing" state={mkt.state} primary={mkt.primary} secondary={mkt.secondary} />
+        <DivisionTile name="Operations" icon="📦" href="/division/operations" state={ops.state} primary={ops.primary} secondary={ops.secondary} />
+        <DivisionTile name="DECI" icon="✓" href="/deci" state={h.drafts_awaiting_review > 0 ? 'info' : 'neutral'} primary={`${h.drafts_awaiting_review} drafts`} secondary="awaiting review" />
+        <DivisionTile name="Issue Radar" icon="⚠" href="/issues" state={h.critical_signals_24h > 0 ? 'bad' : 'good'} primary={`${h.critical_signals_24h} critical`} secondary="cross-source signals · 24h" />
+      </TileGrid>
+    </div>
+  )
+
+  // Compose the GridEditor items list. Conditional items
+  // (anomalies, insights) are filtered out when empty.
+  const gridItems: GridEditorItem[] = [
+    { id: 'morning_briefing', defaultH: 12, node: <MorningBriefingCard /> },
+    { id: 'trend_snapshot', defaultH: 14, node: <TrendSnapshotCard /> },
+    { id: 'gross_profit', defaultH: 10, node: <GrossProfitCard days={30} /> },
+    { id: 'command_center_hero', defaultH: 18, node: <CommandCenterHero data={data} /> },
+  ]
+  if (anomalyNode) gridItems.push({ id: 'telemetry_anomalies', defaultH: 14, node: anomalyNode })
+  if ((data.insights?.length ?? 0) > 0) {
+    gridItems.push({ id: 'insights_panel', defaultH: 10, node: <InsightsPanel insights={data.insights} highCount={h.insights_high_urgency} /> })
+  }
+  gridItems.push({ id: 'ai_self_grade', defaultH: 12, node: <AISelfGradeCard /> })
+  gridItems.push({ id: 'division_tiles', defaultH: 14, node: divisionTilesNode })
+
   return (
     <div className="page-grid">
       <div className="page-head" style={{ marginBottom: 2 }}>
@@ -129,158 +216,15 @@ export function CommandCenter() {
         </p>
       </div>
 
-      {/* ── MORNING BRIEFING ──────────────────────────────────────────
-          Aggregated top recommendations across every division.
-          Generated by services/recommendations.py, this card answers
-          "what should I do first today?" with division-pilled,
-          severity-colored items. Renders above the hero so it's the
-          first thing seen on a morning login. Empty state collapses
-          to a single green "calm morning" line so it's not visual
-          noise on healthy days. */}
-      <MorningBriefingCard />
+      {/* Editing layer — Joseph drags/resizes any section via the
+          Customize button in the page header below. */}
+      <DivisionPageHeader cfg={cfg} divisionLabel="Command Center · Joseph" />
 
-      {/* ── 7-DAY TREND SNAPSHOT ───────────────────────────────────────
-          All registered KPIs in one compact grid (revenue/orders/cook
-          success/active devices/sessions/errors/tickets/csat/FRT) with
-          7d-vs-prior-7d arrow + % and a moderate+ anomaly chip. Powered
-          by /api/trends/all. Sits between the morning briefing and the
-          hero so Joseph can scan the whole-business pulse before the
-          gauges. */}
-      <TrendSnapshotCard />
+      <GridEditor cfg={cfg} items={gridItems} />
 
-      {/* ── GROSS PROFIT (cross-platform truth) ────────────────────────
-          Same component used on Executive / Commercial / Revenue / Marketing
-          so all surfaces read the same number. Per-unit COGS comes from
-          the SharePoint synthesis; unit counts from Shopify line_items. */}
-      <GrossProfitCard days={30} />
-
-      {/* ── UNIFIED COMMAND CENTER HERO ────────────────────────────────
-          Three anchor gauges (revenue / fleet / cook-success) always on,
-          plus Opus 4.7's 5 weekly-curated gauges underneath. Opus is
-          explicitly told the anchor keys and must not duplicate them,
-          so the curated slots stay meaningful every week. */}
-      <CommandCenterHero data={data} />
-
-      {/* ── ROW 3 · ANOMALIES + INSIGHTS ───────────────────────────────
-          Anomalies as centered-baseline z-score bars (no prose).
-          Insights condensed to a card with click-to-expand-on-page. */}
-      {(data.anomalies?.length ?? 0) > 0 && (() => {
-        // Re-sort so impact-metric anomalies (warn/bad) rise to the top —
-        // non-impact drift (cook_temp, active_devices) is informational
-        // and shouldn't dominate the fold.
-        const priorityRank: Record<TileState, number> = {
-          bad: 0, warn: 1, info: 2, neutral: 3, good: 4,
-        }
-        const sorted = [...data.anomalies]
-          .map(a => ({ a, tier: calibratedAnomalySeverity(a) }))
-          .sort((x, y) => priorityRank[x.tier] - priorityRank[y.tier])
-        const top = sorted.slice(0, 4)
-        const anyAlerting = sorted.some(x => x.tier === 'bad' || x.tier === 'warn')
-        const accent = anyAlerting ? 'var(--orange)' : '#4a7aff'
-        return (
-          <section className="card" style={{ borderLeft: `3px solid ${accent}` }}>
-            <div className="venom-panel-head">
-              <strong>Telemetry anomalies</strong>
-              <Link to="/division/product-engineering" className="analysis-link">
-                Product Engineering →
-              </Link>
-            </div>
-            <div style={{ display: 'grid', gap: 6 }}>
-              {top.map(({ a, tier }) => (
-                <div key={a.id} style={{ display: 'grid', gap: 2 }}>
-                  <AnomalyBar
-                    metric={a.metric}
-                    direction={a.direction}
-                    severity={tier}
-                    zScore={a.modified_z_score}
-                    businessDate={a.business_date}
-                    summary={a.summary || (tier === 'info' ? 'non-impact metric — informational only' : undefined)}
-                    href="/division/product-engineering"
-                  />
-                  <div style={{ paddingLeft: 18 }}>
-                    <NearbyEventsBadge businessDate={a.business_date} division="product-engineering" />
-                  </div>
-                </div>
-              ))}
-            </div>
-            {sorted.length > 4 && (
-              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', textAlign: 'right' }}>
-                + {sorted.length - 4} more — click through to see all
-              </p>
-            )}
-          </section>
-        )
-      })()}
-
-      {(data.insights?.length ?? 0) > 0 && (
-        <InsightsPanel insights={data.insights} highCount={h.insights_high_urgency} />
-      )}
-
-      <AISelfGradeCard />
-
-      {/* ── ROW 4 · DIVISION TILES ─────────────────────────────────────
-          Each tile = a page. Status dot + 1-2 key numbers give the
-          at-a-glance health; click = navigation to deep detail. */}
-      <div>
-        <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-          Jump to a division
-        </div>
-        <TileGrid cols={3}>
-          <DivisionTile
-            name="Product / Engineering"
-            icon="⚙"
-            href="/division/product-engineering"
-            state={pe.state}
-            primary={pe.primary}
-            secondary={pe.secondary}
-          />
-          <DivisionTile
-            name="Customer Experience"
-            icon="☎"
-            href="/division/customer-experience"
-            state={cx.state}
-            primary={cx.primary}
-            secondary={cx.secondary}
-          />
-          <DivisionTile
-            name="Marketing"
-            icon="📣"
-            href="/division/marketing"
-            state={mkt.state}
-            primary={mkt.primary}
-            secondary={mkt.secondary}
-          />
-          <DivisionTile
-            name="Operations"
-            icon="📦"
-            href="/division/operations"
-            state={ops.state}
-            primary={ops.primary}
-            secondary={ops.secondary}
-          />
-          <DivisionTile
-            name="DECI"
-            icon="✓"
-            href="/deci"
-            state={h.drafts_awaiting_review > 0 ? 'info' : 'neutral'}
-            primary={`${h.drafts_awaiting_review} drafts`}
-            secondary="awaiting review"
-          />
-          <DivisionTile
-            name="Issue Radar"
-            icon="⚠"
-            href="/issues"
-            state={h.critical_signals_24h > 0 ? 'bad' : 'good'}
-            primary={`${h.critical_signals_24h} critical`}
-            secondary="cross-source signals · 24h"
-          />
-        </TileGrid>
-      </div>
-
-      {/* ── ROW 5 · COMPACT SECONDARY DETAIL (folded by default) ──────
+      {/* ── COMPACT SECONDARY DETAIL (folded by default) ──────────────
           Drafts, critical signals, overdue tasks, hot Slack thread.
-          Useful triage but not first-glance material — folded so the
-          morning view leads with gauges and division tiles. */}
+          Folded so the morning view leads with gauges + division tiles. */}
       {(() => {
         const drafts = data.drafts || []
         const crits = data.critical_signals || []
