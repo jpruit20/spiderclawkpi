@@ -773,72 +773,98 @@ export function CustomerExperienceDivision() {
               flanking + tiles already show SLA / FRT / backlog / reopen /
               escalation / FCR. Click any hero tile to drill into team-perf. */}
 
-          {/* Today's Focus — kept list-style because these are action items
-              needing titles + owner + description, not scannable gauges.
-              But limited to top 3 + 'N more' expand. */}
-          {todayFocus.length > 0 && (
-            <section className="card" style={{ borderLeft: '3px solid var(--blue)' }}>
-              <div className="venom-panel-head">
-                <strong>Today's Focus</strong>
-                <span className="venom-panel-hint">{todayFocus.length} action{todayFocus.length === 1 ? '' : 's'}</span>
-              </div>
-              <div className="stack-list compact">
-                {todayFocus.slice(0, 3).map(item => (
-                  <div className="list-item" key={item.id}>
-                    <div className="item-head">
-                      <strong>{item.title}</strong>
-                      <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
-                    </div>
-                    <p>{item.required_action}</p>
-                    <small>Owner: {item.owner}</small>
-                  </div>
-                ))}
-                {todayFocus.length > 3 && (
-                  <div className="list-item status-muted" style={{ fontSize: 12 }}>
-                    + {todayFocus.length - 3} more action{todayFocus.length - 3 === 1 ? '' : 's'} below in the full queue
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
+          {/* Today's Focus — conditionally folded.
+              - On a quiet day (no items) renders a single green status line, no fold needed.
+              - With items: defaultOpen when anything is critical so it draws the eye;
+                defaultClosed otherwise so a calm queue doesn't dominate the page. */}
           {todayFocus.length === 0 && (
             <section className="card" style={{ borderLeft: '3px solid var(--green)', padding: '10px 16px' }}>
               <span style={{ fontSize: 13 }}>✓ No open priority actions from today's snapshot — queue is healthy.</span>
             </section>
           )}
-
-          {/* Action Queue — top 3 visible; rest folded so the queue
-              doesn't dominate the page when there are 20+ open items. */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Action Queue ({actions.length})</strong>
-            </div>
-            <div className="stack-list compact">
-              {actions.slice(0, 3).map((item) => (
-                <div className="list-item" key={item.id}>
-                  <div className="item-head">
-                    <strong>{item.title}</strong>
-                    <div className="inline-badges">
-                      <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
-                      <span className={`badge ${statusBadgeClass(item.status)}`}>{item.status}</span>
+          {todayFocus.length > 0 && (() => {
+            const hasCritical = todayFocus.some(item => item.priority === 'critical')
+            const criticalCount = todayFocus.filter(item => item.priority === 'critical').length
+            return (
+              <CollapsibleSection
+                id="cx-todays-focus"
+                title="Today's focus"
+                subtitle="Action items from today's snapshot"
+                density="compact"
+                accentColor={hasCritical ? 'var(--red)' : 'var(--blue)'}
+                defaultOpen={hasCritical}
+                meta={`${todayFocus.length} total${criticalCount > 0 ? ` · ${criticalCount} critical` : ''}`}
+              >
+                <div className="stack-list compact">
+                  {todayFocus.slice(0, 3).map(item => (
+                    <div className="list-item" key={item.id}>
+                      <div className="item-head">
+                        <strong>{item.title}</strong>
+                        <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
+                      </div>
+                      <p>{item.required_action}</p>
+                      <small>Owner: {item.owner}</small>
                     </div>
-                  </div>
-                  <p>{item.required_action}</p>
-                  <small>
-                    Owner: {item.owner}
-                    {item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}
-                    {item.escalation_owner ? ` · Escalation: ${item.escalation_owner}` : ''}
-                  </small>
-                  {item.opened_at && (
-                    <div style={{ marginTop: 4 }}>
-                      <NearbyEventsBadge businessDate={item.opened_at} division="customer-experience" windowDays={3} />
+                  ))}
+                  {todayFocus.length > 3 && (
+                    <div className="list-item status-muted" style={{ fontSize: 12 }}>
+                      + {todayFocus.length - 3} more action{todayFocus.length - 3 === 1 ? '' : 's'} below in the full queue
                     </div>
                   )}
                 </div>
-              ))}
-              {!actions.length ? <div className="list-item status-good"><p>No actions in queue.</p></div> : null}
-            </div>
-          </section>
+              </CollapsibleSection>
+            )
+          })()}
+
+          {/* Action Queue — same conditional-fold pattern. Empty queue
+              hides; populated queue defaults open only when one of the
+              top 3 is critical or high. */}
+          {!actions.length ? (
+            <section className="card" style={{ borderLeft: '3px solid var(--green)', padding: '10px 16px' }}>
+              <span style={{ fontSize: 13 }}>✓ Action queue is empty.</span>
+            </section>
+          ) : (() => {
+            const top3 = actions.slice(0, 3)
+            const hasUrgentTop3 = top3.some(a => a.priority === 'critical' || a.priority === 'high')
+            const criticalCount = actions.filter(a => a.priority === 'critical').length
+            const highCount = actions.filter(a => a.priority === 'high').length
+            return (
+              <CollapsibleSection
+                id="cx-action-queue"
+                title="Action queue"
+                subtitle="Open CX actions ranked by priority"
+                density="compact"
+                accentColor={criticalCount > 0 ? 'var(--red)' : hasUrgentTop3 ? 'var(--orange)' : 'var(--blue)'}
+                defaultOpen={hasUrgentTop3}
+                meta={`${actions.length} open${criticalCount > 0 ? ` · ${criticalCount} critical` : ''}${highCount > 0 ? ` · ${highCount} high` : ''}`}
+              >
+                <div className="stack-list compact">
+                  {top3.map((item) => (
+                    <div className="list-item" key={item.id}>
+                      <div className="item-head">
+                        <strong>{item.title}</strong>
+                        <div className="inline-badges">
+                          <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
+                          <span className={`badge ${statusBadgeClass(item.status)}`}>{item.status}</span>
+                        </div>
+                      </div>
+                      <p>{item.required_action}</p>
+                      <small>
+                        Owner: {item.owner}
+                        {item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}
+                        {item.escalation_owner ? ` · Escalation: ${item.escalation_owner}` : ''}
+                      </small>
+                      {item.opened_at && (
+                        <div style={{ marginTop: 4 }}>
+                          <NearbyEventsBadge businessDate={item.opened_at} division="customer-experience" windowDays={3} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </CollapsibleSection>
+            )
+          })()}
           {actions.length > 3 ? (
             <CollapsibleSection
               id="cx-action-queue-overflow"

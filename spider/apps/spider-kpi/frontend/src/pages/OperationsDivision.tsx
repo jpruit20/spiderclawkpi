@@ -129,8 +129,17 @@ export function OperationsDivision() {
         <SharepointIntelligenceCard division="operations" />
       </CustomizableCard>
 
+      {/* SharePoint activity feed — long raw activity list. Folded so
+          the Ops landing isn't dominated by a per-file scroll. */}
       <CustomizableCard id="sharepoint_activity" defaultTitle="SharePoint activity feed" cfg={cfg}>
-        <SharepointActivityCard division="operations" />
+        <CollapsibleSection
+          id="ops-sharepoint-activity"
+          title="SharePoint activity feed"
+          subtitle="Per-file activity from AMW SharePoint folders"
+          density="compact"
+        >
+          <SharepointActivityCard division="operations" />
+        </CollapsibleSection>
       </CustomizableCard>
 
       <CustomizableCard id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}>

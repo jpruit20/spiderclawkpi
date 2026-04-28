@@ -398,12 +398,16 @@ export function SocialIntelligence() {
                 </section>
               </div>
 
-              {/* Brand Mentions Feed */}
-              <section className="card">
-                <div className="venom-panel-head">
-                  <strong>Social Feed</strong>
-                  <span className="venom-panel-hint">{fmtInt(filteredMentions.length)} of {fmtInt(mentions.length)} · 7 days</span>
-                </div>
+              {/* Brand Mentions Feed — folded by default. Heaviest single
+                  block on the overview tab; viewers drill in when they
+                  need the per-mention list. */}
+              <CollapsibleSection
+                id="si-social-feed"
+                title="Social feed"
+                subtitle="Per-mention sentiment, classification, source"
+                density="compact"
+                meta={`${fmtInt(filteredMentions.length)} of ${fmtInt(mentions.length)} · 7 days`}
+              >
                 <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
                   {(['all', 'brand', 'positive', 'negative', 'questions', 'complaints', 'competitor'] as MentionFilter[]).map((tab) => (
                     <button key={tab} className={`range-button${filter === tab ? ' active' : ''}`} onClick={() => setFilter(tab)} style={{ fontSize: 11, padding: '4px 10px', textTransform: 'capitalize' }}>{tab}</button>
@@ -438,7 +442,7 @@ export function SocialIntelligence() {
                     ))}
                   </div>
                 ) : <div className="state-message">{hasData ? 'No mentions match this filter.' : 'Social feed populates after first sync.'}</div>}
-              </section>
+              </CollapsibleSection>
             </>
           ) : null}
 
@@ -534,11 +538,13 @@ export function SocialIntelligence() {
 
                   {/* Comment Highlights */}
                   {youtube.comment_highlights.length > 0 ? (
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Top Comments Across All Videos</strong>
-                        <span className="venom-panel-hint">Sorted by likes</span>
-                      </div>
+                    <CollapsibleSection
+                      id="si-yt-comment-highlights"
+                      title="Top comments across all videos"
+                      subtitle="Reference detail — drill in for the full audience-voice list"
+                      density="compact"
+                      meta={`${youtube.comment_highlights.length} comments · sorted by likes`}
+                    >
                       <div className="stack-list compact">
                         {youtube.comment_highlights.slice(0, 6).map((c, i) => (
                           <div key={i} className="list-item status-muted">
@@ -553,7 +559,7 @@ export function SocialIntelligence() {
                           </div>
                         ))}
                       </div>
-                    </section>
+                    </CollapsibleSection>
                   ) : null}
                 </>
               ) : (
@@ -652,13 +658,15 @@ export function SocialIntelligence() {
                     ) : <div className="state-message">No Spider Grills products found in catalog.</div>}
                   </section>
 
-                  {/* Competitor Products */}
+                  {/* Competitor Products — folded; 10+ rows of reference detail. */}
                   {competitorProducts.length > 0 ? (
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Competitor Products</strong>
-                        <span className="venom-panel-hint">{competitorProducts.length} tracked</span>
-                      </div>
+                    <CollapsibleSection
+                      id="si-amazon-competitors"
+                      title="Competitor products"
+                      subtitle="Per-ASIN brand, BSR, category"
+                      density="compact"
+                      meta={`${competitorProducts.length} tracked`}
+                    >
                       <div style={{ overflowX: 'auto' }}>
                         <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', minWidth: 600 }}>
                           <thead>
@@ -692,7 +700,7 @@ export function SocialIntelligence() {
                           </tbody>
                         </table>
                       </div>
-                    </section>
+                    </CollapsibleSection>
                   ) : null}
                 </>
               ) : (
@@ -730,7 +738,17 @@ export function SocialIntelligence() {
                         <span className="mini-stat-label">Competitors</span>
                       </div>
                     </div>
-                    {market.competitive_landscape.competitors.length > 0 ? (
+                  </section>
+                  {/* Per-competitor table — fold separately so the
+                      3 mini-stats above stay visible at-a-glance. */}
+                  {market.competitive_landscape.competitors.length > 0 ? (
+                    <CollapsibleSection
+                      id="si-comp-landscape-table"
+                      title="Per-competitor breakdown"
+                      subtitle="Mentions · SOV · sentiment · engagement"
+                      density="compact"
+                      meta={`${Math.min(market.competitive_landscape.competitors.length, 12)} tracked`}
+                    >
                       <div style={{ overflowX: 'auto' }}>
                         <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                           <thead>
@@ -759,110 +777,120 @@ export function SocialIntelligence() {
                           </tbody>
                         </table>
                       </div>
-                    ) : null}
+                    </CollapsibleSection>
+                  ) : null}
+
+                  {/* Trend momentum stays visible — most-glanceable signal.
+                      Purchase Intent folds (it's a 6-row reference list). */}
+                  <section className="card">
+                    <div className="venom-panel-head">
+                      <strong>Trend Momentum</strong>
+                      <span className="venom-panel-hint">Cross-platform topics</span>
+                    </div>
+                    {market.trend_momentum.length > 0 ? (
+                      <div className="stack-list compact">
+                        {market.trend_momentum.slice(0, 8).map((t) => (
+                          <div key={t.topic} className="list-item status-muted">
+                            <div className="item-head">
+                              <strong>{t.topic}</strong>
+                              <div className="inline-badges">
+                                <span className={`badge ${t.momentum === 'strong' ? 'badge-good' : t.momentum === 'growing' ? 'badge-warn' : 'badge-muted'}`}>{t.momentum}</span>
+                                <span className="badge badge-neutral">{fmtInt(t.mentions)}</span>
+                                {t.cross_platform ? <span className="badge badge-good">multi-platform</span> : null}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">Trend data populating...</div>}
                   </section>
 
-                  {/* Trend Momentum + Purchase Intent */}
-                  <div className="two-col two-col-equal">
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Trend Momentum</strong>
-                        <span className="venom-panel-hint">Cross-platform topics</span>
-                      </div>
-                      {market.trend_momentum.length > 0 ? (
-                        <div className="stack-list compact">
-                          {market.trend_momentum.slice(0, 8).map((t) => (
-                            <div key={t.topic} className="list-item status-muted">
-                              <div className="item-head">
-                                <strong>{t.topic}</strong>
-                                <div className="inline-badges">
-                                  <span className={`badge ${t.momentum === 'strong' ? 'badge-good' : t.momentum === 'growing' ? 'badge-warn' : 'badge-muted'}`}>{t.momentum}</span>
-                                  <span className="badge badge-neutral">{fmtInt(t.mentions)}</span>
-                                  {t.cross_platform ? <span className="badge badge-good">multi-platform</span> : null}
-                                </div>
+                  <CollapsibleSection
+                    id="si-purchase-intent"
+                    title="Purchase intent"
+                    subtitle="Posts where people discuss buying grills"
+                    density="compact"
+                    meta={`${fmtInt(market.purchase_intent.total)} signals`}
+                  >
+                    {market.purchase_intent.posts.length > 0 ? (
+                      <div className="stack-list compact">
+                        {market.purchase_intent.posts.slice(0, 6).map((p, i) => (
+                          <div key={i} className="list-item status-muted">
+                            <div className="item-head">
+                              <strong>{p.title || 'Untitled'}</strong>
+                              <div className="inline-badges">
+                                <span className="badge badge-neutral">{platformIcon(p.platform)} {p.platform}</span>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      ) : <div className="state-message">Trend data populating...</div>}
-                    </section>
+                            {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
+                            <div className="venom-mention-meta">
+                              {p.competitor_mentioned ? <span className="badge badge-warn">{p.competitor_mentioned.replace(/_/g, ' ')}</span> : null}
+                              {p.product_mentioned ? <span className="badge badge-good">{p.product_mentioned}</span> : null}
+                              {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>View &rarr;</a> : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="state-message">Purchase intent signals appear as people discuss buying grills.</div>}
+                  </CollapsibleSection>
 
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Purchase Intent</strong>
-                        <span className="venom-panel-hint">{fmtInt(market.purchase_intent.total)} signals</span>
-                      </div>
-                      {market.purchase_intent.posts.length > 0 ? (
-                        <div className="stack-list compact">
-                          {market.purchase_intent.posts.slice(0, 6).map((p, i) => (
-                            <div key={i} className="list-item status-muted">
-                              <div className="item-head">
-                                <strong>{p.title || 'Untitled'}</strong>
-                                <div className="inline-badges">
-                                  <span className="badge badge-neutral">{platformIcon(p.platform)} {p.platform}</span>
-                                </div>
-                              </div>
-                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
-                              <div className="venom-mention-meta">
-                                {p.competitor_mentioned ? <span className="badge badge-warn">{p.competitor_mentioned.replace(/_/g, ' ')}</span> : null}
-                                {p.product_mentioned ? <span className="badge badge-good">{p.product_mentioned}</span> : null}
-                                {p.source_url ? <a href={p.source_url} target="_blank" rel="noopener noreferrer" className="badge badge-neutral" style={{ textDecoration: 'none' }}>View &rarr;</a> : null}
-                              </div>
-                            </div>
-                          ))}
+                  {/* Innovation + Pain Points — folded together, both
+                      are 5-row reference lists. */}
+                  <CollapsibleSection
+                    id="si-innovation-and-pain"
+                    title="Innovation signals & competitor pain points"
+                    subtitle="R&D opportunities · their weakness = your opportunity"
+                    density="compact"
+                    meta={`${market.product_innovation.posts.length} innovation · ${market.competitor_pain_points.posts.length} pain`}
+                  >
+                    <div className="two-col two-col-equal">
+                      <section className="card">
+                        <div className="venom-panel-head">
+                          <strong>Innovation Signals</strong>
+                          <span className="venom-panel-hint">R&D opportunities</span>
                         </div>
-                      ) : <div className="state-message">Purchase intent signals appear as people discuss buying grills.</div>}
-                    </section>
-                  </div>
+                        {market.product_innovation.posts.length > 0 ? (
+                          <div className="stack-list compact">
+                            {market.product_innovation.posts.slice(0, 5).map((p, i) => (
+                              <div key={i} className="list-item status-good">
+                                <div className="item-head">
+                                  <strong>{p.title || 'Untitled'}</strong>
+                                  <div className="inline-badges">
+                                    <span className="badge badge-neutral">{platformIcon(p.platform)}</span>
+                                    {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
+                                  </div>
+                                </div>
+                                {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
+                                {p.trend_topic ? <span className="badge badge-good" style={{ marginTop: 4, display: 'inline-block' }}>{p.trend_topic}</span> : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : <div className="state-message">Innovation signals populate from user feature requests.</div>}
+                      </section>
 
-                  {/* Innovation + Pain Points */}
-                  <div className="two-col two-col-equal">
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Innovation Signals</strong>
-                        <span className="venom-panel-hint">R&D opportunities</span>
-                      </div>
-                      {market.product_innovation.posts.length > 0 ? (
-                        <div className="stack-list compact">
-                          {market.product_innovation.posts.slice(0, 5).map((p, i) => (
-                            <div key={i} className="list-item status-good">
-                              <div className="item-head">
-                                <strong>{p.title || 'Untitled'}</strong>
-                                <div className="inline-badges">
-                                  <span className="badge badge-neutral">{platformIcon(p.platform)}</span>
-                                  {p.engagement_score > 0 ? <span className="badge badge-neutral">{fmtInt(p.engagement_score)} eng</span> : null}
-                                </div>
-                              </div>
-                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
-                              {p.trend_topic ? <span className="badge badge-good" style={{ marginTop: 4, display: 'inline-block' }}>{p.trend_topic}</span> : null}
-                            </div>
-                          ))}
+                      <section className="card">
+                        <div className="venom-panel-head">
+                          <strong>Competitor Pain Points</strong>
+                          <span className="venom-panel-hint">Their weakness = your opportunity</span>
                         </div>
-                      ) : <div className="state-message">Innovation signals populate from user feature requests.</div>}
-                    </section>
-
-                    <section className="card">
-                      <div className="venom-panel-head">
-                        <strong>Competitor Pain Points</strong>
-                        <span className="venom-panel-hint">Their weakness = your opportunity</span>
-                      </div>
-                      {market.competitor_pain_points.posts.length > 0 ? (
-                        <div className="stack-list compact">
-                          {market.competitor_pain_points.posts.slice(0, 5).map((p, i) => (
-                            <div key={i} className="list-item status-bad">
-                              <div className="item-head">
-                                <strong>{p.title || 'Untitled'}</strong>
-                                <div className="inline-badges">
-                                  {p.competitor ? <span className="badge badge-warn">{p.competitor.replace(/_/g, ' ')}</span> : null}
+                        {market.competitor_pain_points.posts.length > 0 ? (
+                          <div className="stack-list compact">
+                            {market.competitor_pain_points.posts.slice(0, 5).map((p, i) => (
+                              <div key={i} className="list-item status-bad">
+                                <div className="item-head">
+                                  <strong>{p.title || 'Untitled'}</strong>
+                                  <div className="inline-badges">
+                                    {p.competitor ? <span className="badge badge-warn">{p.competitor.replace(/_/g, ' ')}</span> : null}
+                                  </div>
                                 </div>
+                                {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
                               </div>
-                              {p.body ? <p className="venom-mention-body" style={{ maxHeight: 40, overflow: 'hidden' }}>{p.body.slice(0, 120)}</p> : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div className="state-message">Competitor complaints surface as social data flows in.</div>}
-                    </section>
-                  </div>
+                            ))}
+                          </div>
+                        ) : <div className="state-message">Competitor complaints surface as social data flows in.</div>}
+                      </section>
+                    </div>
+                  </CollapsibleSection>
                 </>
               ) : (
                 <section className="card">

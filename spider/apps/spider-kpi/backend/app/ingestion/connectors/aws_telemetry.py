@@ -172,12 +172,25 @@ def _load_records_from_dynamodb(max_records: int) -> tuple[list[dict[str, Any]],
     # after gc + malloc_trim (verified 2026-04-25 via
     # app.cli.run_syncs_diagnose).
     boto_session = boto3.session.Session()
+    # Retry config tuned for DynamoDB scan against a provisioned-capacity
+    # table. `adaptive` mode (boto3 2022+) implements client-side token-
+    # bucket rate limiting that auto-throttles when DDB returns
+    # ProvisionedThroughputExceededException — the client slows itself
+    # down to whatever the table can sustain instead of retry-storming.
+    # Bumping max_attempts from 2 → 5 gives the adaptive retry enough
+    # tries to ride out short capacity bursts. Net effect: same DDB cost
+    # (we're not raising capacity), far fewer "failed" sync runs
+    # surfacing on the dashboard.
     client = boto_session.client(
         'dynamodb',
         region_name=settings.aws_region,
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
-        config=Config(connect_timeout=5, read_timeout=30, retries={'max_attempts': 2}),
+        config=Config(
+            connect_timeout=5,
+            read_timeout=30,
+            retries={'max_attempts': 5, 'mode': 'adaptive'},
+        ),
     )
     try:
         projection = 'device_id, sample_time, device_data'

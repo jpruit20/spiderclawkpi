@@ -30,8 +30,24 @@ settings = get_settings()
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
+# Per-source watchdog for "stale running" sync runs. Most connectors
+# finish in seconds-to-minutes; the 30-min default catches ones that
+# stalled mid-sync and lets the next scheduled poll start. Some sources
+# (SharePoint deep crawl, larger AWS scans) legitimately take longer
+# than 30 min on a full pass — bumping their ceiling to 60 min stops
+# the watchdog from killing healthy long-running syncs and surfacing
+# them as failures.
+DEFAULT_STALE_RUNNING_MINUTES = 30
+STALE_RUNNING_MINUTES_BY_SOURCE: dict[str, int] = {
+    "sharepoint": 60,
+    "sharepoint_intelligence": 60,
+    "sharepoint_deep_analysis": 90,  # this one walks every per-product folder
+    "aws_telemetry": 45,
+}
+
+
 def _already_running(db, source_name: str) -> bool:
-    """Check if a connector is already running. Auto-expires stale runs (>30 min)."""
+    """Check if a connector is already running. Auto-expires stale runs."""
     run = db.execute(
         select(SourceSyncRun)
         .where(SourceSyncRun.source_name == source_name, SourceSyncRun.status == "running")
@@ -41,10 +57,11 @@ def _already_running(db, source_name: str) -> bool:
     if run is None:
         return False
     started_at = run.started_at or run.created_at
-    if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=30):
+    threshold_minutes = STALE_RUNNING_MINUTES_BY_SOURCE.get(source_name, DEFAULT_STALE_RUNNING_MINUTES)
+    if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes):
         run.status = "failed"
         run.finished_at = datetime.now(timezone.utc)
-        run.error_message = "Stale running sync auto-expired by scheduler (>30 min)."
+        run.error_message = f"Stale running sync auto-expired by scheduler (>{threshold_minutes} min)."
         run.metadata_json = {**(run.metadata_json or {}), "auto_expired": True, "expired_at": datetime.now(timezone.utc).isoformat()}
         db.add(run)
         db.commit()

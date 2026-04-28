@@ -533,40 +533,43 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
         ) : <div className="state-message" style={{ color: 'var(--green)' }}>No bottlenecks detected. All decisions are properly managed.</div>}
       </section>
 
-      {/* Ownership Map + Critical Feed */}
-      <div className="two-col two-col-equal">
-        <section className="card">
-          <div className="venom-panel-head">
-            <strong>Ownership Map</strong>
-            <span className="venom-panel-hint">Load per person</span>
-          </div>
-          {ownershipMap.length > 0 ? (
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Person</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Driving</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Executing</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Blocked</th>
+      {/* Ownership Map (folded — reference detail) + Critical Feed (open — primary triage) */}
+      <CollapsibleSection
+        id="deci-ownership-map"
+        title="Ownership map"
+        subtitle="Load per person — driving / executing / blocked"
+        density="compact"
+        meta={`${ownershipMap.length} people`}
+      >
+        {ownershipMap.length > 0 ? (
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--muted)' }}>
+                <th style={{ textAlign: 'left', padding: '6px 8px' }}>Person</th>
+                <th style={{ textAlign: 'right', padding: '6px 8px' }}>Driving</th>
+                <th style={{ textAlign: 'right', padding: '6px 8px' }}>Executing</th>
+                <th style={{ textAlign: 'right', padding: '6px 8px' }}>Blocked</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ownershipMap.map(o => (
+                <tr key={o.member.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <td style={{ padding: '6px 8px', fontWeight: 500 }}>
+                    {o.member.name}
+                    {o.member.role ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{o.member.role}</span> : null}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px' }}>{o.driverCount}</td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px' }}>{o.executorCount}</td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px', color: o.blockedCount > 0 ? 'var(--red)' : undefined }}>{o.blockedCount}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {ownershipMap.map(o => (
-                  <tr key={o.member.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <td style={{ padding: '6px 8px', fontWeight: 500 }}>
-                      {o.member.name}
-                      {o.member.role ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{o.member.role}</span> : null}
-                    </td>
-                    <td style={{ textAlign: 'right', padding: '6px 8px' }}>{o.driverCount}</td>
-                    <td style={{ textAlign: 'right', padding: '6px 8px' }}>{o.executorCount}</td>
-                    <td style={{ textAlign: 'right', padding: '6px 8px', color: o.blockedCount > 0 ? 'var(--red)' : undefined }}>{o.blockedCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <div className="state-message">Add team members to see the ownership map.</div>}
-        </section>
+              ))}
+            </tbody>
+          </table>
+        ) : <div className="state-message">Add team members to see the ownership map.</div>}
+      </CollapsibleSection>
 
+      {/* Critical decisions — primary triage signal, stays visible */}
+      <div>
         <section className="card">
           <div className="venom-panel-head">
             <strong>Critical Decisions Feed</strong>
@@ -2194,18 +2197,23 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
         <p style={{ color: 'var(--muted)', fontSize: 12, margin: '4px 0 12px' }}>
           Person-first ownership matrix. Every row defines who Drives, Executes, Contributes, and is Informed for each decision area. Click any <strong style={{ color: '#e2e8f0' }}>cell</strong> to cycle its role (D &rarr; E &rarr; C &rarr; I &rarr; empty). Click the <strong style={{ color: '#e2e8f0' }}>row name</strong> to create a new decision in that domain.
         </p>
-        {/* Legend */}
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          {Object.entries(MATRIX_ROLE_COLORS).map(([role, colors]) => (
-            <div key={role} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              <span style={{
-                width: 28, height: 22, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                background: colors.bg, color: colors.fg, border: `1px solid ${colors.border}`, fontWeight: 800, fontSize: 11,
-              }}>{role}</span>
-              <span style={{ color: 'var(--muted)' }}>{MATRIX_ROLE_TOOLTIPS[role].split('—')[1]?.trim()}</span>
-            </div>
-          ))}
-        </div>
+        {/* Role legend — folded by default once a viewer has learned the codes. */}
+        <details>
+          <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer', userSelect: 'none' }}>
+            What D / E / C / I mean
+          </summary>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+            {Object.entries(MATRIX_ROLE_COLORS).map(([role, colors]) => (
+              <div key={role} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <span style={{
+                  width: 28, height: 22, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  background: colors.bg, color: colors.fg, border: `1px solid ${colors.border}`, fontWeight: 800, fontSize: 11,
+                }}>{role}</span>
+                <span style={{ color: 'var(--muted)' }}>{MATRIX_ROLE_TOOLTIPS[role].split('—')[1]?.trim()}</span>
+              </div>
+            ))}
+          </div>
+        </details>
       </section>
 
       {/* Ownership Conflict Detector */}
@@ -2431,11 +2439,16 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
         </section>
       ))}
 
-      {/* Matrix Coverage Summary */}
-      <section className="card">
-        <div className="venom-panel-head">
-          <strong>Coverage Summary</strong>
-        </div>
+      {/* Matrix Coverage Summary — folded; reference roll-up of per-leader
+          DECI counts. Per-category matrix tables above are the primary
+          view; this is the "totals across all categories" summary. */}
+      <CollapsibleSection
+        id="deci-matrix-coverage"
+        title="Coverage summary"
+        subtitle="Per-leader Driving / Executing / Contributing / Informed counts across all categories"
+        density="compact"
+        meta={`${members.length} leaders · ${totalDomains} domains`}
+      >
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
             <thead>
@@ -2496,7 +2509,7 @@ function LeadershipMatrixView({ team, domains, decisions, onOpenDetail, onReload
             </tbody>
           </table>
         </div>
-      </section>
+      </CollapsibleSection>
     </>
   )
 }

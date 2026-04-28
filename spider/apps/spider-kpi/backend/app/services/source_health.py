@@ -15,6 +15,7 @@ _stream_health_cache: dict[str, Any] = {"at": 0.0, "value": None}
 
 
 STALE_MINUTES_BY_SOURCE = {
+    # Fast-cadence connectors — operator-grade freshness expected.
     "shopify": 90,
     "triplewhale": 180,
     "ga4": 240,
@@ -23,11 +24,22 @@ STALE_MINUTES_BY_SOURCE = {
     "aws_telemetry": 360,
     "aws_telemetry_stream": 30,
     "decision-engine": 180,
-    # Klaviyo + SharePoint poll once per day on the scheduler — give them
-    # a 36h freshness threshold so a single missed run doesn't page.
-    "klaviyo": 2160,
-    "sharepoint": 2160,
     "shipstation": 360,
+    # Daily / 12h-cadence sources — set staleness to ~2× the cron
+    # interval so a single missed run is "stale" but the normal
+    # cadence stays "healthy". Audit on 2026-04-28 found these were
+    # tripping false-stale because their threshold was tighter than
+    # their poll cadence.
+    "klaviyo": 2160,            # daily poll → 36h
+    "sharepoint": 2160,         # daily poll → 36h
+    "sharepoint_intelligence": 2160,
+    "sharepoint_deep_analysis": 2880,  # walks every per-product folder; runs less often
+    "youtube": 1440,            # 12h poll → 24h
+    "amazon": 1440,             # 12h poll → 24h
+    "youtube_lore": 2880,       # daily poll → 48h (heavy, runs at 6am ET)
+    "reddit": 360,
+    # clickup_webhook is webhook-receive-only; staleness check is
+    # bypassed for webhook-only sources via SOURCE_TYPES below.
 }
 SOURCE_TYPES = {
     "shopify": "connector",
@@ -39,8 +51,17 @@ SOURCE_TYPES = {
     "aws_telemetry_stream": "connector",
     "klaviyo": "connector",
     "sharepoint": "connector",
+    "sharepoint_intelligence": "connector",
+    "sharepoint_deep_analysis": "connector",
     "shipstation": "connector",
+    "youtube": "connector",
+    "youtube_lore": "connector",
+    "amazon": "connector",
+    "reddit": "connector",
     "decision-engine": "compute",
+    "clickup": "connector",
+    "clickup_webhook": "webhook",  # receives push events — no poll loop
+    "slack": "connector",
 }
 
 
@@ -160,6 +181,15 @@ def _derived_status(config: SourceConfig, latest_run: SourceSyncRun | None) -> t
         return "disabled", "Source is disabled.", None
     if not config.configured:
         return "not_configured", "Required credentials or config are missing.", None
+    # Webhook-only sources (e.g. clickup_webhook) receive push events
+    # and don't have a poll loop — there will never be a "successful
+    # run" entry. Don't surface them as "never_run" / unhealthy; they
+    # report ready as long as they're enabled+configured. Real ingest
+    # health for these sources lives downstream (e.g. event-arrival
+    # rate, last webhook timestamp), not in the sync-runs table.
+    source_type = (config.config_json or {}).get("source_type") or SOURCE_TYPES.get(config.source_name, "connector")
+    if source_type == "webhook":
+        return "healthy", "Webhook receiver is enabled and configured.", None
     if latest_run is None:
         return "never_run", "Source is configured but has never completed a sync.", None
     if latest_run.status == "running":

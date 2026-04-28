@@ -59,10 +59,19 @@ def _gate_already_running(db, source_name: str) -> bool:
     if run is None:
         return False
     started_at = run.started_at or run.created_at
-    if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=30):
+    # Mirror app/scheduler.py STALE_RUNNING_MINUTES_BY_SOURCE — keep the
+    # two paths in sync. SharePoint runs legitimately exceed 30 min on
+    # full passes; the 30-min watchdog was killing healthy long syncs.
+    threshold_minutes = {
+        "sharepoint": 60,
+        "sharepoint_intelligence": 60,
+        "sharepoint_deep_analysis": 90,
+        "aws_telemetry": 45,
+    }.get(source_name, 30)
+    if started_at and started_at < datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes):
         run.status = "failed"
         run.finished_at = datetime.now(timezone.utc)
-        run.error_message = "Stale running sync auto-expired by scheduler (>30 min)."
+        run.error_message = f"Stale running sync auto-expired by scheduler (>{threshold_minutes} min)."
         run.metadata_json = {**(run.metadata_json or {}), "auto_expired": True, "expired_at": datetime.now(timezone.utc).isoformat()}
         db.add(run)
         db.commit()
