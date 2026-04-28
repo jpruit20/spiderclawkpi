@@ -283,32 +283,44 @@ def telemetry_history_daily(db: Session = Depends(db_session)):
 @router.get("/cx/snapshot", response_model=CXSnapshotOut)
 def get_cx_snapshot(db: Session = Depends(db_session)):
     """Cache-first: serve the precomputed snapshot (written by the
-    scheduler every N minutes) in <20 ms. Only CX action-state eval
-    still runs on the request path — those writes invalidate quickly
-    and need live data. On a cold cache (fresh deploy), we compute
-    synchronously once and persist for subsequent reads."""
+    scheduler every N minutes) in <20 ms. CX action-state eval still
+    runs on the request path — those writes feed back into the snapshot
+    payload — but it now reuses the cached snapshot instead of building
+    its own.
+
+    Earlier shape called evaluateCustomerExperienceActions() and
+    evaluateActionClosure() with no snapshot arg. Each of those then
+    called build_customer_experience_snapshot() internally → the full
+    snapshot was computed TWICE per request, BEFORE the cache lookup
+    even ran. Cache was effectively dead for this route, and CX page
+    loads were 5-15s. Joseph hit timeouts on CX 2026-04-28."""
     from app.services import aggregate_cache
     import app.services.cache_builders  # noqa: F401 — ensures builders registered
     from app.services.cache_builders import CX_SNAPSHOT_KEY
 
-    # Action-state eval still needs live data — it writes to CXAction
-    # rows that the snapshot itself reads. Run before fetching cache.
-    evaluateCustomerExperienceActions(db)
-    evaluateActionClosure(db)
-    db.commit()
-
+    # 1. Cache lookup first. If miss, build once via the registered
+    #    builder (which calls build_customer_experience_snapshot under
+    #    the hood and stores the result for the next caller).
     entry = aggregate_cache.get(db, CX_SNAPSHOT_KEY)
     source = "cache"
     if entry is None:
         entry = aggregate_cache.build_if_missing(db, CX_SNAPSHOT_KEY)
         source = "live"
+
+    # 2. Reuse the cached snapshot for action-state eval. Both
+    #    evaluateCustomerExperienceActions() and evaluateActionClosure()
+    #    accept an optional snapshot kwarg — passing it skips the
+    #    redundant rebuild. If the cache is somehow empty, fall back
+    #    to a single live build.
+    snapshot_for_eval = dict(entry.payload) if entry else build_customer_experience_snapshot(db)
+    evaluateCustomerExperienceActions(db, snapshot=snapshot_for_eval)
+    evaluateActionClosure(db, snapshot=snapshot_for_eval)
+    db.commit()
+
+    # 3. Build the response from the cache entry (preferred) or the
+    #    one-shot live snapshot (cold-cache fallback).
     if entry is None:
-        # Last-resort fallback when no builder is registered. Round-trip
-        # the raw snapshot through CXSnapshotOut so ORM objects inside
-        # `actions` get serialized to plain dicts before Pydantic response
-        # validation runs.
-        raw = build_customer_experience_snapshot(db)
-        return CXSnapshotOut.model_validate(raw).model_dump(mode="json")
+        return CXSnapshotOut.model_validate(snapshot_for_eval).model_dump(mode="json")
     payload = dict(entry.payload)
     payload["cache_info"] = {
         "key": entry.key,
@@ -322,8 +334,15 @@ def get_cx_snapshot(db: Session = Depends(db_session)):
 
 @router.get("/cx/actions", response_model=list[CXActionOut])
 def get_cx_actions(status: str | None = None, db: Session = Depends(db_session)):
-    evaluateCustomerExperienceActions(db)
-    evaluateActionClosure(db)
+    # Same fix as get_cx_snapshot — pass the cached snapshot to the
+    # evaluators so we don't rebuild it twice on every action poll.
+    from app.services import aggregate_cache
+    import app.services.cache_builders  # noqa: F401
+    from app.services.cache_builders import CX_SNAPSHOT_KEY
+    entry = aggregate_cache.get(db, CX_SNAPSHOT_KEY) or aggregate_cache.build_if_missing(db, CX_SNAPSHOT_KEY)
+    snapshot_for_eval = dict(entry.payload) if entry else None
+    evaluateCustomerExperienceActions(db, snapshot=snapshot_for_eval)
+    evaluateActionClosure(db, snapshot=snapshot_for_eval)
     db.commit()
     query = select(CXAction).order_by(desc(CXAction.updated_at))
     if status:
