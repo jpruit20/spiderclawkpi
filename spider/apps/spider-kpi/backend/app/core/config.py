@@ -186,7 +186,21 @@ class Settings(BaseSettings):
     # ingest (used by DAU/MAU, first-cook lifecycle, and cross-referencing
     # Shopify order items against telemetry).
     klaviyo_event_metrics: list[str] = Field(
-        default_factory=lambda: ["Opened App", "First Cooking Session", "Placed Order"],
+        default_factory=lambda: [
+            # Existing baseline — used by DAU/MAU, first-cook lifecycle,
+            # and cross-referencing Shopify order items against telemetry.
+            "Opened App",
+            "First Cooking Session",
+            "Placed Order",
+            # Added 2026-04-28 after Agustín shipped app-side ingestion.
+            # Each fires per-event with mac, device_type (Kettle / Huntsman
+            # — Giant Huntsman discrimination still pending firmware), and
+            # firmware_version. Cook Completed adds duration_seconds,
+            # target_temp, and completed_normally.
+            "Device Paired",
+            "Device Unpaired",
+            "Cook Completed",
+        ],
     )
 
     # ClickUp (Spider Grills workspace)
