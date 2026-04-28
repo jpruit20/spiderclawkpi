@@ -1,5 +1,5 @@
 import { ReactNode, useMemo } from 'react'
-import { ResponsiveGridLayout, type Layout, type Layouts } from 'react-grid-layout'
+import { ResponsiveGridLayout, useContainerWidth, type Layout, type Layouts } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import type { UsePageConfigResult } from '../lib/usePageConfig'
@@ -95,44 +95,54 @@ export function GridEditor({ cfg, items }: Props) {
     [items, cfg.gridLayouts],
   )
 
+  // RGL v2 removed the WidthProvider HOC — ResponsiveGridLayout now
+  // requires an explicit `width` prop or items render at width=0
+  // and stack on top of each other. useContainerWidth gives us a
+  // ref to attach to a wrapping div + a live-updating width that
+  // tracks viewport / container resize via ResizeObserver.
+  const { width, containerRef } = useContainerWidth({ initialWidth: 1280 })
+
   // In view mode, hide cards the lead chose to hide. In edit mode,
   // show them dimmed so the lead can re-enable them.
   const renderable = items.filter(it => editing || cfg.isVisible(it.id))
 
   return (
-    <ResponsiveGridLayout
-      className={`grid-editor${editing ? ' grid-editor--editing' : ''}`}
-      layouts={layouts}
-      breakpoints={BREAKPOINTS}
-      cols={COLS}
-      rowHeight={ROW_HEIGHT}
-      isDraggable={editing}
-      isResizable={editing}
-      compactType="vertical"
-      preventCollision={false}
-      margin={[12, 12]}
-      containerPadding={[0, 0]}
-      draggableHandle=".grid-editor__handle"
-      onLayoutChange={(_current, all) => {
-        if (editing) cfg.setGridLayouts(all as unknown as PageGridLayoutsCompat)
-      }}
-    >
-      {renderable.map(it => {
-        const visible = cfg.isVisible(it.id)
-        return (
-          <div
-            key={it.id}
-            className={`grid-editor__cell${!visible ? ' grid-editor__cell--hidden' : ''}`}
-            style={{ opacity: visible ? 1 : 0.4 }}
-          >
-            {editing ? <GridEditorChrome id={it.id} cfg={cfg} visible={visible} /> : null}
-            <div className="grid-editor__body">
-              {it.node}
+    <div ref={containerRef} style={{ width: '100%' }}>
+      <ResponsiveGridLayout
+        className={`grid-editor${editing ? ' grid-editor--editing' : ''}`}
+        layouts={layouts}
+        width={width}
+        breakpoints={BREAKPOINTS}
+        cols={COLS}
+        rowHeight={ROW_HEIGHT}
+        isDraggable={editing}
+        isResizable={editing}
+        compactType="vertical"
+        preventCollision={false}
+        margin={[12, 12]}
+        containerPadding={[0, 0]}
+        draggableHandle=".grid-editor__handle"
+        onLayoutChange={(_current, all) => {
+          if (editing) cfg.setGridLayouts(all as unknown as PageGridLayoutsCompat)
+        }}
+      >
+        {renderable.map(it => {
+          const visible = cfg.isVisible(it.id)
+          return (
+            <div
+              key={it.id}
+              className={`grid-editor__cell${!visible ? ' grid-editor__cell--hidden' : ''}`}
+              style={{ opacity: visible ? 1 : 0.4 }}
+            >
+              {editing ? <GridEditorChrome id={it.id} cfg={cfg} visible={visible} /> : null}
+              <div className="grid-editor__body">
+                {it.node}
+              </div>
             </div>
-          </div>
-        )
-      })}
-    </ResponsiveGridLayout>
+          )
+        })}
+      </ResponsiveGridLayout>
+    </div>
   )
 }
 
