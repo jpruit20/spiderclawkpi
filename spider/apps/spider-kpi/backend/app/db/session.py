@@ -34,18 +34,45 @@ _POOL_KW = dict(
     pool_size=25,
     max_overflow=35,
     pool_timeout=30,
-    pool_recycle=1800,
+    # Recycle every 5 min — short enough that a leaked / "idle in
+    # transaction" handle gets reclaimed before the pool starves, long
+    # enough that we don't churn fresh connections on healthy traffic.
+    pool_recycle=300,
     pool_pre_ping=True,
 )
 
-engine = create_engine(settings.database_url, future=True, **_POOL_KW)
+# Postgres-side defenses for connection leaks. We've been seeing
+# connections accumulate in "idle in transaction" state — the pool
+# treats them as in-use, so the pool fills up even though the
+# application has nominally moved on. These two settings tell PG to
+# kill the session itself if a transaction has been idle that long,
+# which forces the SQLAlchemy connection to be re-established on the
+# next checkout (pool_pre_ping handles the dead-handle case).
+#
+#  - idle_in_transaction_session_timeout = 30s — abort any session
+#    sitting in a transaction longer than 30s.
+#  - statement_timeout = 60s — kill any single statement that runs
+#    longer than 60s. Anything legitimately that slow needs to be
+#    rewritten or moved to a background materializer, not held inline.
+_CONNECT_ARGS = {
+    "options": "-c idle_in_transaction_session_timeout=30000 -c statement_timeout=60000",
+}
+
+engine = create_engine(
+    settings.database_url,
+    future=True,
+    connect_args=_CONNECT_ARGS,
+    **_POOL_KW,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, class_=Session)
 
 
 def reset_engine(database_url: str) -> None:
     global engine, SessionLocal
     engine.dispose()
-    engine = create_engine(database_url, future=True, **_POOL_KW)
+    engine = create_engine(
+        database_url, future=True, connect_args=_CONNECT_ARGS, **_POOL_KW,
+    )
     SessionLocal.configure(bind=engine)
 
 
