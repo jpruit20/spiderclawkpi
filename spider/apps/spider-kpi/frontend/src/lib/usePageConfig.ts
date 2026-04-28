@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from './api'
-import type { PageConfigCardOverride, PageConfigResponse } from './api'
+import type { PageConfigCardOverride, PageConfigResponse, PageGridLayouts } from './api'
 
 /**
  * usePageConfig — load, mutate, and persist a division's layout
@@ -27,7 +27,7 @@ export interface CardItem<T = unknown> {
   defaultTitle?: string
 }
 
-interface UsePageConfigResult<T = unknown> {
+export interface UsePageConfigResult<T = unknown> {
   loading: boolean
   config: PageConfigResponse | null
   canEdit: boolean
@@ -42,6 +42,10 @@ interface UsePageConfigResult<T = unknown> {
   save: (summary?: string) => Promise<void>
   reset: () => Promise<void>
   dirty: boolean
+  /** Saved per-breakpoint grid layout (drag/resize). null if user hasn't customized yet. */
+  gridLayouts: PageGridLayouts | null
+  /** Replace the in-memory grid layouts (call from RGL onLayoutChange). */
+  setGridLayouts: (next: PageGridLayouts) => void
 }
 
 export function usePageConfig<T = unknown>(division: string): UsePageConfigResult<T> {
@@ -50,6 +54,7 @@ export function usePageConfig<T = unknown>(division: string): UsePageConfigResul
   const [customizeMode, setCustomizeMode] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [overrides, setOverrides] = useState<Record<string, PageConfigCardOverride>>({})
+  const [gridLayouts, setGridLayoutsState] = useState<PageGridLayouts | null>(null)
 
   useEffect(() => {
     const ctl = new AbortController()
@@ -58,12 +63,18 @@ export function usePageConfig<T = unknown>(division: string): UsePageConfigResul
       .then(c => {
         setConfig(c)
         setOverrides({ ...(c.config_json?.card_overrides || {}) })
+        setGridLayoutsState(c.config_json?.grid_layout ?? null)
         setDirty(false)
       })
       .catch(() => undefined)
       .finally(() => setLoading(false))
     return () => ctl.abort()
   }, [division])
+
+  const setGridLayouts = useCallback((next: PageGridLayouts) => {
+    setGridLayoutsState(next)
+    setDirty(true)
+  }, [])
 
   const isVisible = useCallback((id: string) => {
     const ov = overrides[id]
@@ -124,15 +135,20 @@ export function usePageConfig<T = unknown>(division: string): UsePageConfigResul
 
   const save = useCallback(async (summary?: string) => {
     if (!config) return
-    const next = { ...(config.config_json || {}), card_overrides: overrides }
+    const next = {
+      ...(config.config_json || {}),
+      card_overrides: overrides,
+      grid_layout: gridLayouts ?? undefined,
+    }
     const updated = await api.pageConfigUpsert(division, next, summary)
     setConfig(updated)
     setDirty(false)
-  }, [config, overrides, division])
+  }, [config, overrides, gridLayouts, division])
 
   const reset = useCallback(async () => {
     await api.pageConfigReset(division)
     setOverrides({})
+    setGridLayoutsState(null)
     setDirty(false)
     // Re-fetch the cleared row
     const c = await api.pageConfigGet(division)
@@ -154,5 +170,7 @@ export function usePageConfig<T = unknown>(division: string): UsePageConfigResul
     save,
     reset,
     dirty,
+    gridLayouts,
+    setGridLayouts,
   }
 }

@@ -1857,6 +1857,30 @@ export interface PageConfigCardOverride {
   default_window_days?: number | null
 }
 
+/**
+ * One react-grid-layout item — `i` is the card id, x/y in grid cells,
+ * w/h in column-units / row-height multiples. Stored per breakpoint
+ * (lg/md/sm) so a layout the lead saved on desktop adapts on tablet.
+ */
+export interface PageGridLayoutItem {
+  i: string
+  x: number
+  y: number
+  w: number
+  h: number
+  minW?: number
+  minH?: number
+  maxW?: number
+  maxH?: number
+  static?: boolean
+}
+
+export interface PageGridLayouts {
+  lg?: PageGridLayoutItem[]
+  md?: PageGridLayoutItem[]
+  sm?: PageGridLayoutItem[]
+}
+
 export interface PageConfigResponse {
   division: string
   owner_email: string
@@ -1865,6 +1889,8 @@ export interface PageConfigResponse {
     default_window_days?: number
     accent_color?: string | null
     notes?: string | null
+    /** Per-breakpoint grid layout — drives drag/resize editing layer. */
+    grid_layout?: PageGridLayouts
   }
   exists?: boolean
   updated_at: string | null

@@ -1827,3 +1827,75 @@ th {
     right: 16px;
   }
 }
+
+/* ─── Grid editor (drag-and-resize layout layer) ────────────────────
+ * react-grid-layout dark-theme overrides so the editing chrome blends
+ * with Spider's panel colors. Placeholder shows where a dragged card
+ * will land; resize handle is the bottom-right corner grip. */
+.grid-editor {
+  position: relative;
+}
+.grid-editor .react-grid-item {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+.grid-editor .react-grid-item.react-grid-placeholder {
+  background: rgba(110, 168, 255, 0.18);
+  border: 1px dashed var(--blue);
+  border-radius: 4px;
+  opacity: 0.9;
+  z-index: 2;
+}
+.grid-editor .react-grid-item.react-draggable-dragging {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 6;
+  cursor: grabbing;
+}
+.grid-editor .react-grid-item.resizing {
+  box-shadow: 0 0 0 2px rgba(243, 156, 18, 0.6);
+  z-index: 5;
+}
+.grid-editor__cell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.grid-editor__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/* In edit mode, the RGL container shows a faint 12-col rule guide so
+   leads can see where they're dragging things to. */
+.grid-editor--editing {
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(243, 156, 18, 0.04) 0,
+      rgba(243, 156, 18, 0.04) 1px,
+      transparent 1px,
+      transparent calc(100% / 12)
+    );
+  border-radius: 4px;
+}
+/* RGL's default resize handle: pin to bottom-right, make it grip-shaped. */
+.grid-editor .react-resizable-handle {
+  background-image: none;
+  width: 14px;
+  height: 14px;
+  bottom: 2px;
+  right: 2px;
+  cursor: se-resize;
+}
+.grid-editor--editing .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-right: 2px solid var(--orange);
+  border-bottom: 2px solid var(--orange);
+  border-bottom-right-radius: 3px;
+  opacity: 0.85;
+}

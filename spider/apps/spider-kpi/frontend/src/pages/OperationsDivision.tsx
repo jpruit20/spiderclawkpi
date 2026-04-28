@@ -11,9 +11,9 @@ import { SharepointIntelligenceCard } from '../components/SharepointIntelligence
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
-import { CustomizableCard } from '../components/CustomizableCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
 import { usePageConfig } from '../lib/usePageConfig'
 import { Link } from 'react-router-dom'
 
@@ -113,29 +113,105 @@ export function OperationsDivision() {
           { label: 'Late-ship reasons', value: '—', state: 'neutral' },
         ]}
       />
-      <CustomizableCard id="recommendations" defaultTitle="Recommendations" cfg={cfg}>
-        <RecommendationsCard division="operations" />
-      </CustomizableCard>
-
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <DivisionTargetsButton division="operations" metrics={["orders", "tickets_created"]} label="Operations targets" />
       </div>
 
-      <CustomizableCard id="shipping_intelligence" defaultTitle="Shipping intelligence" cfg={cfg}>
-        <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
-      </CustomizableCard>
+      {/* Editing layer — drag cards to rearrange, grab the corner to
+          resize. View-mode renders saved positions; edit mode (toggled
+          via the "Customize" button in the header above) sprouts drag
+          handles + corner grips. Permission gate: Conor and Joseph. */}
+      <GridEditor
+        cfg={cfg}
+        items={[
+          {
+            id: 'recommendations',
+            defaultH: 8,
+            node: <RecommendationsCard division="operations" />,
+          },
+          {
+            id: 'shipping_intelligence',
+            defaultH: 16,
+            node: <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />,
+          },
+          {
+            id: 'sharepoint_intelligence',
+            defaultH: 12,
+            node: <SharepointIntelligenceCard division="operations" />,
+          },
+          {
+            id: 'sharepoint_activity',
+            defaultH: 10,
+            node: <SharepointActivityCard division="operations" />,
+          },
+          {
+            id: 'order_aging',
+            defaultH: 14,
+            node: <OrderAgingCard variant="full" trendDays={14} />,
+          },
+          {
+            id: 'clickup_tasks',
+            defaultW: 6,
+            defaultH: 14,
+            node: (
+              <ClickUpTasksCard
+                title={cfg.cardTitle('clickup_tasks', 'ClickUp tasks — Operations')}
+                subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize)."
+                defaultFilter={{ limit: 30 }}
+              />
+            ),
+          },
+          {
+            id: 'clickup_velocity',
+            defaultW: 6,
+            defaultH: 14,
+            node: (
+              <ClickUpVelocityCard
+                title={cfg.cardTitle('clickup_velocity', 'Team velocity — all ClickUp')}
+                subtitle="Throughput + cycle time across every space until an Ops space is stood up."
+              />
+            ),
+          },
+          {
+            id: 'clickup_compliance',
+            defaultW: 6,
+            defaultH: 12,
+            node: (
+              <ClickUpComplianceCard
+                title={cfg.cardTitle('clickup_compliance', 'Tagging compliance — all ClickUp')}
+                subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
+              />
+            ),
+          },
+          {
+            id: 'slack_pulse',
+            defaultW: 6,
+            defaultH: 12,
+            node: (
+              <SlackPulseCard
+                title={cfg.cardTitle('slack_pulse', 'Slack pulse — Inventory / Wholesale')}
+                subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
+                defaultChannelName="inventory-updates"
+              />
+            ),
+          },
+          {
+            id: 'email_pulse',
+            defaultW: 12,
+            defaultH: 12,
+            node: (
+              <EmailPulseCard
+                range={{
+                  startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+                  endDate: new Date().toISOString().slice(0, 10),
+                }}
+                highlightArchetype="shipment_logistics"
+              />
+            ),
+          },
+        ] satisfies GridEditorItem[]}
+      />
 
-      <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>
-        <SharepointIntelligenceCard division="operations" />
-      </CustomizableCard>
-
-      <CustomizableCard id="sharepoint_activity" defaultTitle="SharePoint activity feed" cfg={cfg}>
-        <SharepointActivityCard division="operations" />
-      </CustomizableCard>
-
-      <CustomizableCard id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}>
-        <OrderAgingCard variant="full" trendDays={14} />
-      </CustomizableCard>
       <CollapsibleSection
         id="ops-page-gated"
         title="Why this page is gated"
@@ -173,43 +249,6 @@ export function OperationsDivision() {
           drilldowns={[{ label: 'Open Financial / Revenue', href: '/revenue' }, { label: 'Open System Health', href: '/system-health' }]}
         />
       </CollapsibleSection>
-      <div className="page-grid" style={{ marginTop: 16 }}>
-        <CustomizableCard id="clickup_tasks" defaultTitle="ClickUp tasks — Operations" cfg={cfg}>
-          <ClickUpTasksCard
-            title={cfg.cardTitle('clickup_tasks', 'ClickUp tasks — Operations')}
-            subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize)."
-            defaultFilter={{ limit: 30 }}
-          />
-        </CustomizableCard>
-        <CustomizableCard id="clickup_velocity" defaultTitle="Team velocity — all ClickUp" cfg={cfg}>
-          <ClickUpVelocityCard
-            title={cfg.cardTitle('clickup_velocity', 'Team velocity — all ClickUp')}
-            subtitle="Throughput + cycle time across every space until an Ops space is stood up."
-          />
-        </CustomizableCard>
-        <CustomizableCard id="clickup_compliance" defaultTitle="Tagging compliance — all ClickUp" cfg={cfg}>
-          <ClickUpComplianceCard
-            title={cfg.cardTitle('clickup_compliance', 'Tagging compliance — all ClickUp')}
-            subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
-          />
-        </CustomizableCard>
-        <CustomizableCard id="slack_pulse" defaultTitle="Slack pulse — Inventory / Wholesale" cfg={cfg}>
-          <SlackPulseCard
-            title={cfg.cardTitle('slack_pulse', 'Slack pulse — Inventory / Wholesale')}
-            subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
-            defaultChannelName="inventory-updates"
-          />
-        </CustomizableCard>
-        <CustomizableCard id="email_pulse" defaultTitle="Email pulse — shipment / logistics" cfg={cfg}>
-          <EmailPulseCard
-            range={{
-              startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-              endDate: new Date().toISOString().slice(0, 10),
-            }}
-            highlightArchetype="shipment_logistics"
-          />
-        </CustomizableCard>
-      </div>
     </>
   )
 }
