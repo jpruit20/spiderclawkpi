@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
+import { usePageConfig } from '../lib/usePageConfig'
 import { MetricTile, TileGrid, openSectionById } from '../components/tiles'
 import { TruthBadge } from '../components/TruthBadge'
 import { TruthLegend } from '../components/TruthLegend'
@@ -73,6 +76,7 @@ const FUNNEL_COLORS: Record<string, string> = {
 /* ------------------------------------------------------------------ */
 
 export function MarketingDivision() {
+  const cfg = usePageConfig('marketing')
   const todayDate = businessTodayDate()
   const [rows, setRows] = useState<KPIDaily[]>([])
   const [overview, setOverview] = useState<OverviewResponse | null>(null)
@@ -625,8 +629,20 @@ export function MarketingDivision() {
         <>
           <TruthLegend />
 
-          {/* Top-of-page actionable recommendations — kept above the fold. */}
-          <RecommendationsCard division="marketing" />
+          <DivisionPageHeader cfg={cfg} divisionLabel="Marketing · Bailey" />
+
+          {/* Editing layer — Bailey (and Joseph) drag/resize cards via
+              the Customize button in the header above. */}
+          <GridEditor
+            cfg={cfg}
+            items={[
+              {
+                id: 'recommendations',
+                defaultH: 8,
+                node: <RecommendationsCard division="marketing" />,
+              },
+            ] satisfies GridEditorItem[]}
+          />
 
           {/* Audience context folded — useful background but not first-glance. */}
           <CollapsibleSection

@@ -1,14 +1,19 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DivisionHero } from '../components/DivisionHero'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
+import { usePageConfig } from '../lib/usePageConfig'
 
 export function ProductionManufacturingDivision() {
+  const cfg = usePageConfig('manufacturing')
   return (
     <>
+      <DivisionPageHeader cfg={cfg} divisionLabel="Manufacturing · David" />
       {/* ── DIVISION HERO — signature: stack ───────────────────────────
           Vertical stacked bars — the physical build pipeline. Stays in
           a muted "awaiting feed" state until manufacturing feeds go
@@ -52,19 +57,27 @@ export function ProductionManufacturingDivision() {
           { label: 'Bottlenecks', value: '—', state: 'neutral' },
         ]}
       />
-      {/* Action recommendations specifically for Manufacturing now
-          that we have real Production-and-QC document signal flowing
-          through the engine. */}
-      <RecommendationsCard division="manufacturing" />
-
-      {/* SharePoint Production & QC activity — pulls from AMW's per-product
-          sites' "Production and QC" folders. First real manufacturing
-          data on this page; production output / yield / defect feeds
-          remain blocked below until MES integration lands. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <DivisionTargetsButton division="manufacturing" metrics={["orders", "tickets_created"]} label="Manufacturing targets" />
       </div>
-      <SharepointIntelligenceCard division="manufacturing" />
+
+      {/* Editing layer — David (and Joseph) drag/resize cards via the
+          Customize button in the header above. */}
+      <GridEditor
+        cfg={cfg}
+        items={[
+          {
+            id: 'recommendations',
+            defaultH: 8,
+            node: <RecommendationsCard division="manufacturing" />,
+          },
+          {
+            id: 'sharepoint_intelligence',
+            defaultH: 12,
+            node: <SharepointIntelligenceCard division="manufacturing" />,
+          },
+        ] satisfies GridEditorItem[]}
+      />
 
       <CollapsibleSection
         id="mfg-sharepoint-activity"

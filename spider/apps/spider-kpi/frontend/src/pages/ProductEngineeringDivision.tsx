@@ -22,6 +22,9 @@ import { ClickUpOverlayChart } from '../components/ClickUpOverlayChart'
 import { ClickUpTasksCard } from '../components/ClickUpTasksCard'
 import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
+import { usePageConfig } from '../lib/usePageConfig'
 import { FirmwareCohortPanel } from '../components/FirmwareCohortPanel'
 import { FirmwareImpactTimeline } from '../components/FirmwareImpactTimeline'
 import { SlackPulseCard } from '../components/SlackPulseCard'
@@ -383,6 +386,7 @@ function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; 
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 export function ProductEngineeringDivision() {
+  const cfg = usePageConfig('pe')
   const { user } = useAuth()
   const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
   const canSeeCharcoalJIT = CHARCOAL_JIT_EMAILS.has((user?.email ?? '').toLowerCase())
@@ -1031,12 +1035,20 @@ export function ProductEngineeringDivision() {
             <>
               <TruthLegend />
 
-              {/* Top-of-page actionable recommendations engine.
-                  Surfaces "do this next" items based on current data
-                  — turns the dashboard from "displays" into "tells
-                  you what to do". Generators live in
-                  app/services/recommendations.py. */}
-              <RecommendationsCard division="pe" />
+              <DivisionPageHeader cfg={cfg} divisionLabel="Product Engineering · Kyle" />
+
+              {/* Editing layer — Kyle (and Joseph) drag/resize cards via
+                  the Customize button in the header above. */}
+              <GridEditor
+                cfg={cfg}
+                items={[
+                  {
+                    id: 'recommendations',
+                    defaultH: 8,
+                    node: <RecommendationsCard division="pe" />,
+                  },
+                ] satisfies GridEditorItem[]}
+              />
 
               {/* SharePoint engineering activity — pulled from AMW's
                   per-product sites. Files modified in the

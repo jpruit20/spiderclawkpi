@@ -22,7 +22,10 @@ import { ClickUpVelocityCard } from '../components/ClickUpVelocityCard'
 import { SlackPulseCard } from '../components/SlackPulseCard'
 import { EmailPulseCard } from '../components/EmailPulseCard'
 import { CollapsibleSection } from '../components/CollapsibleSection'
+import { DivisionPageHeader } from '../components/DivisionPageHeader'
+import { GridEditor, type GridEditorItem } from '../components/GridEditor'
 import { MetricTile, StatusLight, TileGrid, openSectionById } from '../components/tiles'
+import { usePageConfig } from '../lib/usePageConfig'
 import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { BaselineBand } from '../components/BaselineBand'
 import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
@@ -99,6 +102,7 @@ const DRILL_ROUTES = [
 /* ── page ── */
 
 export function CustomerExperienceDivision() {
+  const cfg = usePageConfig('cx')
   const [snapshot, setSnapshot] = useState<CXSnapshotResponse | null>(null)
   const [socialPulse, setSocialPulse] = useState<SocialPulse | null>(null)
   const [supportOverview, setSupportOverview] = useState<SupportOverviewResponse | null>(null)
@@ -731,31 +735,44 @@ export function CustomerExperienceDivision() {
           {/* KPI Strip */}
           <VenomKpiStrip cards={kpiCards} cols={4} />
 
-          {/* WISMO — target: 0. Customer follow-ups on undelivered orders.
-              Compressed by default (just KPI strip); the full trend
-              chart + recent tickets list expand on click. */}
-          <WismoKpiCard days={30} />
-
-          {/* Order aging (Shopify) — FYI context for WISMO. When 3-7d
-              or 7d+ counts rise, WISMO volume tends to follow. The
-              full aging view lives on the Operations page; this is
-              the one-glance version. */}
-          <OrderAgingCard
-            variant="compact"
-            subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
-          />
+          <DivisionPageHeader cfg={cfg} divisionLabel="Customer Experience · Jeremiah" />
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
             <DivisionTargetsButton division="cx" metrics={["tickets_created", "csat", "first_response_time"]} label="CX targets" />
           </div>
 
-          {/* Top-of-page actionable recommendations. */}
-          <RecommendationsCard division="cx" />
-
-          {/* CX × shipping correlation — WISMO ticket detection +
-              match against ShipStation, late-tracking signal,
-              per-carrier WISMO breakdown. */}
-          <ShippingIntelligenceCard defaultDays={30} showCxCorrelation />
+          {/* Editing layer — Jeremiah (and Joseph) drag/resize cards via
+              the Customize button in the header above. */}
+          <GridEditor
+            cfg={cfg}
+            items={[
+              {
+                id: 'wismo',
+                defaultH: 12,
+                node: <WismoKpiCard days={30} />,
+              },
+              {
+                id: 'order_aging',
+                defaultH: 10,
+                node: (
+                  <OrderAgingCard
+                    variant="compact"
+                    subtitle="If the 3–7d or 7d+ buckets swell, expect WISMO to follow. Full aging + trend lives on the Operations page."
+                  />
+                ),
+              },
+              {
+                id: 'recommendations',
+                defaultH: 8,
+                node: <RecommendationsCard division="cx" />,
+              },
+              {
+                id: 'shipping_intelligence',
+                defaultH: 16,
+                node: <ShippingIntelligenceCard defaultDays={30} showCxCorrelation />,
+              },
+            ] satisfies GridEditorItem[]}
+          />
 
           {/* Klaviyo lookup tools — folded by default. Useful during
               triage / escalation but not first-glance material. */}
