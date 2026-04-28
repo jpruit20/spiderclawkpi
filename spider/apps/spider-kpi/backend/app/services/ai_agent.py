@@ -40,6 +40,7 @@ CLI_MAX_BUDGET_USD = 2.00
 TIER_OVERRIDES: dict[str, str] = {
     "conor@spidergrills.com": "owner",     # TEMPORARY — revert to default 'division_lead' after dashboard build wraps
     "jeremiah@spidergrills.com": "owner",  # TEMPORARY — same as Conor; revert with him
+    "bailey@spidergrills.com": "owner",    # TEMPORARY — same as Conor; revert with him
 }
 
 

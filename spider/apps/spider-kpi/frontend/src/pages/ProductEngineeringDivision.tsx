@@ -2,10 +2,15 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../components/AuthGate'
 
-// Firmware + Charcoal sub-pages are owner-only for now (wrapped in
-// OwnerOnlyRoute in App.tsx). Mirror that gate on the UI links so
-// non-owner dashboard users don't see buttons that would 404 them.
+// Firmware sub-page stays owner-only (wrapped in OwnerOnlyRoute in App.tsx).
+// Charcoal JIT is owner + Bailey per Joseph's request — see App.tsx
+// CharcoalJITRoute. Mirror those gates on the UI links so
+// non-permitted dashboard users don't see buttons that would 404 them.
 const OWNER_EMAIL = 'joseph@spidergrills.com'
+const CHARCOAL_JIT_EMAILS = new Set<string>([
+  'joseph@spidergrills.com',
+  'bailey@spidergrills.com',
+])
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
@@ -380,6 +385,7 @@ function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; 
 export function ProductEngineeringDivision() {
   const { user } = useAuth()
   const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
+  const canSeeCharcoalJIT = CHARCOAL_JIT_EMAILS.has((user?.email ?? '').toLowerCase())
   const [view, setView] = useState<SubView>('fleet')
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [githubIssues, setGithubIssues] = useState<GithubIssuesResponse | null>(null)
@@ -850,10 +856,10 @@ export function ProductEngineeringDivision() {
                     <button key={tab.key} className={`range-button${view === tab.key ? ' active' : ''}`} onClick={() => { setView(tab.key); setClusterDetail(null) }}>{tab.label}</button>
                   ))}
                   {isOwner ? (
-                    <>
-                      <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
-                      <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
-                    </>
+                    <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
+                  ) : null}
+                  {canSeeCharcoalJIT ? (
+                    <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
                   ) : null}
                 </div>
                 <div style={{ position: 'relative' }}>
