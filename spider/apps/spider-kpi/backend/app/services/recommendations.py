@@ -33,12 +33,24 @@ from sqlalchemy.orm import Session
 
 def _safe(fn: Callable[[Session], list[dict[str, Any]]], db: Session) -> list[dict[str, Any]]:
     """Wrap a generator so a single bad query can't tank the whole
-    division view. Logs the exception and returns []."""
+    division view. Logs the exception and rolls back so the next
+    generator's queries don't fail with InFailedSqlTransaction.
+
+    Without the rollback, one bad recommendation poisons the entire
+    SQLAlchemy session — every subsequent rec query in the same
+    request fails with `current transaction is aborted, commands
+    ignored until end of transaction block`. That cascade is what
+    surfaced as /api/cx/snapshot timeouts on 2026-04-28.
+    """
     try:
         return fn(db) or []
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("recommendations: %s failed: %s", fn.__name__, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
         return []
 
 
@@ -142,10 +154,16 @@ def _rec_pe_cook_success(db: Session) -> list[dict[str, Any]]:
 
 
 def _rec_cx_first_response_breach(db: Session) -> list[dict[str, Any]]:
+    # freshdesk_tickets_daily exposes `sla_breach_rate` (0..1) and
+    # `tickets_created` per business_date — no per-row breach flag.
+    # Approximate breach count = sum(tickets_created * sla_breach_rate).
+    # Earlier version of this query referenced `breached_first_response`
+    # which never existed in this schema; that failure poisoned the
+    # SQLAlchemy session and cascaded into CX snapshot timeouts.
     row = db.execute(text("""
         SELECT
-            COUNT(*) FILTER (WHERE breached_first_response) AS breached,
-            COUNT(*) AS total
+            COALESCE(SUM(tickets_created * sla_breach_rate), 0)::int AS breached,
+            COALESCE(SUM(tickets_created), 0) AS total
         FROM freshdesk_tickets_daily
         WHERE business_date >= CURRENT_DATE - INTERVAL '7 days'
     """)).first()
