@@ -157,11 +157,18 @@ def _fetch_recent_sync_failures(days: int = 7) -> list[dict[str, Any]]:
         ]
 
 
-def _fetch_api_5xx_counts(days: int = 7) -> dict[str, int]:
+def _fetch_api_5xx_counts(days: int = 7) -> dict[str, int] | None:
     """Count 5xx responses per endpoint over the last N days. Reads
     the systemd journal — no DB row needed since FastAPI logs go
-    straight to journald via uvicorn."""
+    straight to journald via uvicorn.
+
+    Returns None if the scan fails (journal too large, missing perms,
+    etc.) so the report can distinguish "scan failed → unknown" from
+    "scan succeeded → 0 errors found"."""
     try:
+        # 180s timeout: a busy droplet with /api/admin/ingest/telemetry-stream
+        # firing thousands of times an hour produces a lot of 7-day journal
+        # output. systemd unit's TimeoutStartSec is 300s so we have headroom.
         result = subprocess.run(
             [
                 "journalctl",
@@ -169,12 +176,15 @@ def _fetch_api_5xx_counts(days: int = 7) -> dict[str, int]:
                 f"--since={days} days ago",
                 "--no-pager",
                 "-q",
+                # Only lines with 5xx codes — much smaller than the full journal.
+                # journalctl supports -g for grep-like filtering by regex.
+                "-g", r'HTTP/1\.1" 5[0-9][0-9]',
             ],
-            check=True, capture_output=True, text=True, timeout=60,
+            check=True, capture_output=True, text=True, timeout=180,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
         print(f"weekly-health: journalctl read failed: {exc}", file=sys.stderr)
-        return {}
+        return None
 
     counts: dict[str, int] = {}
     for line in result.stdout.splitlines():
@@ -291,7 +301,10 @@ def _format_report(
                 f"{f['successes']:>4} successes ({f['fail_rate_pct']}%)"
             )
         text_parts.append("")
-    if api_5xx:
+    if api_5xx is None:
+        text_parts.append("API 5xx (last 7 days): journal scan failed (timeout or missing perms — check /var/log/spider-kpi-weekly-health.log)")
+        text_parts.append("")
+    elif api_5xx:
         text_parts.append("API 5xx (last 7 days)")
         text_parts.append("-" * 64)
         for path, n in sorted(api_5xx.items(), key=lambda x: -x[1])[:10]:
@@ -372,7 +385,9 @@ def _format_report(
         rows += "</table>"
         html_parts.append(_section("Flaky syncs (last 7 days)", rows, "#444"))
 
-    if api_5xx:
+    if api_5xx is None:
+        html_parts.append('<p style="color:#b07c00;background:#fdf8e9;padding:6px 10px;border-left:3px solid #d4a017;font-size:12px"><strong>API 5xx (last 7 days):</strong> journal scan failed — check <code>/var/log/spider-kpi-weekly-health.log</code> for details</p>')
+    elif api_5xx:
         rows = '<table style="border-collapse:collapse;font-size:13px"><tr><th align="right" style="padding:4px 10px;border-bottom:1px solid #ddd">Count</th><th align="left" style="padding:4px 10px;border-bottom:1px solid #ddd">Endpoint</th></tr>'
         for path, n in sorted(api_5xx.items(), key=lambda x: -x[1])[:10]:
             rows += f'<tr><td align="right" style="padding:4px 10px">{n}</td><td style="padding:4px 10px;font-family:monospace">{path}</td></tr>'
