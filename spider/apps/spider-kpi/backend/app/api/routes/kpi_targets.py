@@ -26,7 +26,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_session, require_auth
+from app.api.deps import db_session, require_auth, require_dashboard_or_service_token
+from app.api.routes.auth import get_user_from_request
 from app.services.division_ownership import (
     DIVISION_OWNERS,
     can_edit_division,
@@ -59,7 +60,23 @@ class TargetIn(BaseModel):
     division: Optional[str] = None  # null = global; only Joseph can set/edit
 
 
+def _email_from_request(request: Request, db: Session) -> Optional[str]:
+    """Resolve the calling user's email from a dashboard session cookie.
+
+    require_dashboard_or_service_token already validated the cookie or the
+    X-App-Password header on the way in. If the request came in via cookie,
+    we can pull the user; via service token there's no user (returns None,
+    callers fall back to platform-owner-equivalent behavior since the
+    service token IS admin-equivalent).
+    """
+    user = get_user_from_request(request, db)
+    if user is None:
+        return None
+    return (user.email or "").lower() or None
+
+
 def _user_email(user: Any) -> Optional[str]:
+    """Legacy shim — kept so any existing callers passing a dict still work."""
     if isinstance(user, dict):
         return (user.get("email") or "").lower() or None
     return None
@@ -82,10 +99,20 @@ def active(db: Session = Depends(db_session)) -> dict[str, Any]:
 
 
 @router.get("/permissions")
-def permissions(request: Request, db: Session = Depends(db_session), user: Any = Depends(require_auth)) -> dict[str, Any]:
+def permissions(
+    request: Request,
+    db: Session = Depends(db_session),
+    _: None = Depends(require_dashboard_or_service_token),
+) -> dict[str, Any]:
     """What can the calling user edit? Frontend uses this to gate
-    the 'Set targets' button + the Save action."""
-    email = _user_email(user)
+    the 'Set targets' button + the Save action.
+
+    Auth: accepts dashboard session cookie OR X-App-Password. The
+    earlier `require_auth` (X-App-Password only) caused the
+    Command Center 'Set targets' panel to silently 401 from the
+    browser, leaving the panel read-only — fixed 2026-04-28.
+    """
+    email = _email_from_request(request, db)
     divs = editable_divisions_for(email)
     return {
         "user_email": email,
@@ -100,13 +127,14 @@ def permissions(request: Request, db: Session = Depends(db_session), user: Any =
     }
 
 
-@router.post("", dependencies=[Depends(require_auth)])
+@router.post("")
 def upsert(
     payload: TargetIn,
+    request: Request,
     db: Session = Depends(db_session),
-    user: Any = Depends(require_auth),
+    _: None = Depends(require_dashboard_or_service_token),
 ) -> dict[str, Any]:
-    user_email = _user_email(user)
+    user_email = _email_from_request(request, db)
     if not can_edit_division(user_email, payload.division):
         raise HTTPException(
             status_code=403,
@@ -160,13 +188,14 @@ def upsert(
     }
 
 
-@router.delete("/{target_id}", dependencies=[Depends(require_auth)])
+@router.delete("/{target_id}")
 def delete_(
     target_id: int,
+    request: Request,
     db: Session = Depends(db_session),
-    user: Any = Depends(require_auth),
+    _: None = Depends(require_dashboard_or_service_token),
 ) -> dict[str, Any]:
-    user_email = _user_email(user)
+    user_email = _email_from_request(request, db)
     existing = db.get(KpiTarget, target_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="not found")
