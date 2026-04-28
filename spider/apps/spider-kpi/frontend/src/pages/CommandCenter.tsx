@@ -9,6 +9,7 @@ import { NearbyEventsBadge } from '../components/NearbyEventsBadge'
 import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { FeedbackPills, useMyFeedback } from '../components/FeedbackPills'
 import { AISelfGradeCard } from '../components/AISelfGradeCard'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { CommandCenterHero } from '../components/CommandCenterHero'
 import { MorningBriefingCard } from '../components/MorningBriefingCard'
 import { TrendSnapshotCard } from '../components/TrendSnapshotCard'
@@ -276,11 +277,33 @@ export function CommandCenter() {
         </TileGrid>
       </div>
 
-      {/* ── ROW 5 · COMPACT SECONDARY DETAIL ───────────────────────────
-          Things that are useful but shouldn't occupy primary real estate:
-          top drafts, critical signals, hot Slack thread. Shown as very
-          compact rows rather than bulky cards. */}
-      <SecondaryDetail data={data} />
+      {/* ── ROW 5 · COMPACT SECONDARY DETAIL (folded by default) ──────
+          Drafts, critical signals, overdue tasks, hot Slack thread.
+          Useful triage but not first-glance material — folded so the
+          morning view leads with gauges and division tiles. */}
+      {(() => {
+        const drafts = data.drafts || []
+        const crits = data.critical_signals || []
+        const stale = data.stale_tasks || []
+        const slackHot = data.slack_hot
+        if (!drafts.length && !crits.length && !stale.length && !slackHot) return null
+        const counts: string[] = []
+        if (drafts.length) counts.push(`${drafts.length} draft${drafts.length === 1 ? '' : 's'}`)
+        if (crits.length) counts.push(`${crits.length} critical`)
+        if (stale.length) counts.push(`${stale.length} overdue`)
+        if (slackHot) counts.push('hot thread')
+        return (
+          <CollapsibleSection
+            id="cc-secondary-detail"
+            title="Secondary detail"
+            subtitle="Drafts · critical signals · overdue tasks · hottest Slack thread"
+            density="compact"
+            meta={counts.join(' · ')}
+          >
+            <SecondaryDetail data={data} />
+          </CollapsibleSection>
+        )
+      })()}
     </div>
   )
 }

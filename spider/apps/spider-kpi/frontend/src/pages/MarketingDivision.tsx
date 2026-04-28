@@ -625,29 +625,34 @@ export function MarketingDivision() {
         <>
           <TruthLegend />
 
-          {/* Audience taxonomy — sets the context for every card
-              below. The marketing audience is mostly NOT owners;
-              cards use the right denominator per metric. */}
-          <AudienceSegmentationCard />
-
-          {/* Top-of-page actionable recommendations. */}
+          {/* Top-of-page actionable recommendations — kept above the fold. */}
           <RecommendationsCard division="marketing" />
 
-          {/* Klaviyo funnel — signup → install → first cook → order.
-              Surfaces the post-ingest mirror of the Klaviyo account,
-              so marketing can see the funnel without bouncing between
-              Klaviyo, Shopify, and the dashboard. */}
-          <KlaviyoMarketingCard />
+          {/* Audience context folded — useful background but not first-glance. */}
+          <CollapsibleSection
+            id="mkt-audience"
+            title="Audience segmentation"
+            subtitle="Who actually buys / engages — denominator context for every metric below"
+            density="compact"
+          >
+            <AudienceSegmentationCard />
+          </CollapsibleSection>
 
-          {/* Live Klaviyo activity — campaigns sent / flows running /
-              list & segment health. Together with the funnel above,
-              this gives the Marketing team a single-page view of the
-              whole Klaviyo account without bouncing into Klaviyo's UI
-              for each check. */}
-          <KlaviyoCampaignsCard />
-          <KlaviyoFlowsStatusCard />
-          <KlaviyoListsSegmentsCard />
-          <KlaviyoFriendbuyCard />
+          {/* Klaviyo bundle folded — 4 heavy cards consolidated under one
+              "Klaviyo activity" disclosure so the Marketing page leads with
+              gauges, funnel, and recommendations. */}
+          <CollapsibleSection
+            id="mkt-klaviyo"
+            title="Klaviyo activity"
+            subtitle="Funnel · campaigns · flows · lists & segments · Friendbuy"
+            density="compact"
+          >
+            <KlaviyoMarketingCard />
+            <KlaviyoCampaignsCard />
+            <KlaviyoFlowsStatusCard />
+            <KlaviyoListsSegmentsCard />
+            <KlaviyoFriendbuyCard />
+          </CollapsibleSection>
 
           {/* ---- KPI tiles (car-dashboard style: big number, color state,
                  trend arrow, optional sparkline) ---- */}
@@ -737,20 +742,19 @@ export function MarketingDivision() {
               <strong>Visual Funnel</strong>
               <span className="venom-panel-hint">Sessions → PDP → Add to Cart → Checkout → Purchase</span>
             </div>
-            {/* Legend disambiguates the two different comparisons that
-                appear per stage — Joseph 2026-04-18: prior was confusing
-                because "prior stage" could mean either the previous funnel
-                step OR the prior time period. */}
-            <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 14, marginBottom: 10, flexWrap: 'wrap' }}>
-              <span>
-                <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--orange)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
-                <strong>Drop to next step</strong> = % of this stage that did not advance in the funnel
-              </span>
-              <span>
-                <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--blue)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
-                <strong>vs prior period</strong> = this stage's volume vs same stage in the prior window
-              </span>
-            </div>
+            <details style={{ marginBottom: 10 }}>
+              <summary style={{ fontSize: 11, color: 'var(--muted)', cursor: 'pointer' }}>What the colors mean</summary>
+              <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 14, marginTop: 6, flexWrap: 'wrap' }}>
+                <span>
+                  <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--orange)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
+                  <strong>Drop to next step</strong> = % of this stage that did not advance in the funnel
+                </span>
+                <span>
+                  <span style={{ display: 'inline-block', width: 8, height: 8, background: 'var(--blue)', borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />
+                  <strong>vs prior period</strong> = this stage's volume vs same stage in the prior window
+                </span>
+              </div>
+            </details>
             {biggestLeak ? (
               <div className="trust-banner trust-banner-warn" style={{ marginBottom: 12 }}>
                 <strong>Biggest in-funnel leak: {biggestLeak.prev_label ? `${biggestLeak.prev_label} → ${biggestLeak.label}` : biggestLeak.label}</strong>
@@ -805,47 +809,56 @@ export function MarketingDivision() {
             </small>
           </section>
 
-          {/* ---- Two-col: Actions + What's Working / Friction ---- */}
-          <div className="two-col two-col-equal">
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>This Week's Actions</strong>
-              </div>
-              <div className="stack-list compact">
-                {weekActions.map((item, idx) => (
-                  <div className={`list-item ${item.status}`} key={idx}>
-                    <p>{item.text}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>What's Working</strong>
-              </div>
-              <div className="stack-list compact">
-                {positiveItems.map((text, idx) => (
-                  <div className="list-item status-good" key={idx}>
-                    <p>{text}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="venom-panel-head" style={{ marginTop: 12 }}>
-                <strong>Top Friction</strong>
-              </div>
-              <div className="stack-list compact">
-                <div className="list-item status-warn">
-                  <p>{topFriction?.title || 'Awaiting ranked friction source'}</p>
-                  <small>
-                    {clarityDegraded
-                      ? 'Reduced confidence — Clarity degraded'
-                      : 'Normal confidence'}
-                  </small>
+          {/* Weekly status — folded by default. Lists are useful but heavy
+              when the page is also showing gauges + funnel + Klaviyo bundle. */}
+          <CollapsibleSection
+            id="mkt-weekly-status"
+            title="Weekly status"
+            subtitle="This week's actions · what's working · top friction"
+            density="compact"
+            meta={`${weekActions.length} actions`}
+          >
+            <div className="two-col two-col-equal">
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>This Week's Actions</strong>
                 </div>
-              </div>
-            </section>
-          </div>
+                <div className="stack-list compact">
+                  {weekActions.map((item, idx) => (
+                    <div className={`list-item ${item.status}`} key={idx}>
+                      <p>{item.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="card">
+                <div className="venom-panel-head">
+                  <strong>What's Working</strong>
+                </div>
+                <div className="stack-list compact">
+                  {positiveItems.map((text, idx) => (
+                    <div className="list-item status-good" key={idx}>
+                      <p>{text}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="venom-panel-head" style={{ marginTop: 12 }}>
+                  <strong>Top Friction</strong>
+                </div>
+                <div className="stack-list compact">
+                  <div className="list-item status-warn">
+                    <p>{topFriction?.title || 'Awaiting ranked friction source'}</p>
+                    <small>
+                      {clarityDegraded
+                        ? 'Reduced confidence — Clarity degraded'
+                        : 'Normal confidence'}
+                    </small>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </CollapsibleSection>
 
           {/* Progressive disclosure — everything below the hero lives in
               collapsibles so the page opens clean. */}

@@ -3,9 +3,8 @@ import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, TruthState } from '../components/TruthBadge'
-import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthLegend } from '../components/TruthLegend'
-import { MetricTile, StatusLight, TileGrid } from '../components/tiles'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { fmtPct, fmtInt, formatFreshness } from '../lib/format'
 import { ApiError, api } from '../lib/api'
 import { frictionRankingScore } from '../lib/operatingModel'
@@ -130,31 +129,8 @@ export function IssueRadar() {
     1,
   )
 
-  /* ---------- KPI strip cards ---------- */
-
-  const kpiCards: KpiCardDef[] = [
-    {
-      label: 'Priority Queue',
-      value: fmtInt(sortedClusters.length),
-      sub: 'sorted clusters for escalation',
-      truthState: topIssueTruthState,
-    },
-    {
-      label: 'Fastest Rising',
-      value: fmtInt(data.fastest_rising.length),
-      sub: 'clusters with upward pressure',
-      truthState: topIssueTruthState,
-      delta: data.fastest_rising.length > 0
-        ? { text: `${data.fastest_rising[0]?.details_json?.trend_label || 'rising'}`, direction: 'up' }
-        : undefined,
-    },
-    {
-      label: 'Live Sources',
-      value: `${data.live_sources.length} / ${totalSources}`,
-      sub: 'source coverage',
-      truthState: coverageTruth,
-    },
-  ]
+  /* KPI strip removed — DivisionHero already shows priority queue / rising
+     / live sources with the same numbers and richer state colors. */
 
   /* ---------- render ---------- */
 
@@ -235,47 +211,20 @@ export function IssueRadar() {
 
       {!loading && !error ? (
         <>
-          <TruthLegend />
+          {/* TruthLegend folded — viewers click in when they need the
+              canonical/proxy/estimated key. */}
+          <CollapsibleSection
+            id="ir-truth-legend"
+            title="Truth-state legend"
+            subtitle="What the canonical / proxy / estimated badges mean"
+            density="compact"
+          >
+            <TruthLegend />
+          </CollapsibleSection>
 
-          {/* Warning-lights row — glanceable radar state */}
-          <TileGrid cols={4}>
-            <StatusLight
-              label="Priority queue"
-              count={sortedClusters.length}
-              alertState={sortedClusters.length > 5 ? 'bad' : 'warn'}
-              sublabel="clusters escalating"
-              icon="📡"
-            />
-            <StatusLight
-              label="Rising clusters"
-              count={data.fastest_rising.length}
-              alertState="warn"
-              sublabel={data.fastest_rising.length > 0 ? (String(data.fastest_rising[0]?.details_json?.trend_label || 'rising')) : 'no trends rising'}
-              icon="📈"
-            />
-            <MetricTile
-              label="Source coverage"
-              value={`${data.live_sources.length} / ${totalSources}`}
-              sublabel="live data sources reporting"
-              state={
-                data.live_sources.length === totalSources ? 'good'
-                : data.live_sources.length > 0 ? 'warn'
-                : 'bad'
-              }
-              icon="🔌"
-            />
-            <MetricTile
-              label="Top-risk severity"
-              value={topThree[0]?.severity?.toUpperCase() || '—'}
-              sublabel={topThree[0]?.owner_team ? `owner: ${topThree[0].owner_team}` : 'no high-risk cluster'}
-              state={
-                topThree[0]?.severity === 'high' ? 'bad'
-                : topThree[0]?.severity === 'medium' ? 'warn'
-                : 'good'
-              }
-              icon="🎯"
-            />
-          </TileGrid>
+          {/* Warning-lights TileGrid removed — DivisionHero's flanking +
+              tiles already show priority queue / rising / live sources /
+              top severity. No need to repeat. */}
 
           {/* Escalate First — top 3 visualized as severity bars with score
               scaled against max; click through to each cluster source. */}
@@ -390,11 +339,16 @@ export function IssueRadar() {
             </section>
           </div>
 
-          {/* Telemetry Correlation (conditional) */}
+          {/* Telemetry correlation — folded; viewers drill in for fleet detail. */}
           {hasTelemetry ? (
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Telemetry Correlation</strong>
+            <CollapsibleSection
+              id="ir-telemetry-correlation"
+              title="Telemetry correlation"
+              subtitle="Session reliability · disconnect rate · sample size · freshness"
+              density="compact"
+              meta={`${fmtPct(telemetryLatest!.session_reliability_score)} reliability`}
+            >
+              <div className="venom-panel-head" style={{ marginTop: 0 }}>
                 <TruthBadge state={telemetrySampleReliability === 'high' ? 'proxy' : 'estimated'} />
               </div>
               <div className="venom-breakdown-list">
@@ -415,57 +369,61 @@ export function IssueRadar() {
                   <span className="venom-breakdown-val">{formatFreshness(telemetryCollection?.newest_sample_timestamp_seen)}</span>
                 </div>
               </div>
-            </section>
+            </CollapsibleSection>
           ) : null}
 
-          {/* Two-col: Signals + Source Coverage */}
-          <div className="two-col two-col-equal">
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Signals</strong>
-                <span className="venom-panel-hint">{Math.min(data.signals.length, 10)} of {data.signals.length}</span>
-              </div>
-              <div className="stack-list compact">
-                {data.signals.slice(0, 10).map((signal) => (
-                  <div className={`list-item ${severityStatusClass(signal.severity)}`} key={signal.id}>
-                    <div className="item-head">
-                      <strong>{signal.title}</strong>
-                      <div className="inline-badges">
-                        <span className={severityBadgeClass(signal.severity)}>{signal.severity}</span>
-                        <span className="badge badge-neutral">{signal.source}</span>
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 6 }}>
-                      <FeedbackPills
-                        artifactType="issue_signal"
-                        artifactId={String(signal.id)}
-                        currentReaction={signalReactions.get(String(signal.id)) ?? null}
-                        compact
-                        onChange={r => updateSignalReaction(String(signal.id), r)}
-                      />
+          {/* Signals + source coverage — both lists folded by default.
+              The hero already shows live-source count and signal count. */}
+          <CollapsibleSection
+            id="ir-signals"
+            title="All signals"
+            subtitle="Per-signal severity + source"
+            density="compact"
+            meta={`${Math.min(data.signals.length, 10)} of ${data.signals.length}`}
+          >
+            <div className="stack-list compact">
+              {data.signals.slice(0, 10).map((signal) => (
+                <div className={`list-item ${severityStatusClass(signal.severity)}`} key={signal.id}>
+                  <div className="item-head">
+                    <strong>{signal.title}</strong>
+                    <div className="inline-badges">
+                      <span className={severityBadgeClass(signal.severity)}>{signal.severity}</span>
+                      <span className="badge badge-neutral">{signal.source}</span>
                     </div>
                   </div>
-                ))}
-                {!data.signals.length ? <div className="state-message">No issue signals returned.</div> : null}
-              </div>
-            </section>
+                  <div style={{ marginTop: 6 }}>
+                    <FeedbackPills
+                      artifactType="issue_signal"
+                      artifactId={String(signal.id)}
+                      currentReaction={signalReactions.get(String(signal.id)) ?? null}
+                      compact
+                      onChange={r => updateSignalReaction(String(signal.id), r)}
+                    />
+                  </div>
+                </div>
+              ))}
+              {!data.signals.length ? <div className="state-message">No issue signals returned.</div> : null}
+            </div>
+          </CollapsibleSection>
 
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Source Coverage</strong>
-              </div>
-              <div className="venom-breakdown-list">
-                {data.source_breakdown.map((entry) => (
-                  <div className="venom-breakdown-row" key={entry.source}>
-                    <span>{entry.source}</span>
-                    <span className={`badge ${entry.live ? 'badge-good' : 'badge-muted'}`}>{entry.live ? 'live' : 'scaffolded'}</span>
-                    <span className="venom-breakdown-val">{entry.signals}s / {entry.clusters}c</span>
-                  </div>
-                ))}
-                {!data.source_breakdown.length ? <div className="state-message">No source breakdown.</div> : null}
-              </div>
-            </section>
-          </div>
+          <CollapsibleSection
+            id="ir-source-coverage"
+            title="Source coverage"
+            subtitle="Per-source live/scaffolded state and signal/cluster volume"
+            density="compact"
+            meta={`${data.live_sources.length}/${totalSources} live`}
+          >
+            <div className="venom-breakdown-list">
+              {data.source_breakdown.map((entry) => (
+                <div className="venom-breakdown-row" key={entry.source}>
+                  <span>{entry.source}</span>
+                  <span className={`badge ${entry.live ? 'badge-good' : 'badge-muted'}`}>{entry.live ? 'live' : 'scaffolded'}</span>
+                  <span className="venom-breakdown-val">{entry.signals}s / {entry.clusters}c</span>
+                </div>
+              ))}
+              {!data.source_breakdown.length ? <div className="state-message">No source breakdown.</div> : null}
+            </div>
+          </CollapsibleSection>
 
           {/* Social Early Warning */}
           {(() => {
@@ -506,13 +464,14 @@ export function IssueRadar() {
             )
           })()}
 
-          {/* Competitor Issue Comparison */}
-          {socialTrends?.competitor_mentions && Object.keys(socialTrends.competitor_mentions).length > 0 ? (
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Competitor Issue Comparison</strong>
-                <span className="venom-panel-hint">Are current issues unique to Spider Grills or industry-wide?</span>
-              </div>
+          {/* Competitor comparison — folded; useful context but not first-glance. */}
+          <CollapsibleSection
+            id="ir-competitor-comparison"
+            title="Competitor issue comparison"
+            subtitle="Are current issues unique to Spider Grills or industry-wide?"
+            density="compact"
+          >
+            {socialTrends?.competitor_mentions && Object.keys(socialTrends.competitor_mentions).length > 0 ? (
               <div className="venom-breakdown-list">
                 {Object.entries(socialTrends.competitor_mentions).map(([name, count]) => (
                   <div className="venom-breakdown-row" key={name}>
@@ -521,35 +480,13 @@ export function IssueRadar() {
                   </div>
                 ))}
               </div>
-            </section>
-          ) : (
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Competitor Issue Comparison</strong>
-                <span className="venom-panel-hint">30-day window</span>
-              </div>
+            ) : (
               <div className="state-message">Competitor mention data will populate after social sync.</div>
-            </section>
-          )}
+            )}
+          </CollapsibleSection>
 
-          {/* Navigation tiles */}
-          <section className="card">
-            <div className="venom-panel-head">
-              <strong>Drill-downs</strong>
-              <span className="venom-panel-hint">Click to explore</span>
-            </div>
-            <div className="venom-drill-grid">
-              {DRILL_ROUTES.map((route) => (
-                <Link key={route.path} to={route.path} className="venom-drill-tile">
-                  <span className="venom-drill-icon">{route.icon}</span>
-                  <div>
-                    <strong>{route.label}</strong>
-                    <small>{route.path}</small>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          </section>
+          {/* Bottom drill-down nav removed — DivisionHero rightMeta already
+              renders the same drill routes as buttons. */}
         </>
       ) : null}
     </div>
