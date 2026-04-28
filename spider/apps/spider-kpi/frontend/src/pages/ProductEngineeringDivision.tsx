@@ -1044,8 +1044,15 @@ export function ProductEngineeringDivision() {
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <DivisionTargetsButton division="pe" metrics={["cook_success_rate", "active_devices", "telemetry_sessions", "telemetry_errors"]} label="PE targets" />
               </div>
-              <SharepointIntelligenceCard division="pe" />
-              <SharepointActivityCard division="pe" />
+              <CollapsibleSection
+                id="pe-sharepoint"
+                title="SharePoint engineering activity"
+                subtitle="Per-product Engineering folder activity from AMW SharePoint"
+                density="compact"
+              >
+                <SharepointIntelligenceCard division="pe" />
+                <SharepointActivityCard division="pe" />
+              </CollapsibleSection>
 
               {/* Fleet composition — canonical 24mo active count +
                   lifetime breakdown by product family and source.
@@ -1063,59 +1070,22 @@ export function ProductEngineeringDivision() {
                   Awaiting Agustin's `Device Paired` / `Cook Completed`
                   / `Device Error` / `Firmware Updated` events to
                   expand this section. */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginTop: 12,
-                marginBottom: 4,
-                paddingBottom: 6,
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-              }}>
-                <span style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: 1,
-                  textTransform: 'uppercase',
-                  color: 'var(--muted)',
-                }}>
-                  Mobile App
-                </span>
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  Klaviyo-backed · separate from controller telemetry above
-                </span>
-              </div>
-
-              {/* Audience reconciliation — devices, owners, app users,
-                  audience all in one frame so the cards below are
-                  read against the right denominator. */}
-              <AudienceSegmentationCard />
-
-              {/* DAU / MAU / stickiness + iOS vs Android + app version
-                  + device-type tallies from Klaviyo profile properties. */}
-              <AppUsersCard />
-
-              {/* Install → First Cook conversion + time-to-first-cook
-                  histogram. The closest thing we have to an
-                  onboarding funnel until the app fires per-step events. */}
-              <AppFunnelCard />
-
-              {/* DAU/MAU broken out by Klaviyo's Product Ownership tag
-                  — does Huntsman drive more app stickiness than
-                  Kettle/Webcraft? */}
-              <AppEngagementByOwnershipCard />
-
-              {/* Giant-Huntsman-aware ownership split, derived from
-                  Klaviyo Placed Order line-items. AWS-side telemetry
-                  can't differentiate Giant Huntsman from standard
-                  Huntsman; this card does, via Shopify product names
-                  mirrored into Klaviyo. */}
-              <KlaviyoOwnershipBreakdownCard />
-
-              {/* Live activity feed — last 40 app events with email,
-                  ownership, OS. Useful as an ops-floor "is the app
-                  alive right now?" indicator. */}
-              <AppLiveFeedCard />
+              {/* Mobile App block consolidated — 6 Klaviyo-backed cards
+                  collapsed under one fold so the PE page leads with
+                  controller-fleet telemetry. App data still drillable. */}
+              <CollapsibleSection
+                id="pe-mobile-app"
+                title="Mobile app analytics"
+                subtitle="Klaviyo-backed · audience · DAU/MAU · install→first-cook · ownership split · live feed"
+                density="compact"
+              >
+                <AudienceSegmentationCard />
+                <AppUsersCard />
+                <AppFunnelCard />
+                <AppEngagementByOwnershipCard />
+                <KlaviyoOwnershipBreakdownCard />
+                <AppLiveFeedCard />
+              </CollapsibleSection>
 
               {/* Visual gauge dashboard — glanceable fleet health.
                   Benchmarks: cook success 69% median (28-month baseline),
@@ -1430,17 +1400,19 @@ export function ProductEngineeringDivision() {
                 </section>
               )}
 
-              {/* Firmware cohort performance — uses held-target rate +
-                  in-control % once the re-derivation populates the new
-                  columns; falls back to legacy success rate in the
-                  meantime. */}
-              <FirmwareCohortPanel minSessions={20} />
-
-              {/* Firmware-over-time impact — did shipping 01.01.97 actually
-                  improve PID quality vs 01.01.94? Segmented line chart
-                  colored by dominant firmware each week, with ClickUp
-                  firmware-release markers overlaid. */}
-              <FirmwareImpactTimeline weeks={26} />
+              {/* Firmware analytics folded — heavy charts that compare
+                  cohort performance and per-firmware PID quality over
+                  time. Drill in when investigating a firmware impact;
+                  not first-glance material on the PE landing page. */}
+              <CollapsibleSection
+                id="pe-firmware-analytics"
+                title="Firmware analytics"
+                subtitle="Per-firmware cohort performance + impact timeline (01.01.94 → 01.01.97)"
+                density="compact"
+              >
+                <FirmwareCohortPanel minSessions={20} />
+                <FirmwareImpactTimeline weeks={26} />
+              </CollapsibleSection>
 
               {/* Firmware Hub — owner-only for now. The full page
                   (alpha / beta / gamma / per-device drill-down) lives

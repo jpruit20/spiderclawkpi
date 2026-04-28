@@ -757,54 +757,21 @@ export function CustomerExperienceDivision() {
               per-carrier WISMO breakdown. */}
           <ShippingIntelligenceCard defaultDays={30} showCxCorrelation />
 
-          {/* Klaviyo customer lookup — paste an email to see their
-              grill, firmware, app recency, and recent events. Replaces
-              the Freshdesk→Klaviyo→Shopify copy/paste for triage. */}
-          <KlaviyoCustomerLookupCard />
+          {/* Klaviyo lookup tools — folded by default. Useful during
+              triage / escalation but not first-glance material. */}
+          <CollapsibleSection
+            id="cx-customer-lookup"
+            title="Customer lookup tools"
+            subtitle="Email-based device + firmware + app + journey lookup for triage and escalations"
+            density="compact"
+          >
+            <KlaviyoCustomerLookupCard />
+            <KlaviyoCustomerJourneyCard />
+          </CollapsibleSection>
 
-          {/* Sister card to lookup but oriented around chronological
-              journey — used during escalations when we need to brief
-              engineering on what happened before the ticket. */}
-          <KlaviyoCustomerJourneyCard />
-
-          {/* Performance Metrics as a visual tile grid. Each tile is a
-              car-gauge: big number, state color, 7-day trend arrow.
-              Click a tile to jump into the Team Performance collapsible
-              below where the full detail lives. */}
-          <section className="card" style={{ padding: '14px 16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
-              <strong style={{ fontSize: 13 }}>Performance at a glance</strong>
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>7-day trend vs. prior week</span>
-            </div>
-            {gridMetrics.length > 0 ? (
-              <TileGrid cols={4}>
-                {gridMetrics.map(metric => {
-                  const tone = statusTone(metric.status)
-                  const state: 'good' | 'warn' | 'bad' | 'neutral' =
-                    tone === 'good' ? 'good' : tone === 'warn' ? 'warn' : tone === 'bad' ? 'bad' : 'neutral'
-                  const dir = trendDirection(metric.trend7d)
-                  // 'Up' is good for CSAT / FCR; bad for times / rates.
-                  // Use metric.key to infer.
-                  const upIsGood = !(metric.key.includes('time') || metric.key.includes('breach') || metric.key.includes('backlog') || metric.key.includes('reopen'))
-                  return (
-                    <MetricTile
-                      key={metric.key}
-                      label={metric.label}
-                      value={metricValue(metric)}
-                      sublabel={`target ${metricTarget(metric)}`}
-                      state={state}
-                      delta={`${Math.abs(metric.trend7d).toFixed(1)}%`}
-                      deltaDir={dir}
-                      upIsGood={upIsGood}
-                      onClick={() => openSectionById('cx-team-performance')}
-                    />
-                  )
-                })}
-              </TileGrid>
-            ) : (
-              <div className="state-message">No performance metrics returned.</div>
-            )}
-          </section>
+          {/* "Performance at a glance" TileGrid removed — DivisionHero's
+              flanking + tiles already show SLA / FRT / backlog / reopen /
+              escalation / FCR. Click any hero tile to drill into team-perf. */}
 
           {/* Today's Focus — kept list-style because these are action items
               needing titles + owner + description, not scannable gauges.
@@ -840,13 +807,14 @@ export function CustomerExperienceDivision() {
             </section>
           )}
 
-          {/* Action Queue (full width) */}
+          {/* Action Queue — top 3 visible; rest folded so the queue
+              doesn't dominate the page when there are 20+ open items. */}
           <section className="card">
             <div className="venom-panel-head">
               <strong>Action Queue ({actions.length})</strong>
             </div>
             <div className="stack-list compact">
-              {actions.map((item) => (
+              {actions.slice(0, 3).map((item) => (
                 <div className="list-item" key={item.id}>
                   <div className="item-head">
                     <strong>{item.title}</strong>
@@ -871,6 +839,34 @@ export function CustomerExperienceDivision() {
               {!actions.length ? <div className="list-item status-good"><p>No actions in queue.</p></div> : null}
             </div>
           </section>
+          {actions.length > 3 ? (
+            <CollapsibleSection
+              id="cx-action-queue-overflow"
+              title={`Action queue overflow — ${actions.length - 3} more`}
+              subtitle="Remaining queue items beyond the top 3"
+              density="compact"
+            >
+              <div className="stack-list compact">
+                {actions.slice(3).map((item) => (
+                  <div className="list-item" key={item.id}>
+                    <div className="item-head">
+                      <strong>{item.title}</strong>
+                      <div className="inline-badges">
+                        <span className={`badge ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
+                        <span className={`badge ${statusBadgeClass(item.status)}`}>{item.status}</span>
+                      </div>
+                    </div>
+                    <p>{item.required_action}</p>
+                    <small>
+                      Owner: {item.owner}
+                      {item.co_owner ? ` · Co-owner: ${item.co_owner}` : ''}
+                      {item.escalation_owner ? ` · Escalation: ${item.escalation_owner}` : ''}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            </CollapsibleSection>
+          ) : null}
 
           {/* Product complaint search — collapsed by default so it doesn't
               push the operational view down. Click to expand and run the

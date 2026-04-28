@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../components/AuthGate'
 import { Card } from '../components/Card'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DeciDraftsCard } from '../components/DeciDraftsCard'
 import { DivisionHero } from '../components/DivisionHero'
-import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { MetricTile, StatusLight, TileGrid } from '../components/tiles'
 import { ApiError, api } from '../lib/api'
@@ -244,12 +244,9 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
   const escalated = decisions.filter(d => d.escalation_status === 'escalated' || d.escalation_status === 'warning').length
   const crossFunctional = decisions.filter(d => d.cross_functional && d.status !== 'complete').length
 
-  const kpiCards = useMemo<KpiCardDef[]>(() => [
-    { label: 'Total Decisions', value: fmtInt(totalDecisions), sub: `${fmtInt(inProgress)} active, ${fmtInt(complete)} done`, truthState: 'canonical' },
-    { label: 'No Driver', value: fmtInt(noDriver), sub: noDriver > 0 ? 'Governance gap!' : 'All assigned', truthState: noDriver > 0 ? 'stale' : 'canonical', delta: noDriver > 0 ? { text: 'Action needed', direction: 'down' as const } : undefined },
-    { label: 'Blocked', value: fmtInt(blocked), sub: 'need escalation', truthState: blocked > 0 ? 'stale' : 'canonical' },
-    { label: 'Stale (>7d)', value: fmtInt(stale), sub: 'no update', truthState: stale > 0 ? 'stale' : 'canonical' },
-  ], [totalDecisions, noDriver, blocked, complete, inProgress, stale])
+  // KPI strip removed — DivisionHero already shows total / no-driver /
+  // blocked / stale with richer state colors. The kpiCards memo + the
+  // VenomKpiStrip render were dead code.
 
   // Escalation warnings from overview
   const escalationWarnings = overview?.escalation_warnings ?? []
@@ -381,36 +378,9 @@ function OverviewView({ overview, decisions, team, domains, onOpenDetail, onRelo
           so they pulse when non-zero. Click-through to the Active Decisions
           view would be ideal; left as-is for now since filters are coupled
           to that view's local state. */}
-      <TileGrid cols={4}>
-        <MetricTile
-          label="Total decisions"
-          value={fmtInt(totalDecisions)}
-          sublabel={`${fmtInt(inProgress)} active · ${fmtInt(complete)} done`}
-          state="info"
-          icon="🎯"
-        />
-        <StatusLight
-          label="No driver"
-          count={noDriver}
-          alertState="bad"
-          sublabel={noDriver > 0 ? 'governance gap — assign a driver' : 'every decision has a driver'}
-          icon="🚫"
-        />
-        <StatusLight
-          label="Blocked"
-          count={blocked}
-          alertState="bad"
-          sublabel="need escalation"
-          icon="⛔"
-        />
-        <StatusLight
-          label="Stale (>7d)"
-          count={stale}
-          alertState="warn"
-          sublabel="no update in 7+ days"
-          icon="⏳"
-        />
-      </TileGrid>
+      {/* Status TileGrid removed — DivisionHero already shows total /
+          no-driver / blocked / stale. The hero pulses no-driver red
+          when non-zero. No need to repeat the same numbers below. */}
 
       {/* Seed domains if empty */}
       {domains.length === 0 ? (

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
-import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DivisionHero } from '../components/DivisionHero'
 import { ApiError, api } from '../lib/api'
 import { fmtInt, fmtPct, fmtDecimal } from '../lib/format'
@@ -133,35 +133,8 @@ export function SocialIntelligence() {
   const negPct = ((sentimentBreakdown['negative'] || 0) / sentimentTotal) * 100
   const mixPct = ((sentimentBreakdown['mixed'] || 0) / sentimentTotal) * 100
 
-  const kpiCards = useMemo<KpiCardDef[]>(() => [
-    {
-      label: 'Brand Mentions',
-      value: fmtInt(brandMentionCount),
-      sub: '7-day US social signals',
-      truthState: 'proxy',
-      delta: brandMentionCount > 10 ? { text: 'Active', direction: 'up' as const } : brandMentionCount > 0 ? { text: 'Low volume', direction: 'flat' as const } : undefined,
-    },
-    {
-      label: 'Brand Sentiment',
-      value: avgSentiment > 0.1 ? `+${fmtDecimal(avgSentiment)}` : avgSentiment < -0.1 ? fmtDecimal(avgSentiment) : 'Neutral',
-      sub: '-1.0 to +1.0 scale',
-      truthState: 'estimated',
-      delta: avgSentiment > 0.2 ? { text: 'Positive', direction: 'up' as const } : avgSentiment < -0.2 ? { text: 'Negative', direction: 'down' as const } : { text: 'Neutral', direction: 'flat' as const },
-    },
-    {
-      label: 'Share of Voice',
-      value: fmtPct(brandSOV),
-      sub: `Spider vs ${fmtInt(competitorTotal)} competitor mentions`,
-      truthState: 'estimated',
-      delta: brandSOV > 0.15 ? { text: 'Visible', direction: 'up' as const } : { text: 'Low visibility', direction: 'down' as const },
-    },
-    {
-      label: 'YouTube Reach',
-      value: formatViews(youtubeViews),
-      sub: `${fmtInt(youtube?.total_videos ?? 0)} videos · 30 days`,
-      truthState: youtubeViews > 0 ? 'canonical' : 'unavailable',
-    },
-  ], [brandMentionCount, avgSentiment, brandSOV, competitorTotal, youtubeViews, youtube])
+  // KPI strip removed — DivisionHero already shows brand mentions /
+  // sentiment / SOV / YouTube reach with richer state colors.
 
   // ── Spider products vs competitor products on Amazon ──
   const spiderProducts = useMemo(() => {
@@ -299,21 +272,25 @@ export function SocialIntelligence() {
 
       {!loading && !error ? (
         <>
-          {/* Section nav */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-            {SECTION_TABS.map(([key, label]) => (
-              <button key={key} className={`range-button${section === key ? ' active' : ''}`} onClick={() => setSection(key)}>{label}</button>
-            ))}
-          </div>
+          {/* Section nav rendered once in the DivisionHero rightMeta;
+              the duplicate row that used to appear here was removed. */}
 
-          <VenomKpiStrip cards={kpiCards} />
-
-          <ProvenanceBanner
-            compact
-            truthState="estimated"
-            scope="7-day rolling · Reddit, YouTube, Amazon, Google Reviews"
-            caveat="Sentiment is NLP-estimated. Mention counts reflect indexed posts only — not total market conversation."
-          />
+          {/* VenomKpiStrip removed — DivisionHero owns those numbers.
+              ProvenanceBanner folded so it doesn't push content down
+              on every section view. */}
+          <CollapsibleSection
+            id="si-provenance"
+            title="Source coverage & provenance"
+            subtitle="Where these social signals come from and why sentiment is estimated"
+            density="compact"
+          >
+            <ProvenanceBanner
+              compact
+              truthState="estimated"
+              scope="7-day rolling · Reddit, YouTube, Amazon, Google Reviews"
+              caveat="Sentiment is NLP-estimated. Mention counts reflect indexed posts only — not total market conversation."
+            />
+          </CollapsibleSection>
 
           {/* ════════════════════════════════════════════════
               SECTION: Overview
@@ -895,16 +872,20 @@ export function SocialIntelligence() {
             </>
           ) : null}
 
-          {/* Navigation */}
-          <section className="card">
-            <div className="venom-panel-head"><strong>Related</strong></div>
+          {/* Related navigation folded — these are nav aids, not signals. */}
+          <CollapsibleSection
+            id="si-related"
+            title="Related drill-downs"
+            subtitle="Customer Experience · Marketing · Issue Radar · Product Engineering"
+            density="compact"
+          >
             <div className="venom-drill-grid">
               <Link to="/division/customer-experience" className="venom-drill-tile"><div><strong>Customer Experience</strong><small>Support + brand pulse</small></div></Link>
               <Link to="/division/marketing" className="venom-drill-tile"><div><strong>Marketing</strong><small>Campaigns + funnel</small></div></Link>
               <Link to="/issues" className="venom-drill-tile"><div><strong>Issue Radar</strong><small>Social early warning</small></div></Link>
               <Link to="/division/product-engineering" className="venom-drill-tile"><div><strong>Product Engineering</strong><small>Fleet telemetry</small></div></Link>
             </div>
-          </section>
+          </CollapsibleSection>
         </>
       ) : null}
     </div>
