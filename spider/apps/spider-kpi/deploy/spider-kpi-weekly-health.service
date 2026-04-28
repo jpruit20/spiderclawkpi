@@ -1,0 +1,17 @@
+[Unit]
+Description=Weekly KPI dashboard health check + email report
+After=network-online.target spider-kpi.service
+OnFailure=spider-kpi-job-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spiderclawkpi/spider/apps/spider-kpi
+ExecStart=/opt/spiderclawkpi/spider/apps/spider-kpi/.venv/bin/python /opt/spiderclawkpi/spider/apps/spider-kpi/scripts/weekly_health_check.py
+StandardOutput=append:/var/log/spider-kpi-weekly-health.log
+StandardError=append:/var/log/spider-kpi-weekly-health.log
+
+# Health check has no business taking more than ~2 min; if it stalls,
+# something is badly wrong and we want the run to fail visibly rather
+# than tie up systemd indefinitely.
+TimeoutStartSec=300

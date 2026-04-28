@@ -1,0 +1,14 @@
+[Unit]
+Description=Run weekly KPI dashboard health check on Mondays at 7am ET
+Requires=spider-kpi-weekly-health.service
+
+[Timer]
+# 11:00 UTC = 7:00 ET (during daylight time) / 6:00 ET (standard time).
+# Joseph reads email first thing; landing the report by 7am ET means
+# he sees it before the morning brief drops at the same hour.
+OnCalendar=Mon *-*-* 11:00:00
+Persistent=true
+Unit=spider-kpi-weekly-health.service
+
+[Install]
+WantedBy=timers.target
