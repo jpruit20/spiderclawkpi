@@ -207,7 +207,25 @@ def telemetry_summary(
     # load hits this). Any custom start/end/days param skips the cache
     # and goes straight to live compute so date-picker changes always
     # reflect the real window.
+    #
+    # The frontend always sends explicit start+end alongside days=30,
+    # so a strict-None check would skip the cache on every PE page
+    # load → 4-5s live compute every time. We treat "days=30 with the
+    # window equal to (today-29 .. today)" as equivalent to the default
+    # so the cached payload covers the common case.
     is_default = start is None and end is None and days == 30
+    if not is_default and days == 30 and start is not None and end is not None:
+        try:
+            today_business = datetime.now(BUSINESS_TZ).date()
+            start_d = date.fromisoformat(start)
+            end_d = date.fromisoformat(end)
+            # Allow today or yesterday as end-of-window (operator may be
+            # looking at "today" or the latest complete business day).
+            window_days = (end_d - start_d).days + 1
+            if window_days in (30, 31) and end_d in (today_business, today_business - timedelta(days=1)):
+                is_default = True
+        except (ValueError, TypeError):
+            pass
     if is_default:
         from app.services import aggregate_cache
         import app.services.cache_builders  # noqa: F401

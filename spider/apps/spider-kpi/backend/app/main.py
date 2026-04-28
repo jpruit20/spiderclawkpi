@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import FileResponse
 
 from app.api.routes.admin import router as admin_router
@@ -99,14 +100,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Response compression ────────────────────────────────────────────────
+# Starlette's GZipMiddleware compresses any response > minimum_size whose
+# Content-Type matches its allow-list (text/*, application/json, etc.).
+# Typical 70-80% reduction on JSON dashboard payloads. We bump the size
+# floor up so SSE chunks (50-200B per event) pass through uncompressed —
+# gzip-buffering them would defeat the live-stream UX of /api/ai/chat.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+
+
+# Cache-Control headers — instant back/forward navigation when the user
+# bounces between division pages. We keep TTL short (30s) so any operator
+# decision based on "current state" is never more than half a minute
+# stale; stale-while-revalidate=120 lets the browser serve the cache
+# instantly while it refetches in the background.
+#
+# Only applied to read-only GETs on /api/* with status 200. Auth, admin,
+# AI streaming, and any mutating verb pass through unchanged so we don't
+# accidentally cache login state or post-write reads.
+_CACHE_SAFE_PREFIXES = ("/api/",)
+_CACHE_SKIP_PREFIXES = (
+    "/api/auth",        # session state — must always reflect now
+    "/api/admin",       # ingest + admin — never cache
+    "/api/ai/chat",     # streaming SSE
+    "/api/page-configs",  # user-write reads must reflect last save
+    "/api/deci",        # write-heavy + frequently mutated
+    "/api/kpi-targets", # operator targets — instant updates
+)
+
 
 @app.middleware("http")
-async def add_security_headers(request, call_next):
+async def add_response_headers(request, call_next):
+    """Combined security + cache headers — folded the two middlewares
+    into one because every response goes through both. One pass over
+    `response.headers` instead of two saves a tiny bit per request."""
     response: Response = await call_next(request)
+    # Security headers — unchanged.
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
+    # Cache-Control on read-only GETs — only set when the route hasn't
+    # already opted into a specific Cache-Control of its own (SSE sets
+    # 'no-cache', file-stream sets its own, etc.).
+    if (
+        request.method == "GET"
+        and response.status_code == 200
+        and "cache-control" not in {k.lower() for k in response.headers.keys()}
+    ):
+        path = request.url.path
+        if any(path.startswith(p) for p in _CACHE_SAFE_PREFIXES) and not any(
+            path.startswith(p) for p in _CACHE_SKIP_PREFIXES
+        ):
+            response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=120"
     return response
 
 app.include_router(health_router)
