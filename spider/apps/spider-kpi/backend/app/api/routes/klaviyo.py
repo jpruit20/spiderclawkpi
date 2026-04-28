@@ -1139,3 +1139,26 @@ def sync_status(db: Session = Depends(db_session)) -> dict[str, Any]:
         "profile_lag_minutes": int((now - last_profile).total_seconds() / 60) if last_profile else None,
         "event_lag_minutes": int((now - last_event).total_seconds() / 60) if last_event else None,
     }
+
+
+# ── App-vs-telemetry reconciliation cards (PE page) ─────────────────────
+# Powered by services/klaviyo_pe_reconciliation.py. Added 2026-04-28
+# after Agustín shipped Device Paired / Device Unpaired / Cook Completed
+# events from the Spider Grills app.
+
+@router.get("/cook-reconciliation")
+def cook_reconciliation_endpoint(
+    days: int = Query(30, ge=1, le=180),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    from app.services.klaviyo_pe_reconciliation import cook_reconciliation
+    return cook_reconciliation(db, days=days)
+
+
+@router.get("/pairing-lifecycle")
+def pairing_lifecycle_endpoint(
+    days: int = Query(30, ge=1, le=180),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    from app.services.klaviyo_pe_reconciliation import pairing_lifecycle
+    return pairing_lifecycle(db, days=days)
