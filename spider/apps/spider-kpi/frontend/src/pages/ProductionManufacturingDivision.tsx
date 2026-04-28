@@ -1,4 +1,5 @@
 import { BlockedDivisionPage } from '../components/BlockedDivisionPage'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DivisionHero } from '../components/DivisionHero'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
@@ -64,38 +65,53 @@ export function ProductionManufacturingDivision() {
         <DivisionTargetsButton division="manufacturing" metrics={["orders", "tickets_created"]} label="Manufacturing targets" />
       </div>
       <SharepointIntelligenceCard division="manufacturing" />
-      <SharepointActivityCard division="manufacturing" />
 
-      <BlockedDivisionPage
-        title="Production / Manufacturing"
-        owner="David"
-        summary="Output, defects, rework, yield, downtime, and station bottlenecks should be managed here once manufacturing data exists in a truthful form."
-        blockedReason="This page is intentionally blocked from presenting manufacturing truth before line/shift/batch quality and output data are connected."
-        readiness={[
-          { label: 'Manufacturing output feed', status: 'blocked', detail: 'No live production output feed is connected to the KPI system.' },
-          { label: 'Quality / defect feed', status: 'blocked', detail: 'Defect, rework, and escape reasons are not exposed yet.' },
-          { label: 'Shift / line segmentation', status: 'blocked', detail: 'Line, station, and shift visibility do not exist in current KPI data.' },
-        ]}
-        requiredMetrics={[
-          'Production output',
-          'On-time production %',
-          'Defect rate',
-          'Rework rate',
-          'Yield',
-          'Downtime / bottlenecks',
-        ]}
-        sources={['Manufacturing execution system', 'Quality logs', 'Line/station downtime logs']}
-        actions={[
-          {
-            title: 'Stand up manufacturing source-of-truth feed',
-            owner: 'David',
-            sla: 'Next integration phase',
-            why: 'Without real line/shift/batch data, this page would encourage false certainty.',
-            nextStep: 'Expose output, defect reasons, rework reasons, quality escapes, station bottlenecks, and line/shift/day rollups before promoting this page to full operator status.',
-          },
-        ]}
-        drilldowns={[{ label: 'Open System Health', href: '/system-health' }]}
-      />
+      <CollapsibleSection
+        id="mfg-sharepoint-activity"
+        title="SharePoint activity feed"
+        subtitle="Raw activity from AMW's Production & QC folders"
+        density="compact"
+      >
+        <SharepointActivityCard division="manufacturing" />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="mfg-page-gated"
+        title="Why this page is gated"
+        subtitle="Required feeds, sources, and the integration plan"
+        density="compact"
+      >
+        <BlockedDivisionPage
+          title="Production / Manufacturing"
+          owner="David"
+          summary="Output, defects, rework, yield, downtime, and station bottlenecks should be managed here once manufacturing data exists in a truthful form."
+          blockedReason="This page is intentionally blocked from presenting manufacturing truth before line/shift/batch quality and output data are connected."
+          readiness={[
+            { label: 'Manufacturing output feed', status: 'blocked', detail: 'No live production output feed is connected to the KPI system.' },
+            { label: 'Quality / defect feed', status: 'blocked', detail: 'Defect, rework, and escape reasons are not exposed yet.' },
+            { label: 'Shift / line segmentation', status: 'blocked', detail: 'Line, station, and shift visibility do not exist in current KPI data.' },
+          ]}
+          requiredMetrics={[
+            'Production output',
+            'On-time production %',
+            'Defect rate',
+            'Rework rate',
+            'Yield',
+            'Downtime / bottlenecks',
+          ]}
+          sources={['Manufacturing execution system', 'Quality logs', 'Line/station downtime logs']}
+          actions={[
+            {
+              title: 'Stand up manufacturing source-of-truth feed',
+              owner: 'David',
+              sla: 'Next integration phase',
+              why: 'Without real line/shift/batch data, this page would encourage false certainty.',
+              nextStep: 'Expose output, defect reasons, rework reasons, quality escapes, station bottlenecks, and line/shift/day rollups before promoting this page to full operator status.',
+            },
+          ]}
+          drilldowns={[{ label: 'Open System Health', href: '/system-health' }]}
+        />
+      </CollapsibleSection>
     </>
   )
 }

@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
-import { GrossProfitCard } from '../components/GrossProfitCard'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge } from '../components/TruthBadge'
 import { ProvenanceBanner } from '../components/ProvenanceBanner'
-import { VenomKpiStrip, KpiCardDef } from '../components/VenomKpiStrip'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { RangeToolbar } from '../components/RangeToolbar'
 import { CompareToolbar } from '../components/CompareToolbar'
 import { BaselineBand } from '../components/BaselineBand'
@@ -131,21 +130,8 @@ export function RevenueEngine() {
   const isCanonicalGp = gpCurrent != null
   const discountRate = rev > 0 ? (discounts / (rev + discounts)) * 100 : 0
 
-  const kpiCards = useMemo<KpiCardDef[]>(() => [
-    { label: 'Gross Sales', value: currency(grossRev), sub: 'Shopify total_price · matches Shopify admin "Total sales"', truthState: 'canonical', delta: { text: deltaPct(grossRev, grossRevPrior), direction: deltaDirection(grossRev, grossRevPrior) } },
-    { label: 'Net Sales', value: currency(rev), sub: `${currentRows.length} days · post-refund, cancellations zeroed`, truthState: 'canonical', delta: { text: deltaPct(rev, revPrior), direction: deltaDirection(rev, revPrior) } },
-    {
-      label: 'Gross Profit',
-      value: currency(grossProfit),
-      sub: isCanonicalGp
-        ? `${grossMarginPct.toFixed(1)}% margin · CBOM COGS + shipping applied`
-        : 'loading canonical…',
-      truthState: isCanonicalGp ? 'canonical' : 'proxy',
-      delta: { text: deltaPct(grossProfit, grossProfitPrior), direction: deltaDirection(grossProfit, grossProfitPrior) },
-    },
-    { label: 'MER', value: mer > 0 ? `${mer.toFixed(1)}x` : '\u2014', sub: 'Net sales / ad spend', truthState: 'canonical', delta: merPrior > 0 ? { text: deltaPct(mer, merPrior), direction: deltaDirection(mer, merPrior) } : undefined },
-    { label: 'Conversion', value: fmtPct(convAvg / 100, 2), sub: 'Period average', truthState: 'canonical', delta: { text: deltaPct(convAvg, convPrior), direction: deltaDirection(convAvg, convPrior) } },
-  ], [grossRev, grossRevPrior, rev, revPrior, grossProfit, grossProfitPrior, grossMarginPct, isCanonicalGp, mer, merPrior, convAvg, convPrior, currentRows.length])
+  // KPI strip removed — DivisionHero already shows revenue/GP/MER/conv.
+  // Keep these locals available for the trend chart + composition card.
 
   const chartData = useMemo(() => {
     return currentRows.map((r, i) => ({
@@ -256,34 +242,24 @@ export function RevenueEngine() {
             <CompareToolbar mode={compareMode} onChange={setCompareMode} />
           </div>
 
-          <VenomKpiStrip cards={kpiCards} />
-
-          <GrossProfitCard days={30} />
-
-          <ProvenanceBanner
-            compact
-            truthState={isCanonicalGp ? 'canonical' : 'proxy'}
-            lastUpdated={currentRows.length ? currentRows[currentRows.length - 1]?.business_date : undefined}
-            scope={`${currentRows.length}-day window · Shopify + Triple Whale + SharePoint CBOMs + ShipStation`}
-            caveat={
-              isCanonicalGp
-                ? `Gross Profit = Net Revenue − ${currency(appliedCogs)} COGS (incl. ${currency(appliedShipping)} shipping) − applied accessory estimate. Same canonical figures as Executive / Commercial / Marketing pages.`
-                : 'Loading canonical /api/financials/gross-profit — temporary proxy displayed until response lands.'
-            }
-          />
-
-          {/* Auto-generated revenue insight */}
+          {/* Auto-generated revenue insight — single source of truth.
+              The duplicate "Insight" card below was removed. */}
           {currentRows.length > 0 && priorRows.length > 0 ? (
             <div className="scope-note" style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', padding: '6px 0' }}>
               💡 {generateRevenueInsight(rev, revPrior, sessions, sessionsPrior, convAvg, convPrior, aovAvg, aovPrior)}
             </div>
           ) : null}
 
-          {/* Two-col breakdown */}
-          <div className="two-col two-col-equal">
-            <section className="card">
-              <div className="venom-panel-head"><strong>Revenue Composition</strong></div>
-              <div className="venom-breakdown-list">
+          {/* Traffic & conversion bars stay above the fold.
+              Composition breakdown folded — it's a 10-row reference table. */}
+          <CollapsibleSection
+            id="rev-composition"
+            title="Revenue composition"
+            subtitle="Line-by-line: gross sales → discounts → COGS → shipping → ad spend → GP → contribution margin"
+            density="compact"
+            meta={`${currency(grossProfit)} GP · ${grossMarginPct.toFixed(1)}% margin`}
+          >
+            <div className="venom-breakdown-list">
                 <div className="venom-breakdown-row"><span>Gross Sales</span><span className="venom-breakdown-val">{currency(grossRev)}</span><TruthBadge state="canonical" /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>Shopify "Total sales"</span></div>
                 <div className="venom-breakdown-row"><span>Net Sales</span><span className="venom-breakdown-val">{currency(rev)}</span><TruthBadge state="canonical" /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>post-refund</span></div>
                 <div className="venom-breakdown-row"><span>Refunds</span><span className="venom-breakdown-val">{currency(refunds)}</span><TruthBadge state="canonical" /></div>
@@ -294,46 +270,63 @@ export function RevenueEngine() {
                 <div className="venom-breakdown-row"><span>Ad Spend</span><span className="venom-breakdown-val">{currency(adSpend)}</span><TruthBadge state="canonical" /></div>
                 <div className="venom-breakdown-row"><span>Gross Profit</span><span className="venom-breakdown-val">{currency(grossProfit)}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>{isCanonicalGp ? `${grossMarginPct.toFixed(1)}% margin` : 'loading…'}</span></div>
                 <div className="venom-breakdown-row"><span>Contribution Margin</span><span className="venom-breakdown-val">{contributionMargin != null ? currency(contributionMargin) : '—'}</span><TruthBadge state={isCanonicalGp ? 'canonical' : 'proxy'} /><span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>{contributionMarginPct != null ? `${contributionMarginPct.toFixed(1)}% · GP − ad spend` : 'GP − ad spend'}</span></div>
-              </div>
-            </section>
+            </div>
+            <ProvenanceBanner
+              compact
+              truthState={isCanonicalGp ? 'canonical' : 'proxy'}
+              lastUpdated={currentRows.length ? currentRows[currentRows.length - 1]?.business_date : undefined}
+              scope={`${currentRows.length}-day window · Shopify + Triple Whale + SharePoint CBOMs + ShipStation`}
+              caveat={
+                isCanonicalGp
+                  ? `Gross Profit = Net Revenue − ${currency(appliedCogs)} COGS (incl. ${currency(appliedShipping)} shipping) − applied accessory estimate. Same canonical figures as Executive / Commercial / Marketing pages.`
+                  : 'Loading canonical /api/financials/gross-profit — temporary proxy displayed until response lands.'
+              }
+            />
+          </CollapsibleSection>
 
-            <section className="card">
-              <div className="venom-panel-head"><strong>Traffic & Conversion</strong></div>
-              <div className="venom-bar-list">
-                <div className="venom-bar-row">
-                  <span className="venom-bar-label">Sessions</span>
-                  <BarIndicator value={sessions} max={Math.max(sessions, sessionsPrior) || 1} color="var(--blue)" />
-                  <span className="venom-bar-value">{fmtInt(sessions)}</span>
-                </div>
-                <div className="venom-bar-row">
-                  <span className="venom-bar-label">Orders</span>
-                  <BarIndicator value={orders} max={Math.max(orders, ordersPrior) || 1} color="var(--green)" />
-                  <span className="venom-bar-value">{fmtInt(orders)}</span>
-                </div>
-                <div className="venom-bar-row">
-                  <span className="venom-bar-label">AOV</span>
-                  <BarIndicator value={aovAvg} max={Math.max(aovAvg, aovPrior, 200) * 1.2} color="var(--orange)" />
-                  <span className="venom-bar-value">{currency(aovAvg)}</span>
-                </div>
-                <div className="venom-bar-row">
-                  <span className="venom-bar-label">Conversion</span>
-                  <BarIndicator value={convAvg} max={10} color="var(--green)" />
-                  <span className="venom-bar-value">{fmtPct(convAvg / 100, 2)}</span>
-                </div>
+          {/* Traffic & Conversion bars stay above the fold — fully visual. */}
+          <section className="card">
+            <div className="venom-panel-head"><strong>Traffic & Conversion</strong></div>
+            <div className="venom-bar-list">
+              <div className="venom-bar-row">
+                <span className="venom-bar-label">Sessions</span>
+                <BarIndicator value={sessions} max={Math.max(sessions, sessionsPrior) || 1} color="var(--blue)" />
+                <span className="venom-bar-value">{fmtInt(sessions)}</span>
               </div>
-              <small className="venom-panel-footer">Prior period shown as bar max reference</small>
-            </section>
-          </div>
+              <div className="venom-bar-row">
+                <span className="venom-bar-label">Orders</span>
+                <BarIndicator value={orders} max={Math.max(orders, ordersPrior) || 1} color="var(--green)" />
+                <span className="venom-bar-value">{fmtInt(orders)}</span>
+              </div>
+              <div className="venom-bar-row">
+                <span className="venom-bar-label">AOV</span>
+                <BarIndicator value={aovAvg} max={Math.max(aovAvg, aovPrior, 200) * 1.2} color="var(--orange)" />
+                <span className="venom-bar-value">{currency(aovAvg)}</span>
+              </div>
+              <div className="venom-bar-row">
+                <span className="venom-bar-label">Conversion</span>
+                <BarIndicator value={convAvg} max={10} color="var(--green)" />
+                <span className="venom-bar-value">{fmtPct(convAvg / 100, 2)}</span>
+              </div>
+            </div>
+            <small className="venom-panel-footer">Prior period shown as bar max reference</small>
+          </section>
 
-          {/* Seasonal Context — is today's revenue normal for this week of year? */}
+          {/* Seasonal Context — folded by default; viewers drill in when curious. */}
           {currentRows.length >= 3 && (
-            <section className="card">
-              <div className="venom-panel-head">
-                <strong>Seasonal Context · Revenue</strong>
-                <span className="venom-panel-hint" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <SeasonalContextBadge metric="revenue" onDate={currentRows[currentRows.length - 1].business_date} value={currentRows[currentRows.length - 1].revenue} />
-                </span>
-              </div>
+            <CollapsibleSection
+              id="rev-seasonal-context"
+              title="Seasonal context"
+              subtitle="Is today's revenue normal for this week of year?"
+              density="compact"
+              meta={
+                <SeasonalContextBadge
+                  metric="revenue"
+                  onDate={currentRows[currentRows.length - 1].business_date}
+                  value={currentRows[currentRows.length - 1].revenue}
+                />
+              }
+            >
               <BaselineBand
                 metric="revenue"
                 start={currentRows[0].business_date}
@@ -355,7 +348,7 @@ export function RevenueEngine() {
                   showStates={false}
                 />
               </div>
-            </section>
+            </CollapsibleSection>
           )}
 
           {/* Trend Chart */}
@@ -384,30 +377,27 @@ export function RevenueEngine() {
             ) : <div className="state-message">No trend data available.</div>}
           </section>
 
-          {/* Insight */}
-          <section className="card">
-            <div className="venom-panel-head"><strong>Insight</strong></div>
-            <div className="stack-list compact">
-              <div className="list-item status-muted">
-                <p>{generateRevenueInsight(rev, revPrior, sessions, sessionsPrior, convAvg, convPrior, aovAvg, aovPrior)}</p>
-              </div>
-            </div>
-          </section>
+          {/* Duplicate "Insight" card removed — same insight already
+              renders inline above the composition fold. */}
 
           {/* Channel spend mix — Triple Whale */}
           {range.startDate && range.endDate ? (
             <ChannelMixCard range={{ startDate: range.startDate, endDate: range.endDate }} />
           ) : null}
 
-          {/* Navigation */}
-          <section className="card">
-            <div className="venom-panel-head"><strong>Related</strong></div>
+          {/* Slim drill-down strip — folded by default. */}
+          <CollapsibleSection
+            id="rev-related"
+            title="Related drill-downs"
+            subtitle="Friction Map · Root Cause · Marketing"
+            density="compact"
+          >
             <div className="venom-drill-grid">
               <Link to="/friction" className="venom-drill-tile"><div><strong>Friction Map</strong><small>Conversion friction analysis</small></div></Link>
               <Link to="/root-cause" className="venom-drill-tile"><div><strong>Root Cause</strong><small>Revenue diagnostic</small></div></Link>
               <Link to="/division/marketing" className="venom-drill-tile"><div><strong>Marketing</strong><small>Campaign performance</small></div></Link>
             </div>
-          </section>
+          </CollapsibleSection>
         </>
       ) : null}
     </div>

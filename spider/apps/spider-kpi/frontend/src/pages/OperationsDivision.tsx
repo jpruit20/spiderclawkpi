@@ -12,6 +12,7 @@ import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { CustomizableCard } from '../components/CustomizableCard'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { DivisionPageHeader } from '../components/DivisionPageHeader'
 import { usePageConfig } from '../lib/usePageConfig'
 import { Link } from 'react-router-dom'
@@ -46,12 +47,15 @@ function OrderAgingRequestBanner() {
         </Link>
         {' '}under WISMO so the team can correlate shipping aging with ticket volume.
       </div>
-      <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8, paddingLeft: 20, lineHeight: 1.6 }}>
-        <li><strong>Shopify sync</strong> now captures <code>fulfillment_status</code>, <code>tags</code>, and <code>fulfillments</code> — the missing fields that previously made aging impossible.</li>
-        <li><strong>Backfill</strong>: I ran a one-shot <code>sync-unfulfilled</code> on the droplet — 113 currently-unfulfilled orders pulled ($181K open, 72 orders &gt;7d old). You'll see those right away.</li>
-        <li><strong>Owner-only</strong> "Refresh from Shopify" button on the aging card pulls the latest queue on demand; the regular poll keeps it fresh between clicks.</li>
-        <li><strong>Trend reconstruction</strong>: counts per day are rebuilt from per-order snapshot state (created_at, first_fulfilled_at, cancelled_at). Days before we started capturing fulfillment fields are under-counted by design — older orders trickle in on normal poll cadence.</li>
-      </ul>
+      <details style={{ marginTop: 8 }}>
+        <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>What changed under the hood</summary>
+        <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, paddingLeft: 20, lineHeight: 1.6 }}>
+          <li><strong>Shopify sync</strong> now captures <code>fulfillment_status</code>, <code>tags</code>, and <code>fulfillments</code> — the missing fields that previously made aging impossible.</li>
+          <li><strong>Backfill</strong>: I ran a one-shot <code>sync-unfulfilled</code> on the droplet — 113 currently-unfulfilled orders pulled ($181K open, 72 orders &gt;7d old). You'll see those right away.</li>
+          <li><strong>Owner-only</strong> "Refresh from Shopify" button on the aging card pulls the latest queue on demand; the regular poll keeps it fresh between clicks.</li>
+          <li><strong>Trend reconstruction</strong>: counts per day are rebuilt from per-order snapshot state (created_at, first_fulfilled_at, cancelled_at). Days before we started capturing fulfillment fields are under-counted by design — older orders trickle in on normal poll cadence.</li>
+        </ul>
+      </details>
     </section>
   )
 }
@@ -132,36 +136,43 @@ export function OperationsDivision() {
       <CustomizableCard id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}>
         <OrderAgingCard variant="full" trendDays={14} />
       </CustomizableCard>
-      <BlockedDivisionPage
-        title="Operations"
-        owner="Conor"
-        summary="Order throughput, aging, late-ship exposure, exception volume, and bottlenecks should live here once ops/ERP sources are real enough to trust."
-        blockedReason="This page is intentionally blocked from showing fake throughput, aging, or late-shipment truth before the underlying operations/ERP feed is available in a decision-grade form."
-        readiness={[
-          { label: 'Order/ERP feed', status: 'blocked', detail: 'Business Central / Dynamics operational feed is not yet live in the KPI backend.' },
-          { label: 'Backlog staging model', status: 'blocked', detail: 'Stage-by-stage order aging and exception state are not exposed yet.' },
-          { label: 'Customer-facing proxy data', status: 'partial', detail: 'Support and revenue can hint at operational pain, but they are not substitutes for real ops truth.' },
-        ]}
-        requiredMetrics={[
-          'Order throughput',
-          'Fulfillment speed',
-          'Aged orders',
-          'Inventory bottlenecks',
-          'Late shipment exposure',
-          'Operational exception volume',
-        ]}
-        sources={['Business Central / Dynamics', 'Shopify fulfillment events', 'Operations exception logs']}
-        actions={[
-          {
-            title: 'Connect operational source of truth',
-            owner: 'Conor',
-            sla: 'Next integration phase',
-            why: 'Without order-stage and late-ship truth, an operations page would be theater.',
-            nextStep: 'Expose order aging buckets, backlog by stage, late-ship reasons, stock blockers, and exception trends from the operational system of record.',
-          },
-        ]}
-        drilldowns={[{ label: 'Open Financial / Revenue', href: '/revenue' }, { label: 'Open System Health', href: '/system-health' }]}
-      />
+      <CollapsibleSection
+        id="ops-page-gated"
+        title="Why this page is gated"
+        subtitle="Required ERP feeds, sources, and the integration plan"
+        density="compact"
+      >
+        <BlockedDivisionPage
+          title="Operations"
+          owner="Conor"
+          summary="Order throughput, aging, late-ship exposure, exception volume, and bottlenecks should live here once ops/ERP sources are real enough to trust."
+          blockedReason="This page is intentionally blocked from showing fake throughput, aging, or late-shipment truth before the underlying operations/ERP feed is available in a decision-grade form."
+          readiness={[
+            { label: 'Order/ERP feed', status: 'blocked', detail: 'Business Central / Dynamics operational feed is not yet live in the KPI backend.' },
+            { label: 'Backlog staging model', status: 'blocked', detail: 'Stage-by-stage order aging and exception state are not exposed yet.' },
+            { label: 'Customer-facing proxy data', status: 'partial', detail: 'Support and revenue can hint at operational pain, but they are not substitutes for real ops truth.' },
+          ]}
+          requiredMetrics={[
+            'Order throughput',
+            'Fulfillment speed',
+            'Aged orders',
+            'Inventory bottlenecks',
+            'Late shipment exposure',
+            'Operational exception volume',
+          ]}
+          sources={['Business Central / Dynamics', 'Shopify fulfillment events', 'Operations exception logs']}
+          actions={[
+            {
+              title: 'Connect operational source of truth',
+              owner: 'Conor',
+              sla: 'Next integration phase',
+              why: 'Without order-stage and late-ship truth, an operations page would be theater.',
+              nextStep: 'Expose order aging buckets, backlog by stage, late-ship reasons, stock blockers, and exception trends from the operational system of record.',
+            },
+          ]}
+          drilldowns={[{ label: 'Open Financial / Revenue', href: '/revenue' }, { label: 'Open System Health', href: '/system-health' }]}
+        />
+      </CollapsibleSection>
       <div className="page-grid" style={{ marginTop: 16 }}>
         <CustomizableCard id="clickup_tasks" defaultTitle="ClickUp tasks — Operations" cfg={cfg}>
           <ClickUpTasksCard

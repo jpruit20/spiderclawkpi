@@ -10,14 +10,13 @@ import { EventTimelineStrip } from '../components/EventTimelineStrip'
 import { KpiGrid } from '../components/KpiGrid'
 import { MetricProvenancePanel, MetricProvenanceItem } from '../components/MetricProvenancePanel'
 import { RangeToolbar } from '../components/RangeToolbar'
-import { SeasonalContextBadge } from '../components/SeasonalContextBadge'
-import { TrendPill } from '../components/TrendPill'
 import { StaleDataBanner } from '../components/StaleDataBanner'
 import { TrendChart } from '../components/TrendChart'
 import { EventAnnotationList } from '../components/EventAnnotationList'
 import { StatePanel } from '../components/StatePanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
-import { ApiError, api, getApiBase } from '../lib/api'
+import { CollapsibleSection } from '../components/CollapsibleSection'
+import { ApiError, api } from '../lib/api'
 import { buildPresetRange, businessTodayDate, filterRowsByRange, summarizeKpis, summarizeRangeLabel, RangeState } from '../lib/range'
 import { ACTIVE_CONNECTORS, isTruthfullyHealthy, isScaffolded } from '../lib/sourceHealth'
 import { useUrlRange } from '../lib/urlRange'
@@ -261,32 +260,9 @@ export function ExecutiveOverview() {
       <div className="page-head">
         <h2>Executive Overview</h2>
         <p>Truthful KPI scope, clear intraday status, and source health that reflects what is actually live.</p>
-        <small className="page-meta">API base: {getApiBase()}</small>
       </div>
 
       <RangeToolbar rows={safeDailyRows} range={range} onChange={setRange} anchorDate={todayDate} />
-      {!loading && !error && data ? (
-        <div className="three-col">
-          <Card title="Revenue in Scope">
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-              <div className="hero-metric">${(displayKpi?.revenue || 0).toFixed(0)}</div>
-              <TrendPill metricKey="revenue" />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-              <div className="state-message" style={{ margin: 0 }}>Top-line revenue for the visible executive scope</div>
-              {latestCompleteDay?.business_date && latestCompleteDay?.revenue != null ? (
-                <SeasonalContextBadge
-                  metric="revenue"
-                  onDate={latestCompleteDay.business_date}
-                  value={latestCompleteDay.revenue}
-                />
-              ) : null}
-            </div>
-          </Card>
-          <Card title="Trustworthy Live Connectors"><div className="hero-metric">{liveConnectors.filter((row) => isTruthfullyHealthy(row)).length}/{liveConnectors.length || 0}</div><div className="state-message">Live source trust before acting on KPI movement</div></Card>
-          <Card title="Current Decision Focus"><div className="state-message">{actionItems[0]}</div></Card>
-        </div>
-      ) : null}
       <StaleDataBanner rows={liveConnectors} />
 
       {loading ? <Card title="Overview Status"><div className="state-message">Loading live backend data…</div></Card> : null}
@@ -297,16 +273,30 @@ export function ExecutiveOverview() {
           <KpiGrid latest={displayKpi} intraday={displayIntraday} scopeLabel={scopeLabel} displayMode={displayMode} intradayStatus={intradayState.status} intradayMessage={range.preset === 'today' ? (intradayError ? `Intraday feed unavailable; switch to 7d or latest complete day. ${intradayError}` : todaySeriesSummary ? `As of ${todaysIntradaySeries[todaysIntradaySeries.length - 1]?.hour_label || 'latest bucket'} · Today banner, KPI cards, and charts all use the same filtered hourly intraday series.` : 'No intraday data available') : intradayState.message} noDataMessage={range.preset === 'today' ? 'No intraday data available' : 'No KPI summary returned.'} sourceHealth={liveConnectors} />
           <GrossProfitCard days={30} />
           <ActionBlock items={actionItems} />
-          <ThresholdPanel metrics={[
-            { metric: 'conversion_rate', value: displayKpi?.conversion_rate },
-            { metric: 'mer', value: displayKpi?.mer },
-            { metric: 'average_order_value', value: displayKpi?.average_order_value },
-            { metric: 'bounce_rate', value: displayKpi?.bounce_rate },
-            { metric: 'open_backlog', value: displayKpi?.open_backlog },
-            { metric: 'tickets_per_100_orders', value: displayKpi?.tickets_per_100_orders },
-            { metric: 'first_response_time', value: displayKpi?.first_response_time },
-          ]} />
-          <MetricProvenancePanel items={provenanceItems} />
+          <CollapsibleSection
+            id="exec-thresholds"
+            title="Threshold tripwires"
+            subtitle="Per-metric warning + escalation thresholds"
+            density="compact"
+          >
+            <ThresholdPanel metrics={[
+              { metric: 'conversion_rate', value: displayKpi?.conversion_rate },
+              { metric: 'mer', value: displayKpi?.mer },
+              { metric: 'average_order_value', value: displayKpi?.average_order_value },
+              { metric: 'bounce_rate', value: displayKpi?.bounce_rate },
+              { metric: 'open_backlog', value: displayKpi?.open_backlog },
+              { metric: 'tickets_per_100_orders', value: displayKpi?.tickets_per_100_orders },
+              { metric: 'first_response_time', value: displayKpi?.first_response_time },
+            ]} />
+          </CollapsibleSection>
+          <CollapsibleSection
+            id="exec-provenance"
+            title="Why these numbers"
+            subtitle="Per-metric provenance — source pipeline, calculation, freshness"
+            density="compact"
+          >
+            <MetricProvenancePanel items={provenanceItems} />
+          </CollapsibleSection>
           <div className="two-col two-col-equal">
             <Card title="Revenue + Sessions Trend">
               {range.preset === 'today' ? (
@@ -377,121 +367,136 @@ export function ExecutiveOverview() {
               defaultEnd={range.endDate}
             />
           ) : null}
-          <div className="two-col">
-            <Card title="Top Alerts">
-              <div className="stack-list">
-                {(data?.alerts || []).slice(0, 3).map((alert) => (
-                  <div className="list-item" key={alert.id}>
-                    <strong>{alert.title}</strong>
-                    <p>{alert.message}</p>
-                  </div>
-                ))}
-                {!data?.alerts?.length ? <div className="state-message">No alerts returned.</div> : null}
-              </div>
-            </Card>
-            <Card title="Source Health Snapshot">
-              <div className="stack-list">
-                {liveConnectors.map((item) => {
-                  const truthfulHealthy = isTruthfullyHealthy(item)
-                  return (
-                    <div className={`list-item ${truthfulHealthy ? 'status-good' : ''}`} key={item.source}>
-                      <div className="item-head">
-                        <strong>{item.source}</strong>
-                        <div className="inline-badges">
-                          <span className={`badge ${item.configured && item.latest_run_status === 'success' ? 'badge-good' : item.configured ? 'badge-neutral' : 'badge-warn'}`}>
-                            {item.configured && item.latest_run_status === 'success' ? 'Live' : item.configured ? 'Configured' : 'Not configured'}
-                          </span>
-                          <span className={`badge ${truthfulHealthy ? 'badge-good' : 'badge-neutral'}`}>{truthfulHealthy ? 'healthy' : item.derived_status}</span>
-                        </div>
-                      </div>
-                      <p>{truthfulHealthy ? 'Recent successful sync exists. Showing live connector as healthy.' : item.status_summary}</p>
-                      <small>Latest run: {item.latest_run_status} · Records: {item.latest_records_processed}</small>
-                    </div>
-                  )
-                })}
-                <div className="list-item scaffold-source">
-                  <div className="item-head">
-                    <strong>Scaffolded future sources</strong>
-                    <span className="badge badge-muted">Scaffolded</span>
-                  </div>
-                  <p>{scaffoldedCount} intentionally disabled / not yet live sources are excluded from live connector health.</p>
+          {/* Alerts + Recommendations merged — same render shape, same source of truth. */}
+          <Card title="Alerts & recommendations">
+            <div className="stack-list">
+              {(data?.alerts || []).slice(0, 3).map((alert) => (
+                <div className="list-item status-warn" key={`a-${alert.id}`}>
+                  <strong>⚠ {alert.title}</strong>
+                  <p>{alert.message}</p>
                 </div>
+              ))}
+              {(data?.recommendations || []).slice(0, 3).map((item) => (
+                <div className="list-item" key={`r-${item.id}`}>
+                  <strong>{item.title}</strong>
+                  <p>{item.recommended_action}</p>
+                </div>
+              ))}
+              {!data?.alerts?.length && !data?.recommendations?.length ? (
+                <div className="state-message">No alerts or recommendations returned.</div>
+              ) : null}
+            </div>
+          </Card>
+
+          <CollapsibleSection
+            id="exec-source-health"
+            title="Source health snapshot"
+            subtitle="Per-connector live/configured state · drill in when StaleDataBanner is red"
+            density="compact"
+            meta={`${liveConnectors.filter(isTruthfullyHealthy).length}/${liveConnectors.length} healthy`}
+          >
+            <div className="stack-list">
+              {liveConnectors.map((item) => {
+                const truthfulHealthy = isTruthfullyHealthy(item)
+                return (
+                  <div className={`list-item ${truthfulHealthy ? 'status-good' : ''}`} key={item.source}>
+                    <div className="item-head">
+                      <strong>{item.source}</strong>
+                      <div className="inline-badges">
+                        <span className={`badge ${item.configured && item.latest_run_status === 'success' ? 'badge-good' : item.configured ? 'badge-neutral' : 'badge-warn'}`}>
+                          {item.configured && item.latest_run_status === 'success' ? 'Live' : item.configured ? 'Configured' : 'Not configured'}
+                        </span>
+                        <span className={`badge ${truthfulHealthy ? 'badge-good' : 'badge-neutral'}`}>{truthfulHealthy ? 'healthy' : item.derived_status}</span>
+                      </div>
+                    </div>
+                    <p>{truthfulHealthy ? 'Recent successful sync exists. Showing live connector as healthy.' : item.status_summary}</p>
+                    <small>Latest run: {item.latest_run_status} · Records: {item.latest_records_processed}</small>
+                  </div>
+                )
+              })}
+              <div className="list-item scaffold-source">
+                <div className="item-head">
+                  <strong>Scaffolded future sources</strong>
+                  <span className="badge badge-muted">Scaffolded</span>
+                </div>
+                <p>{scaffoldedCount} intentionally disabled / not yet live sources are excluded from live connector health.</p>
               </div>
-            </Card>
-          </div>
-          <div className="two-col">
-            <Card title="Recommendations">
-              <div className="stack-list">
-                {(data?.recommendations || []).slice(0, 3).map((item) => (
-                  <div className="list-item" key={item.id}>
-                    <strong>{item.title}</strong>
-                    <p>{item.recommended_action}</p>
-                  </div>
-                ))}
-                {!data?.recommendations?.length ? <div className="state-message">No recommendations returned.</div> : null}
-              </div>
-            </Card>
-            <Card title="Data Quality Visibility">
-              <div className="stack-list">
-                {displayKpi?.is_partial_day ? (
-                  <StatePanel kind="partial" tone="warn" title="Selected KPI window includes partial data" message="At least one displayed KPI row is partial-day or intraday. Treat short-window movement as directional until the next complete business day lands." />
-                ) : null}
-                {displayKpi?.is_fallback_day ? (
-                  <StatePanel kind="partial" tone="warn" title="Fallback source used in selected window" message="At least one KPI row relied on fallback source logic. Use source health and provenance before making irreversible decisions." />
-                ) : null}
-                {dataQualityError ? (
-                  <div className="list-item status-warn">
-                    <strong>Data quality feed unavailable</strong>
-                    <p>{dataQualityError}</p>
-                    <button className="button" onClick={() => void load()}>Retry</button>
-                  </div>
-                ) : null}
-                {(dataQuality?.missing_data || []).map((item, index) => (
-                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`missing-${index}`}>
-                    <strong>Missing data</strong>
-                    <p>{String(item.message || 'Missing data note')}</p>
-                    <small>{String(item.business_date || 'n/a')}</small>
-                  </div>
-                ))}
-                {(dataQuality?.source_drift || []).slice(0, 5).map((item, index) => (
-                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`drift-${index}`}>
-                    <strong>Source drift</strong>
-                    <p>{String(item.business_date || 'n/a')}</p>
-                    <small>Sessions drift: {String(item.sessions_pct_diff ?? 'n/a')}% · Orders vs purchases drift: {String(item.orders_vs_purchases_pct_diff ?? 'n/a')}%</small>
-                  </div>
-                ))}
-                {(dataQuality?.validation_warnings || []).map((item, index) => (
-                  <div className={`list-item status-${dataQualitySeverity(item)}`} key={`validation-${index}`}>
-                    <strong>Validation warning</strong>
-                    <p>{Array.isArray(item.warnings) ? item.warnings.join(' · ') : 'Validation mismatch detected'}</p>
-                    <small>{String(item.business_date || 'n/a')}</small>
-                  </div>
-                ))}
-                {!dataQualityError && dataQuality && !dataQuality.missing_data.length && !dataQuality.source_drift.length && !dataQuality.validation_warnings.length ? (
-                  <div className="list-item status-good">
-                    <strong>Data quality</strong>
-                    <p>No data-quality warnings returned.</p>
-                  </div>
-                ) : null}
-              </div>
-            </Card>
-          </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="exec-data-quality"
+            title="Data quality visibility"
+            subtitle="Partial days, fallback sources, drift warnings, validation issues"
+            density="compact"
+          >
+            <div className="stack-list">
+              {displayKpi?.is_partial_day ? (
+                <StatePanel kind="partial" tone="warn" title="Selected KPI window includes partial data" message="At least one displayed KPI row is partial-day or intraday. Treat short-window movement as directional until the next complete business day lands." />
+              ) : null}
+              {displayKpi?.is_fallback_day ? (
+                <StatePanel kind="partial" tone="warn" title="Fallback source used in selected window" message="At least one KPI row relied on fallback source logic. Use source health and provenance before making irreversible decisions." />
+              ) : null}
+              {dataQualityError ? (
+                <div className="list-item status-warn">
+                  <strong>Data quality feed unavailable</strong>
+                  <p>{dataQualityError}</p>
+                  <button className="button" onClick={() => void load()}>Retry</button>
+                </div>
+              ) : null}
+              {(dataQuality?.missing_data || []).map((item, index) => (
+                <div className={`list-item status-${dataQualitySeverity(item)}`} key={`missing-${index}`}>
+                  <strong>Missing data</strong>
+                  <p>{String(item.message || 'Missing data note')}</p>
+                  <small>{String(item.business_date || 'n/a')}</small>
+                </div>
+              ))}
+              {(dataQuality?.source_drift || []).slice(0, 5).map((item, index) => (
+                <div className={`list-item status-${dataQualitySeverity(item)}`} key={`drift-${index}`}>
+                  <strong>Source drift</strong>
+                  <p>{String(item.business_date || 'n/a')}</p>
+                  <small>Sessions drift: {String(item.sessions_pct_diff ?? 'n/a')}% · Orders vs purchases drift: {String(item.orders_vs_purchases_pct_diff ?? 'n/a')}%</small>
+                </div>
+              ))}
+              {(dataQuality?.validation_warnings || []).map((item, index) => (
+                <div className={`list-item status-${dataQualitySeverity(item)}`} key={`validation-${index}`}>
+                  <strong>Validation warning</strong>
+                  <p>{Array.isArray(item.warnings) ? item.warnings.join(' · ') : 'Validation mismatch detected'}</p>
+                  <small>{String(item.business_date || 'n/a')}</small>
+                </div>
+              ))}
+              {!dataQualityError && dataQuality && !dataQuality.missing_data.length && !dataQuality.source_drift.length && !dataQuality.validation_warnings.length ? (
+                <div className="list-item status-good">
+                  <strong>Data quality</strong>
+                  <p>No data-quality warnings returned.</p>
+                </div>
+              ) : null}
+            </div>
+          </CollapsibleSection>
           {range.startDate && range.endDate ? (
             <EmailPulseCard range={{ startDate: range.startDate, endDate: range.endDate }} />
           ) : null}
-          <div className="two-col two-col-equal">
-            <Card title="Decision Event Annotations">
-              <EventAnnotationList diagnostics={data?.diagnostics || []} recommendations={data?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
-            </Card>
-            <BetaProgramSummaryCard />
-            <Card title="Inventory / Fulfillment Risk Layer">
-              {sourceHealth.some((row) => row.source === 'business_central' || row.source === 'dynamics') ? (
-                <StatePanel kind="partial" tone="warn" title="ERP risk layer not decision-grade yet" message="Inventory / fulfillment connector rows exist but this page still needs connector-backed stockout, aging, and fulfillment latency metrics before operators should trust it." />
-              ) : (
-                <StatePanel kind="partial" tone="warn" title="ERP inventory layer blocked" message="Dynamics / Business Central is not live in source health yet, so inventory and fulfillment risk are still blind spots. Do not treat the executive page as complete for ops decisions." detail="Required next layer: stockout risk, open PO coverage, fulfillment aging, and ship-delay burden by SKU/family." />
-              )}
-            </Card>
-          </div>
+          <BetaProgramSummaryCard />
+          <CollapsibleSection
+            id="exec-event-annotations"
+            title="Decision event annotations"
+            subtitle="Diagnostics + recommendations rendered against the active window"
+            density="compact"
+          >
+            <EventAnnotationList diagnostics={data?.diagnostics || []} recommendations={data?.recommendations || []} rangeStart={range.startDate} rangeEnd={range.endDate} />
+          </CollapsibleSection>
+          <CollapsibleSection
+            id="exec-inventory-risk"
+            title="Inventory / fulfillment risk layer"
+            subtitle="ERP integration status — blocked until Business Central lands"
+            density="compact"
+          >
+            {sourceHealth.some((row) => row.source === 'business_central' || row.source === 'dynamics') ? (
+              <StatePanel kind="partial" tone="warn" title="ERP risk layer not decision-grade yet" message="Inventory / fulfillment connector rows exist but this page still needs connector-backed stockout, aging, and fulfillment latency metrics before operators should trust it." />
+            ) : (
+              <StatePanel kind="partial" tone="warn" title="ERP inventory layer blocked" message="Dynamics / Business Central is not live in source health yet, so inventory and fulfillment risk are still blind spots. Do not treat the executive page as complete for ops decisions." detail="Required next layer: stockout risk, open PO coverage, fulfillment aging, and ship-delay burden by SKU/family." />
+            )}
+          </CollapsibleSection>
         </>
       ) : null}
     </div>
