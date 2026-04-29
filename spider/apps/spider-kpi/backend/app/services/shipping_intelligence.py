@@ -117,11 +117,53 @@ def _window_clauses(*, start: Optional[date], end: Optional[date]) -> tuple[str,
     return " AND ".join(parts), params
 
 
+# ── Cost source: FedEx invoice = truth, ShipStation = fallback ───────
+#
+# Joseph asked (2026-04-29) to peg FedEx billing as the source of truth
+# for shipping costs across the dashboard. The 22-month invoice backfill
+# revealed ShipStation systematically overstates by ~$17/ship (deeper
+# on commercial Ground), which inflated cost-by-SKU by ~$0.20/share
+# and the 3PL ROI estimator's baseline by similar amounts.
+#
+# This shared CTE wraps shipstation_shipments with a LEFT JOIN to
+# fedex_invoice_charges (NET, is_spider=true). When an invoice exists
+# the query returns the invoiced amount; otherwise it falls back to
+# ss.shipment_cost. The cost_source column lets downstream code report
+# what fraction of cost is invoice-truth vs ShipStation-estimate.
+#
+# Functions that build their own SQL with FROM shipstation_shipments
+# should switch to FROM (this_cte) AS s. The cost_source column adds
+# zero overhead on functions that don't reference it.
+_SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY = """(
+    SELECT
+        ss.id, ss.ss_order_id, ss.ss_order_number, ss.ss_store_id,
+        ss.customer_email, ss.tracking_number,
+        ss.carrier_code, ss.service_code, ss.package_code,
+        COALESCE(fic.charge_amount_usd, ss.shipment_cost) AS shipment_cost,
+        ss.insurance_cost,
+        CASE WHEN fic.charge_amount_usd IS NOT NULL THEN 'fedex_invoice'
+             ELSE 'shipstation_estimate' END AS cost_source,
+        ss.ship_date, ss.create_date, ss.void_date, ss.voided,
+        ss.weight_oz, ss.dimensions_json,
+        ss.warehouse_id, ss.ship_to_state, ss.ship_to_country,
+        ss.raw_payload, ss.ingested_at
+    FROM shipstation_shipments ss
+    LEFT JOIN fedex_invoice_charges fic
+      ON fic.tracking_number = NULLIF(ss.raw_payload->>'trackingNumber', '')
+      AND fic.charge_category = 'NET'
+      AND fic.is_spider = true
+)"""
+
+
 # ── Carrier mix ─────────────────────────────────────────────────────
 
 
 def carrier_mix(db: Session, *, days: Optional[int] = 90) -> dict[str, Any]:
-    """Volume + spend per carrier in the window. Returns ranked list."""
+    """Volume + spend per carrier in the window. Returns ranked list.
+
+    Cost source: FedEx invoice (truth) for matched shipments, ShipStation
+    estimate fallback for unbilled. See _SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY.
+    """
     end_d = date.today()
     start_d = end_d - timedelta(days=days) if days else None
     where_sql, params = _window_clauses(start=start_d, end=end_d)
@@ -131,8 +173,11 @@ def carrier_mix(db: Session, *, days: Optional[int] = 90) -> dict[str, Any]:
             COUNT(*) AS shipments,
             SUM(s.shipment_cost + s.insurance_cost)::numeric(12,2) AS total_cost,
             AVG(s.shipment_cost + s.insurance_cost)::numeric(10,2) AS avg_cost,
-            AVG(s.weight_oz)::numeric(10,2) AS avg_weight_oz
-        FROM shipstation_shipments s
+            AVG(s.weight_oz)::numeric(10,2) AS avg_weight_oz,
+            COUNT(*) FILTER (WHERE s.cost_source = 'fedex_invoice') AS invoice_truth_ships,
+            SUM(s.shipment_cost + s.insurance_cost)
+              FILTER (WHERE s.cost_source = 'fedex_invoice')::numeric(12,2) AS invoice_truth_cost
+        FROM {_SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY} s
         WHERE {where_sql}
         GROUP BY carrier
         ORDER BY shipments DESC
@@ -140,9 +185,22 @@ def carrier_mix(db: Session, *, days: Optional[int] = 90) -> dict[str, Any]:
 
     total_ships = sum(r.shipments for r in rows)
     total_cost = float(sum((r.total_cost or 0) for r in rows))
+    invoice_truth_ships = sum(int(r.invoice_truth_ships or 0) for r in rows)
+    invoice_truth_cost = float(sum((r.invoice_truth_cost or 0) for r in rows))
     return {
         "window": {"start": start_d.isoformat() if start_d else None, "end": end_d.isoformat(), "days": days},
-        "totals": {"shipments": total_ships, "total_cost_usd": round(total_cost, 2), "avg_cost_per_shipment": round(total_cost / total_ships, 2) if total_ships else 0},
+        "totals": {
+            "shipments": total_ships,
+            "total_cost_usd": round(total_cost, 2),
+            "avg_cost_per_shipment": round(total_cost / total_ships, 2) if total_ships else 0,
+            "cost_source": {
+                "invoice_truth_share": (
+                    round(invoice_truth_cost / total_cost, 3) if total_cost > 0 else None
+                ),
+                "invoice_truth_shipments": invoice_truth_ships,
+                "invoice_truth_cost_usd": round(invoice_truth_cost, 2),
+            },
+        },
         "carriers": [
             {
                 "carrier": r.carrier,
@@ -173,7 +231,7 @@ def geographic_distribution(db: Session, *, days: Optional[int] = 365) -> dict[s
             COUNT(*) AS shipments,
             SUM(s.shipment_cost + s.insurance_cost)::numeric(12,2) AS total_cost,
             AVG(s.shipment_cost + s.insurance_cost)::numeric(10,2) AS avg_cost
-        FROM shipstation_shipments s
+        FROM {_SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY} s
         WHERE {where_sql}
         GROUP BY state, country
         ORDER BY shipments DESC
@@ -217,7 +275,7 @@ def shipping_cost_trend(db: Session, *, days: int = 90, bucket: str = "week") ->
             {bucket_sql}::date AS bucket,
             COUNT(*) AS shipments,
             SUM(s.shipment_cost + s.insurance_cost)::numeric(12,2) AS cost
-        FROM shipstation_shipments s
+        FROM {_SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY} s
         WHERE {where_sql}
         GROUP BY bucket ORDER BY bucket
     """), params).all()
@@ -277,7 +335,7 @@ def threepl_roi_estimator(db: Session, *, days: int = 365) -> dict[str, Any]:
             UPPER(COALESCE(NULLIF(s.ship_to_state,''), '??')) AS state,
             COUNT(*) AS shipments,
             SUM(s.shipment_cost + s.insurance_cost)::numeric(12,2) AS total_cost
-        FROM shipstation_shipments s
+        FROM {_SHIPMENTS_WITH_INVOICE_TRUTH_SUBQUERY} s
         WHERE {where_sql}
           AND COALESCE(s.ship_to_country,'US') = 'US'
         GROUP BY state

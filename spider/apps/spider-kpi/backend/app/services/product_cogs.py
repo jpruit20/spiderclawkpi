@@ -277,26 +277,38 @@ def shipping_cost_in_window(
       by_order: {ss_order_number: cost} for per-order attribution
     """
     where = [
-        "voided = FALSE",
-        "ss_store_id = ANY(:allowlist)",
+        "ss.voided = FALSE",
+        "ss.ss_store_id = ANY(:allowlist)",
     ]
     params: dict[str, Any] = {
         "allowlist": list(get_settings().shipstation_spider_store_ids or []),
     }
     if start is not None:
-        where.append("ship_date >= :start_d")
+        where.append("ss.ship_date >= :start_d")
         params["start_d"] = start
     if end is not None:
-        where.append("ship_date < :end_d")
+        where.append("ss.ship_date < :end_d")
         params["end_d"] = end
 
     where_sql = " AND ".join(where)
+    # Cost truth source (Joseph 2026-04-29): when a FedEx invoice exists
+    # for this tracking_number, use the invoiced NET amount. Falls back
+    # to ShipStation's shipment_cost only when no invoice has landed yet
+    # (most recent ~7 days due to FBO export lag). Corrects a ~$17/ship
+    # systematic ShipStation overstatement found in the 22-month invoice
+    # backfill — directly affects gross-margin reporting since this
+    # function feeds the COGS rollup.
     rows = db.execute(text(f"""
         SELECT
-            ss_store_id,
-            ss_order_number,
-            COALESCE(shipment_cost, 0) + COALESCE(insurance_cost, 0) AS total_cost
-        FROM shipstation_shipments
+            ss.ss_store_id,
+            ss.ss_order_number,
+            COALESCE(fic.charge_amount_usd, ss.shipment_cost, 0)
+              + COALESCE(ss.insurance_cost, 0) AS total_cost
+        FROM shipstation_shipments ss
+        LEFT JOIN fedex_invoice_charges fic
+          ON fic.tracking_number = NULLIF(ss.raw_payload->>'trackingNumber', '')
+          AND fic.charge_category = 'NET'
+          AND fic.is_spider = true
         WHERE {where_sql}
     """), params).all()
 

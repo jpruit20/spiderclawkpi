@@ -115,13 +115,21 @@ def cx_shipping_summary(db: Session, *, days: int = 30) -> dict[str, Any]:
 
         if not order_no:
             continue
+        # Cost truth source: FedEx invoice when available, ShipStation
+        # estimate as fallback (Joseph 2026-04-29 — see shipping_intelligence
+        # for the full rationale).
         ship = db.execute(text("""
-            SELECT ship_date, create_date, carrier_code, tracking_number, shipment_cost
-            FROM shipstation_shipments
-            WHERE ss_order_number = :on
-              AND ss_store_id = ANY(:allowlist)
-              AND voided = FALSE
-            ORDER BY create_date DESC
+            SELECT ss.ship_date, ss.create_date, ss.carrier_code, ss.tracking_number,
+                   COALESCE(fic.charge_amount_usd, ss.shipment_cost) AS shipment_cost
+            FROM shipstation_shipments ss
+            LEFT JOIN fedex_invoice_charges fic
+              ON fic.tracking_number = ss.tracking_number
+              AND fic.charge_category = 'NET'
+              AND fic.is_spider = true
+            WHERE ss.ss_order_number = :on
+              AND ss.ss_store_id = ANY(:allowlist)
+              AND ss.voided = FALSE
+            ORDER BY ss.create_date DESC
             LIMIT 1
         """), {
             "on": order_no,
