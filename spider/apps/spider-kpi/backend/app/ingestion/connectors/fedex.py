@@ -336,6 +336,7 @@ def _quote_payload_for_shipment(
     dimensions: Optional[dict[str, Any]] = None,
     ship_date_iso: Optional[str] = None,
     service_type: Optional[str] = None,
+    recipient_residential: bool = False,
 ) -> dict[str, Any]:
     """Build a /rate/v1/rates/quotes request body from a ShipStation
     shipment's actuals. Pulls ACCOUNT + LIST in one round trip.
@@ -343,6 +344,12 @@ def _quote_payload_for_shipment(
     ``dimensions`` (when present) materially changes the answer for
     larger packages because FedEx may bill on dimensional weight.
     Pass it through whenever ShipStation captured length/width/height.
+
+    ``recipient_residential``: critical for the FedEx Ground vs
+    GROUND_HOME_DELIVERY split. ShipStation's ``fedex_home_delivery``
+    service code is residential; without the flag, FedEx only returns
+    FEDEX_GROUND in the response and we miss the home-delivery quote
+    (and the residential surcharge that makes it a real comparison).
     """
     pkg: dict[str, Any] = {"weight": {"units": "LB", "value": float(weight_lb)}}
     if dimensions:
@@ -355,11 +362,17 @@ def _quote_payload_for_shipment(
             "height": int(dimensions["height"]),
             "units": units,
         }
+    recipient_address: dict[str, Any] = {
+        "postalCode": recipient_postal,
+        "countryCode": recipient_country,
+    }
+    if recipient_residential:
+        recipient_address["residential"] = True
     body: dict[str, Any] = {
         "accountNumber": {"value": account_number},
         "requestedShipment": {
             "shipper": {"address": {"postalCode": shipper_postal, "countryCode": shipper_country}},
-            "recipient": {"address": {"postalCode": recipient_postal, "countryCode": recipient_country}},
+            "recipient": {"address": recipient_address},
             "pickupType": "USE_SCHEDULED_PICKUP",
             "rateRequestType": ["ACCOUNT", "LIST"],
             "requestedPackageLineItems": [pkg],
@@ -382,6 +395,7 @@ def quote_rates(
     dimensions: Optional[dict[str, Any]] = None,
     ship_date_iso: Optional[str] = None,
     service_type: Optional[str] = None,
+    recipient_residential: bool = False,
 ) -> list[dict[str, Any]]:
     """Call /rate/v1/rates/quotes and flatten the response into a
     flat list of (service_type, rate_type, total_charge, currency)
@@ -404,6 +418,7 @@ def quote_rates(
         dimensions=dimensions,
         ship_date_iso=ship_date_iso,
         service_type=service_type,
+        recipient_residential=recipient_residential,
     )
     resp = request_json("POST", "/rate/v1/rates/quotes", json_body=body)
     rrd = resp.get("output", {}).get("rateReplyDetails", []) or []
@@ -456,11 +471,24 @@ _SHIPSTATION_TO_FEDEX_SERVICE = {
     "fedex_first_freight": "FEDEX_FIRST_FREIGHT",
 }
 
+# ShipStation service codes that imply a residential delivery. The
+# Rates API only quotes GROUND_HOME_DELIVERY when residential=true on
+# the recipient address, so we set that flag for these codes. Without
+# it the response collapses to FEDEX_GROUND (commercial pricing) and
+# the cross-check misses 80%+ of Spider's actual ship volume.
+_RESIDENTIAL_SS_SERVICES = frozenset({
+    "fedex_home_delivery",
+})
+
 
 def _map_service(ss_code: str | None) -> Optional[str]:
     if not ss_code:
         return None
     return _SHIPSTATION_TO_FEDEX_SERVICE.get(ss_code.lower())
+
+
+def _is_residential(ss_code: str | None) -> bool:
+    return bool(ss_code and ss_code.lower() in _RESIDENTIAL_SS_SERVICES)
 
 
 def cross_check_rates(db: Session, *, days: int = 7, max_shipments: int = 200) -> dict[str, Any]:
@@ -549,6 +577,7 @@ def cross_check_rates(db: Session, *, days: int = 7, max_shipments: int = 200) -
                 weight_lb=weight_lb,
                 dimensions=ss.dimensions_json or None,
                 ship_date_iso=ss.ship_date.isoformat() if ss.ship_date else None,
+                recipient_residential=_is_residential(ss.service_code),
             )
         except FedexAPIError as e:
             counts["api_errors"] += 1
