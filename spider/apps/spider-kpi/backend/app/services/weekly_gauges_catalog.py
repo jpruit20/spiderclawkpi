@@ -30,6 +30,7 @@ from app.models import (
     ShopifyAnalyticsDaily,
     ShopifyOrderDaily,
     TelemetryDaily,
+    TelemetrySession,
     TelemetryStreamEvent,
     TWSummaryDaily,
 )
@@ -361,16 +362,56 @@ def _resolve_cook_success_rate_7d(db: Session) -> dict[str, Any]:
 
 
 def _resolve_disconnect_rate_7d(db: Session) -> dict[str, Any]:
-    rows = db.execute(
-        select(TelemetryDaily).where(
-            TelemetryDaily.business_date >= (date.today() - timedelta(days=8))
-        ).order_by(TelemetryDaily.business_date)
-    ).scalars().all()
-    avg = _avg_attr(rows, "disconnect_rate")
+    """Disconnects-per-session over the last 7 days, computed live from
+    TelemetrySession (the same source cache_builders.py and firmware.py
+    use). Previously this resolver read from TelemetryDaily.disconnect_rate,
+    which has been a dead cache since 2025-06-20 (every row 0.0). The
+    Command Center gauge stuck at 0% as a result; Joseph flagged it
+    2026-04-29.
+
+    Headline value: SUM(disconnect_events) / COUNT(sessions). Same
+    convention as the recommendations engine (>12% triggers an alert).
+
+    Sparkline: per-day disconnects-per-session for the last 8 days.
+    Days with zero sessions render as 0 — better than gaps for the
+    sparkline visualization.
+    """
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(days=7)
+
+    headline = db.execute(
+        select(
+            func.count(TelemetrySession.id).label("sessions"),
+            func.coalesce(func.sum(TelemetrySession.disconnect_events), 0).label("disconnects"),
+        ).where(
+            TelemetrySession.session_start >= start_dt,
+            TelemetrySession.session_start < end_dt,
+        )
+    ).one()
+    sessions = int(headline.sessions or 0)
+    disconnects = int(headline.disconnects or 0)
+    rate = (disconnects / sessions) if sessions else 0.0
+
+    # Per-day sparkline (last 8 daily buckets).
+    daily_rows = db.execute(
+        select(
+            func.date_trunc("day", TelemetrySession.session_start).label("d"),
+            func.count(TelemetrySession.id).label("s"),
+            func.coalesce(func.sum(TelemetrySession.disconnect_events), 0).label("dc"),
+        ).where(
+            TelemetrySession.session_start >= end_dt - timedelta(days=8),
+            TelemetrySession.session_start < end_dt,
+        ).group_by("d").order_by("d")
+    ).all()
+    sparkline = [
+        (float(r.dc) / float(r.s)) if r.s else 0.0
+        for r in daily_rows
+    ]
+
     return {
-        "value": (avg or 0.0),
-        "display_value": f"{((avg or 0.0) * 100):.1f}%" if (avg or 0.0) <= 1 else f"{(avg or 0.0):.1f}%",
-        "sparkline": _daily_values(rows, "disconnect_rate"),
+        "value": rate,
+        "display_value": f"{(rate * 100):.1f}%",
+        "sparkline": sparkline,
         "prior_week": None,
         "change_pct": None,
     }
@@ -535,7 +576,7 @@ CATALOG: dict[str, MetricMeta] = {
     "disconnect_rate_7d": MetricMeta(
         key="disconnect_rate_7d", label="Disconnect rate", unit="%", category="fleet",
         direction="lower_better",
-        description="% of sessions with a disconnect event (7d). WiFi/AWS reliability gauge.",
+        description="Disconnect events per session (7d, expressed as a percent — 5% = 5 disconnects per 100 sessions). WiFi/AWS reliability gauge.",
         default_band=(None, 0.10),
         drill_href="/division/product-engineering/firmware",
         resolver=_resolve_disconnect_rate_7d,
