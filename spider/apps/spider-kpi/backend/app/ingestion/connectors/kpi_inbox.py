@@ -590,6 +590,11 @@ register_parser(
         r"|alignmachineworks\.com|spidergrills\.com|spidergrills\.app|spidergrills\.ai"
         r")"
     ),
-    subject_re=r"FedEx",
+    # Broadened from "FedEx" only to include common subject lines used
+    # by both FBO direct mail and Joseph's manual re-uploads (the
+    # 18-month historical backfill came in with subject "Backfill
+    # report"). Risk of false positives is low because the inbox is
+    # purposely isolated to vendor invoice forwards.
+    subject_re=r"(?:FedEx|FBO|[Bb]ackfill|[Bb]illing|[Ss]hipment\s+[Dd]etail|[Ii]nvoice)",
     fn=_parse_fedex_invoice,
 )
