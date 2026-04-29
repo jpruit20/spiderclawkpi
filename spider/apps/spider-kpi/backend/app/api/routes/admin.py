@@ -10,6 +10,7 @@ from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.ingestion.connectors.clarity import sync_clarity
+from app.ingestion.connectors.fedex import health_check as fedex_health_check
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
@@ -209,6 +210,21 @@ def aggregate_cache_status(db: Session = Depends(db_session)):
 @router.get('/debug/ga4')
 def debug_ga4():
     return ga4_debug_self_check()
+
+
+@router.get('/debug/fedex')
+def debug_fedex():
+    """Confirm FedEx Web Services creds + endpoint reachability.
+
+    Used to detect when the production project leaves FedEx review and
+    flips from sandbox to production. Returns one of:
+      * status='healthy'      — production endpoint, token mints OK
+      * status='sandbox'      — sandbox endpoint, token mints OK (waiting on prod approval)
+      * status='unconfigured' — env vars missing
+      * status='error'        — creds set but token mint failed
+    Safe to call from anywhere; performs no real data fetching.
+    """
+    return fedex_health_check()
 
 
 @router.post('/ingest/telemetry-stream')

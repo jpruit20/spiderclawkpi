@@ -114,6 +114,21 @@ class Settings(BaseSettings):
     shopify_api_version: str = "2026-01"
     shopify_webhook_secret: Optional[str] = None
 
+    # FedEx Web Services. We default the host to the SANDBOX endpoint so a
+    # half-configured deploy can't accidentally hit production data with
+    # half-tested code; once the production project is approved by FedEx
+    # (24-48 hr review cycle for Freight LTL), flip FEDEX_API_HOST to
+    # 'apis.fedex.com' to switch over. Account number is the 9-digit
+    # Spider Grills shipping account — used as both an explicit filter on
+    # invoice/EOD calls and as the shipper account on Rate API queries.
+    fedex_api_key: Optional[str] = None
+    fedex_api_secret: Optional[str] = None
+    fedex_account_number: Optional[str] = None
+    fedex_api_host: str = Field(
+        default='apis-sandbox.fedex.com',
+        validation_alias=AliasChoices('FEDEX_API_HOST', 'FEDEX_HOST'),
+    )
+
     triplewhale_api_key: Optional[str] = None
 
     ga4_property_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_PROPERTY_ID', 'GOOGLE_ANALYTICS_PROPERTY_ID', 'GA_PROPERTY_ID'))
