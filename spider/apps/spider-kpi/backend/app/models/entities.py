@@ -2186,6 +2186,148 @@ class ShipstationShipment(Base):
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class FedexFreightLtlShipment(Base):
+    """One FedEx Freight LTL shipment (Giant Huntsman territory).
+
+    Currently scaffold-only — the dedicated /rate/v1/freight/rates/quotes
+    endpoint returns an opaque "Missing requestedShipment" error and
+    Joseph confirmed Spider's LTL mostly goes through a separate carrier
+    portal anyway. Table stays in place so when the LTL data path
+    arrives (FedEx Freight or another carrier) we have a destination.
+    """
+    __tablename__ = "fedex_freight_ltl_shipments"
+    __table_args__ = (
+        Index("ix_fedex_ltl_shipments_spider_ship_date", "is_spider", "ship_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pro_number: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    ship_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    delivery_date: Mapped[Optional[date]] = mapped_column(Date)
+    service_type: Mapped[Optional[str]] = mapped_column(String(64))
+    is_spider: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    reference_value: Mapped[Optional[str]] = mapped_column(String(128))
+    shipper_account: Mapped[Optional[str]] = mapped_column(String(32))
+    shipper_postal_code: Mapped[Optional[str]] = mapped_column(String(16))
+    shipper_country: Mapped[Optional[str]] = mapped_column(String(8))
+    recipient_postal_code: Mapped[Optional[str]] = mapped_column(String(16))
+    recipient_state: Mapped[Optional[str]] = mapped_column(String(64))
+    recipient_country: Mapped[Optional[str]] = mapped_column(String(8))
+    total_weight_lb: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    freight_class: Mapped[Optional[str]] = mapped_column(String(16))
+    piece_count: Mapped[Optional[int]] = mapped_column(Integer)
+    packaging_type: Mapped[Optional[str]] = mapped_column(String(32))
+    base_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    accessorials_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    total_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    rate_type: Mapped[Optional[str]] = mapped_column(String(32))
+    status: Mapped[Optional[str]] = mapped_column(String(32))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class FedexInvoiceCharge(Base):
+    """One charge line from a FedEx invoice (parsed out of the FBO
+    weekly CSV export — the API doesn't expose invoice data).
+
+    Multiple rows per shipment, one per charge category (BASE / FUEL /
+    RESIDENTIAL / DIM_WEIGHT / GSR / PEAK / etc), so the reconciliation
+    card can show *why* a shipment was billed at $40 over the
+    expected base rate. Joins to shipstation_shipments on tracking_number.
+    """
+    __tablename__ = "fedex_invoice_charges"
+    __table_args__ = (
+        UniqueConstraint("invoice_number", "tracking_number", "charge_category", name="uq_fedex_invoice_charges_invoice_tracking_category"),
+        Index("ix_fedex_invoice_charges_spider_ship_date", "is_spider", "ship_date"),
+        Index("ix_fedex_invoice_charges_tracking_for_join", "tracking_number", "is_spider"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    invoice_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    invoice_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    invoice_currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
+    tracking_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ship_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    delivery_date: Mapped[Optional[date]] = mapped_column(Date)
+    is_spider: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    reference_value: Mapped[Optional[str]] = mapped_column(String(128))
+    account_number: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    service_type: Mapped[Optional[str]] = mapped_column(String(64))
+    carrier: Mapped[str] = mapped_column(String(16), default="fedex", nullable=False)
+    shipper_postal_code: Mapped[Optional[str]] = mapped_column(String(16))
+    recipient_postal_code: Mapped[Optional[str]] = mapped_column(String(16))
+    recipient_state: Mapped[Optional[str]] = mapped_column(String(64))
+    charge_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    charge_description: Mapped[Optional[str]] = mapped_column(String(255))
+    charge_amount_usd: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    billed_weight_lb: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    dim_weight_lb: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    actual_weight_lb: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class FedexGroundEodSummary(Base):
+    """Daily Ground End-of-Day close manifest summary.
+
+    Endpoint returned 404 in both sandbox and production for the
+    Spider account — likely the account isn't enrolled in Ground EOD
+    Close service, or the API surface for it has been deprecated/moved.
+    Table stays for the day FBO-export ingest needs a place to put
+    summary aggregates separately from per-charge invoice rows.
+    """
+    __tablename__ = "fedex_ground_eod_summaries"
+    __table_args__ = (
+        UniqueConstraint("close_date", "account_number", name="uq_fedex_ground_eod_close_account"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    close_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    account_number: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    is_spider: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    total_shipments: Mapped[Optional[int]] = mapped_column(Integer)
+    total_pieces: Mapped[Optional[int]] = mapped_column(Integer)
+    total_weight_lb: Mapped[Optional[float]] = mapped_column(Numeric(12, 2))
+    total_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 2))
+    manifest_id: Mapped[Optional[str]] = mapped_column(String(64))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class FedexRateQuote(Base):
+    """One rate-quote audit row per (tracking_number, rate_type, service_type).
+
+    Powers the cross-check card: "what would FedEx say this label
+    *should* have cost at LIST or ACCOUNT pricing, given our
+    contracted rates and the actual shipper/recipient/weight on the
+    ShipStation shipment?" The delta to ShipStation's billed cost
+    catches dim-weight surprises, residential adjustments, and
+    misconfigured carrier accounts.
+
+    Refresh cadence: rate quotes are valid for the day they're pulled,
+    so we cache one row per (tracking, rate_type) and re-pull only
+    if the row is older than the daily refresh threshold.
+    """
+    __tablename__ = "fedex_rate_quotes"
+    __table_args__ = (
+        UniqueConstraint("tracking_number", "rate_type", "service_type", name="uq_fedex_rate_quotes_tracking_type"),
+        Index("ix_fedex_rate_quotes_quoted_at", "quoted_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tracking_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    rate_type: Mapped[str] = mapped_column(String(32), nullable=False)  # ACCOUNT or LIST
+    service_type: Mapped[Optional[str]] = mapped_column(String(64))
+    quoted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    quoted_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
+    shipstation_charge_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    delta_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class PageConfig(Base):
     """Per-user-per-division layout preferences. Each division lead
     edits their own division's row; Joseph can edit any. Audit-logged

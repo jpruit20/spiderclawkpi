@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.ingestion.connectors.clarity import sync_clarity
 from app.ingestion.connectors.fedex import (
+    cross_check_rates as fedex_cross_check_rates,
     health_check as fedex_health_check,
     register_source as fedex_register_source,
 )
@@ -234,6 +235,37 @@ def debug_fedex(db: Session = Depends(db_session)):
     fedex_register_source(db)
     db.commit()
     return fedex_health_check()
+
+
+@router.post('/run-sync/fedex/rates')
+def run_fedex_rate_cross_check(
+    days: int = 7,
+    max_shipments: int = 200,
+    db: Session = Depends(db_session),
+):
+    """Manually trigger the FedEx Rates cross-check sync.
+
+    Walks ShipStation FedEx shipments in the last `days` days, asks
+    the Rates API for ACCOUNT + LIST quotes per (lane, weight,
+    service), and persists the deltas to fedex_rate_quotes.
+
+    Useful for ad-hoc backfills (bump days/max_shipments) and for
+    smoke-testing after a credential rotation. The scheduler runs
+    this daily at 07:00 ET with the defaults.
+    """
+    if _already_running(db, "fedex"):
+        return {"ok": True, "skipped": True, "message": "fedex sync already running"}
+    run = start_sync_run(db, "fedex", "rates_cross_check", {"days": days, "max_shipments": max_shipments})
+    db.commit()
+    try:
+        result = fedex_cross_check_rates(db, days=days, max_shipments=max_shipments)
+        finish_sync_run(db, run, status='success', records_processed=int(result.get('quotes_inserted_or_updated', 0)))
+        db.commit()
+        return {"ok": True, **result}
+    except Exception as exc:
+        finish_sync_run(db, run, status='failure', records_processed=0, error_message=str(exc)[:500])
+        db.commit()
+        raise
 
 
 @router.post('/ingest/telemetry-stream')

@@ -515,6 +515,45 @@ def run_partner_catalog_refresh_job() -> None:
         db.close()
 
 
+def run_fedex_rate_cross_check_job() -> None:
+    """Daily 11:30 UTC / 07:30 ET: ask the FedEx Rates API for ACCOUNT
+    + LIST quotes for every recent FedEx ShipStation shipment, persist
+    deltas to fedex_rate_quotes for the reconciliation card.
+
+    Joseph confirmed the dominant volume is FedEx Ground — that's
+    where this job earns its keep. LTL Freight is occasional and
+    handled separately (Giant Huntsman only, often via non-FedEx
+    carriers).
+
+    Default window 7 days + 200 shipments cap keeps the job under
+    ~3 minutes against the per-account rate limit. For larger
+    backfills hit POST /api/admin/run-sync/fedex/rates manually
+    with bigger params.
+    """
+    db = SessionLocal()
+    try:
+        from app.ingestion.connectors.fedex import cross_check_rates
+        from app.services.source_health import start_sync_run, finish_sync_run
+        run = start_sync_run(db, "fedex", "rates_cross_check_daily", {"days": 7, "max_shipments": 200})
+        db.commit()
+        try:
+            result = cross_check_rates(db, days=7, max_shipments=200)
+            finish_sync_run(db, run, status='success', records_processed=int(result.get('quotes_inserted_or_updated', 0)))
+            db.commit()
+            import logging as _log
+            _log.getLogger(__name__).info("fedex rate cross-check: %s", result)
+        except Exception as exc:
+            finish_sync_run(db, run, status='failure', records_processed=0, error_message=str(exc)[:500])
+            db.commit()
+            raise
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("fedex rate cross-check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_charcoal_jit_forecast_job() -> None:
     """Daily 11:00 UTC / 07:00 ET: re-forecast every non-cancelled
     Charcoal JIT subscription. Also auto-fills shipping_zip from
@@ -735,6 +774,12 @@ def build_scheduler() -> BackgroundScheduler:
     # Partner catalog refresh at 10:30 UTC / 06:30 ET — runs just
     # before the JIT forecast so financial math uses today's prices.
     scheduler.add_job(run_partner_catalog_refresh_job, "cron", hour=10, minute=30, id="partner-catalog-refresh-daily", replace_existing=True, max_instances=1, coalesce=True)
+    # FedEx rate cross-check at 11:30 UTC / 07:30 ET — runs after
+    # ShipStation's overnight sync so the day's shipments are present
+    # when we ask FedEx "what should this have cost." Single-instance
+    # so a slow run can't double-fire and burn through the per-account
+    # API rate limit.
+    scheduler.add_job(run_fedex_rate_cross_check_job, "cron", hour=11, minute=30, id="fedex-rate-cross-check-daily", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
     # Expire stale beta-invitation rows daily at 11:05 UTC — runs right
     # after the forecast pass so the Beta rollout tab always renders
