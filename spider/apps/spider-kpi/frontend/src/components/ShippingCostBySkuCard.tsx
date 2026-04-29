@@ -174,6 +174,12 @@ export function ShippingCostBySkuCard() {
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>Title</th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Units</th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Shipments</th>
+                  <th
+                    style={{ textAlign: 'right', padding: '6px 8px' }}
+                    title="Average parcels per customer unit. Huntsman ships in 2 boxes so it shows ~2.0; single-box SKUs show ~1.0."
+                  >
+                    Boxes / unit
+                  </th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Spend</th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Avg / unit</th>
                 </tr>
@@ -195,19 +201,21 @@ export function ShippingCostBySkuCard() {
                         <td style={{ padding: '6px 8px', maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title || '—'}</td>
                         <td style={{ textAlign: 'right', padding: '6px 8px' }}>{s.units.toLocaleString()}</td>
                         <td style={{ textAlign: 'right', padding: '6px 8px' }}>{s.shipments.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', padding: '6px 8px', color: s.boxes_per_unit && s.boxes_per_unit >= 1.5 ? 'var(--orange)' : undefined }}>
+                          {s.boxes_per_unit != null ? s.boxes_per_unit.toFixed(2) : '—'}
+                        </td>
                         <td style={{ textAlign: 'right', padding: '6px 8px', fontWeight: 600, color: 'var(--orange)' }}>{fmtCurrency(s.attributed_cost_usd)}</td>
                         <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtCurrency2(s.avg_cost_per_unit_usd)}</td>
                       </tr>
                       {isOpen ? (
                         <tr key={`${s.sku}-detail`}>
-                          <td colSpan={6} style={{ padding: '4px 8px 12px 28px', background: 'rgba(255,255,255,0.02)' }}>
+                          <td colSpan={7} style={{ padding: '4px 8px 12px 28px', background: 'rgba(255,255,255,0.02)' }}>
                             <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Carrier mix for {s.sku}</div>
                             <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
                               <thead>
                                 <tr style={{ color: 'var(--muted)' }}>
                                   <th style={{ textAlign: 'left', padding: '4px 8px' }}>Carrier</th>
                                   <th style={{ textAlign: 'left', padding: '4px 8px' }}>Service</th>
-                                  <th style={{ textAlign: 'right', padding: '4px 8px' }}>Units</th>
                                   <th style={{ textAlign: 'right', padding: '4px 8px' }}>Shipments</th>
                                   <th style={{ textAlign: 'right', padding: '4px 8px' }}>Spend</th>
                                 </tr>
@@ -217,7 +225,6 @@ export function ShippingCostBySkuCard() {
                                   <tr key={i}>
                                     <td style={{ padding: '4px 8px' }}>{carrierLabel(c.carrier_code)}</td>
                                     <td style={{ padding: '4px 8px', color: 'var(--muted)', fontSize: 10 }}>{c.service_code || '—'}</td>
-                                    <td style={{ textAlign: 'right', padding: '4px 8px' }}>{c.units}</td>
                                     <td style={{ textAlign: 'right', padding: '4px 8px' }}>{c.shipments}</td>
                                     <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600 }}>{fmtCurrency2(c.attributed_cost_usd)}</td>
                                   </tr>

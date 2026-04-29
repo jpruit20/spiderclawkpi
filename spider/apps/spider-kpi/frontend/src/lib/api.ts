@@ -1920,13 +1920,19 @@ export interface ShippingCostBySku {
     title: string | null
     shipments: number
     units: number
+    /**
+     * Average parcels-per-customer-unit. ~2.0 means the SKU ships in 2 boxes
+     * (Huntsman); ~1.0 means single-box; 1.x means mixed (some bundles
+     * consolidated). Multiplies through avg_cost_per_unit_usd already since
+     * units are deduped against multi-shipment lines.
+     */
+    boxes_per_unit: number | null
     attributed_cost_usd: number
     avg_cost_per_unit_usd: number | null
     carriers: Array<{
       carrier_code: string
       service_code: string | null
       shipments: number
-      units: number
       attributed_cost_usd: number
     }>
   }>
