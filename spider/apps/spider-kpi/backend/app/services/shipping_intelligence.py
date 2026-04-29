@@ -435,18 +435,21 @@ def shipping_cost_by_sku(
         fulfillment_lines AS (
             -- Per-(order_id, tracking_number) line manifest from
             -- Shopify fulfillments[]. Each fulfillment is one
-            -- physical box; its line_items[] tells us EXACTLY which
-            -- order lines went in that box. JOIN-key is tracking_number
-            -- (1:1 with ShipStation.trackingNumber).
+            -- LOGICAL ship event; its line_items[] tells us which
+            -- order lines were fulfilled, and its tracking_numbers[]
+            -- carries ALL the parcel tracking numbers for that
+            -- fulfillment (multi-box ships like Huntsman = 2 boxes
+            -- show up as 1 fulfillment with 2 tracking_numbers — the
+            -- singular tracking_number field only holds the first one,
+            -- so we MUST expand the plural array to capture box 2+).
             --
-            -- WITH ORDINALITY on the OUTER fulfillments array so we
-            -- preserve a stable line_idx for unit dedupe — but we
-            -- want the line_idx from the ORIGINAL order line_items
-            -- ordering (so dedupe matches the prorata path), so we
-            -- compute it via a JOIN to the order's line_items by id.
+            -- We expand both tracking_numbers (all boxes for the
+            -- fulfillment) AND line_items (cross-product). When a
+            -- fulfillment has 1 line × 2 boxes, both boxes JOIN to
+            -- the same line — so multi-box SKUs accumulate full cost.
             SELECT
                 eo.order_id::text AS order_id,
-                fulfillment->>'tracking_number' AS tracking_number,
+                tn.tracking_number AS tracking_number,
                 ful_line.line->>'sku' AS sku,
                 ful_line.line->>'title' AS title,
                 COALESCE((ful_line.line->>'quantity')::int, 0) AS qty,
@@ -465,8 +468,21 @@ def shipping_cost_by_sku(
             FROM eligible_orders eo
             CROSS JOIN LATERAL jsonb_array_elements(eo.payload->'fulfillments') AS fulfillment
             CROSS JOIN LATERAL jsonb_array_elements(fulfillment->'line_items') AS ful_line(line)
+            -- Expand every tracking number for this fulfillment.
+            -- Prefer the plural array; fall back to the singular field
+            -- when the array is missing or empty.
+            CROSS JOIN LATERAL (
+                SELECT t::text AS tracking_number
+                FROM jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(fulfillment->'tracking_numbers') = 'array'
+                              AND jsonb_array_length(fulfillment->'tracking_numbers') > 0
+                         THEN fulfillment->'tracking_numbers'
+                         ELSE jsonb_build_array(fulfillment->>'tracking_number')
+                    END
+                ) AS t
+                WHERE COALESCE(t, '') <> ''
+            ) AS tn
             WHERE jsonb_typeof(eo.payload->'fulfillments') = 'array'
-              AND COALESCE(fulfillment->>'tracking_number', '') <> ''
               AND COALESCE(ful_line.line->>'sku', '') <> ''
         ),
         line_keyed AS (
