@@ -945,6 +945,15 @@ def fedex_rate_reconciliation(db: Session, *, days: int = 30, top_n_outliers: in
             "ship_to_state": r.ship_to_state,
         })
 
+    # ── Invoice-based reconciliation (truth source) ──
+    # Pull from fedex_invoice_charges where is_spider=true. Window is
+    # the same `days` filter via ship_date so all sections of the
+    # response are time-aligned. The 22-month FBO backfill means we
+    # have data on lookback periods up to ~2y; for windows shorter
+    # than the backfill the invoice section is the most accurate
+    # reconciliation source available.
+    invoice_data = _fedex_invoice_summary(db, days=days, top_n_outliers=top_n_outliers)
+
     return {
         "window_days": days,
         "as_of": datetime.now(timezone.utc).date().isoformat(),
@@ -963,7 +972,131 @@ def fedex_rate_reconciliation(db: Session, *, days: int = 30, top_n_outliers: in
         },
         "by_service": by_service_list,
         "top_outliers": top_outliers,
+        # New invoice-based section. None when no invoice data lands
+        # in the window (e.g. a 7-day window before any FBO export
+        # has been ingested for that period).
+        "invoice": invoice_data,
         "method_note": _RECONCILIATION_METHOD_NOTE,
+    }
+
+
+def _fedex_invoice_summary(db: Session, *, days: int, top_n_outliers: int) -> Optional[dict[str, Any]]:
+    """Roll up Spider-tagged FedEx invoice data for the same window.
+
+    Returns ``None`` when the window has no invoice rows — keeps the
+    parent response clean during periods with no FBO data (e.g.
+    pre-backfill, pre-FBO-export-setup).
+
+    Two-way reconciliation: where a tracking_number has BOTH a
+    ShipStation cost AND a FedEx invoice, surface the delta. Also
+    pull biggest absolute deltas as the "ShipStation overstatement
+    candidates" outlier table — that's the $17/ship gap we found
+    in the backfill, broken out per shipment for inspection.
+    """
+    # Component totals (BASE / DISCOUNT / SURCHARGE / DUTY_TAX)
+    components = db.execute(text("""
+        SELECT charge_category,
+               SUM(charge_amount_usd)::numeric AS total_usd,
+               COUNT(DISTINCT tracking_number) AS shipments
+        FROM fedex_invoice_charges
+        WHERE is_spider = true
+          AND ship_date >= CURRENT_DATE - (:days || ' days')::interval
+          AND charge_category != 'NET'
+        GROUP BY 1
+    """), {"days": days}).all()
+
+    components_map: dict[str, float] = {r.charge_category: float(r.total_usd or 0) for r in components}
+
+    # NET headline + 2-way reconciliation in one query
+    twoway = db.execute(text("""
+        WITH inv AS (
+          SELECT tracking_number, charge_amount_usd, ship_date
+          FROM fedex_invoice_charges
+          WHERE is_spider = true
+            AND charge_category = 'NET'
+            AND ship_date >= CURRENT_DATE - (:days || ' days')::interval
+        )
+        SELECT
+          COUNT(*) AS spider_shipments,
+          SUM(inv.charge_amount_usd)::numeric AS total_invoiced,
+          AVG(inv.charge_amount_usd)::numeric AS avg_invoiced,
+          COUNT(*) FILTER (WHERE ss.tracking_number IS NOT NULL) AS twoway_matched,
+          AVG(inv.charge_amount_usd - ss.shipment_cost::numeric)
+            FILTER (WHERE ss.tracking_number IS NOT NULL) AS avg_invoice_minus_ss,
+          SUM(inv.charge_amount_usd - ss.shipment_cost::numeric)
+            FILTER (WHERE ss.tracking_number IS NOT NULL) AS total_invoice_minus_ss
+        FROM inv
+        LEFT JOIN shipstation_shipments ss
+          ON ss.tracking_number = inv.tracking_number
+          AND ss.voided = false
+    """), {"days": days}).one()
+
+    if twoway.spider_shipments == 0:
+        return None
+
+    # Top "ShipStation overstatement" outliers — biggest negative deltas
+    # (invoice << ShipStation). These are the per-shipment cases worth
+    # investigating for residential surcharge mis-application,
+    # dim-divisor mismatch, or volume-tier discount lag.
+    outliers = db.execute(text("""
+        WITH inv AS (
+          SELECT tracking_number, charge_amount_usd, ship_date,
+                 service_type, shipper_postal_code, recipient_postal_code,
+                 recipient_state
+          FROM fedex_invoice_charges
+          WHERE is_spider = true
+            AND charge_category = 'NET'
+            AND ship_date >= CURRENT_DATE - (:days || ' days')::interval
+        )
+        SELECT
+          inv.tracking_number, inv.ship_date, inv.service_type,
+          inv.recipient_state,
+          ss.shipment_cost::numeric AS shipstation_cost,
+          inv.charge_amount_usd AS invoice_cost,
+          (inv.charge_amount_usd - ss.shipment_cost::numeric) AS delta
+        FROM inv
+        JOIN shipstation_shipments ss
+          ON ss.tracking_number = inv.tracking_number
+          AND ss.voided = false
+          AND ss.shipment_cost > 0
+        ORDER BY ABS(inv.charge_amount_usd - ss.shipment_cost::numeric) DESC
+        LIMIT :limit
+    """), {"days": days, "limit": top_n_outliers}).all()
+
+    discount_total = abs(components_map.get("DISCOUNT", 0))
+    annualized_savings = discount_total * (365 / days) if days > 0 else 0
+
+    return {
+        "spider_shipments": int(twoway.spider_shipments),
+        "total_invoiced_usd": round(float(twoway.total_invoiced or 0), 2),
+        "avg_per_ship_usd": round(float(twoway.avg_invoiced or 0), 2),
+        # The headline contract-savings number derived from actual
+        # invoice DISCOUNT lines (deeper than the rate-API ACCOUNT
+        # quote suggests — confirmed against 22mo backfill).
+        "annualized_savings_vs_list_usd": round(annualized_savings, 2),
+        "components": {
+            "base_total_usd": round(components_map.get("BASE", 0), 2),
+            "discount_total_usd": round(components_map.get("DISCOUNT", 0), 2),
+            "surcharge_total_usd": round(components_map.get("SURCHARGE", 0), 2),
+            "duty_tax_total_usd": round(components_map.get("DUTY_TAX", 0), 2),
+        },
+        "two_way_reconciliation": {
+            "matched_shipments": int(twoway.twoway_matched or 0),
+            "avg_invoice_minus_ss_usd": round(float(twoway.avg_invoice_minus_ss or 0), 2),
+            "total_invoice_minus_ss_usd": round(float(twoway.total_invoice_minus_ss or 0), 2),
+        },
+        "top_overstatement_outliers": [
+            {
+                "tracking_number": o.tracking_number,
+                "service_type": o.service_type,
+                "ship_date": o.ship_date.isoformat() if o.ship_date else None,
+                "ship_to_state": o.recipient_state,
+                "shipstation_cost_usd": round(float(o.shipstation_cost or 0), 2),
+                "invoice_cost_usd": round(float(o.invoice_cost or 0), 2),
+                "delta_usd": round(float(o.delta or 0), 2),
+            }
+            for o in outliers
+        ],
     }
 
 

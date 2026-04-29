@@ -2015,6 +2015,39 @@ export interface ShippingFedexReconciliation {
     ship_date: string | null
     ship_to_state: string | null
   }>
+  /**
+   * Invoice-based reconciliation, populated from fedex_invoice_charges
+   * (FBO weekly CSV ingest). Null when no invoice data lands in the
+   * window — frontend falls back to rate-API-only view in that case.
+   * When present, this is the highest-fidelity truth source: actual
+   * billed amounts FedEx charged us.
+   */
+  invoice: {
+    spider_shipments: number
+    total_invoiced_usd: number
+    avg_per_ship_usd: number
+    annualized_savings_vs_list_usd: number
+    components: {
+      base_total_usd: number
+      discount_total_usd: number
+      surcharge_total_usd: number
+      duty_tax_total_usd: number
+    }
+    two_way_reconciliation: {
+      matched_shipments: number
+      avg_invoice_minus_ss_usd: number
+      total_invoice_minus_ss_usd: number
+    }
+    top_overstatement_outliers: Array<{
+      tracking_number: string
+      service_type: string | null
+      ship_date: string | null
+      ship_to_state: string | null
+      shipstation_cost_usd: number
+      invoice_cost_usd: number
+      delta_usd: number
+    }>
+  } | null
   method_note: string
 }
 

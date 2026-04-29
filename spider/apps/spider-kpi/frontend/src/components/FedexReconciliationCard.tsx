@@ -239,11 +239,135 @@ export function FedexReconciliationCard() {
             </div>
           )}
 
+          {/* ── Invoice-based truth (FBO ingest) ───────────────────
+              When fedex_invoice_charges has data in this window, show
+              actual billed amounts side-by-side with the rate-API
+              estimate. The Δ between invoice and ShipStation is the
+              "ShipStation overstatement" finding — labels priced
+              higher than what FedEx actually charged. */}
+          {data.invoice && data.invoice.spider_shipments > 0 && (
+            <>
+              <div style={{ marginTop: 24, marginBottom: 8, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Actual invoiced cost (FBO)</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  {data.invoice.spider_shipments.toLocaleString()} Spider shipments · billed truth from FedEx invoice export
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+                <div style={{ padding: '8px 10px', background: 'rgba(57,208,143,0.06)', borderRadius: 6, borderLeft: '2px solid #39d08f' }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>Total invoiced</div>
+                  <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtUsd(data.invoice.total_invoiced_usd)}</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    avg {fmtUsd2(data.invoice.avg_per_ship_usd)} / shipment
+                  </div>
+                </div>
+                <div style={{ padding: '8px 10px', background: 'rgba(57,208,143,0.06)', borderRadius: 6, borderLeft: '2px solid #39d08f' }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>Annualized savings vs LIST</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#39d08f' }}>
+                    {fmtUsd(data.invoice.annualized_savings_vs_list_usd)}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    from invoiced DISCOUNT lines (truth)
+                  </div>
+                </div>
+                <div style={{ padding: '8px 10px', background: 'rgba(255,109,122,0.06)', borderRadius: 6, borderLeft: '2px solid #ff6d7a' }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>ShipStation vs invoice</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: data.invoice.two_way_reconciliation.avg_invoice_minus_ss_usd < 0 ? '#ff6d7a' : '#39d08f' }}>
+                    {fmtUsd2(data.invoice.two_way_reconciliation.avg_invoice_minus_ss_usd)}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    avg per ship · {fmtUsd(data.invoice.two_way_reconciliation.total_invoice_minus_ss_usd)} total<br/>
+                    {data.invoice.two_way_reconciliation.matched_shipments.toLocaleString()} shipments matched
+                  </div>
+                </div>
+              </div>
+
+              {/* Component breakdown — base / discount / surcharge / duty */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
+                  Invoice components ({data.window_days}d window)
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                  <ComponentTile label="Base freight" amount={data.invoice.components.base_total_usd} />
+                  <ComponentTile label="Discount" amount={data.invoice.components.discount_total_usd} negative />
+                  <ComponentTile label="Surcharges" amount={data.invoice.components.surcharge_total_usd} />
+                  <ComponentTile label="Duty / tax" amount={data.invoice.components.duty_tax_total_usd} dimWhenZero />
+                </div>
+              </div>
+
+              {/* Top overstatement outliers */}
+              {data.invoice.top_overstatement_outliers.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
+                    Top {data.invoice.top_overstatement_outliers.length} biggest ShipStation-vs-invoice gaps
+                    <span style={{ fontWeight: 400, marginLeft: 6 }}>
+                      (negative Δ = ShipStation overstated)
+                    </span>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: 'var(--muted)' }}>
+                          <th style={{ textAlign: 'left', padding: '4px 8px' }}>Tracking #</th>
+                          <th style={{ textAlign: 'left', padding: '4px 8px' }}>Service</th>
+                          <th style={{ textAlign: 'left', padding: '4px 8px' }}>State</th>
+                          <th style={{ textAlign: 'left', padding: '4px 8px' }}>Ship date</th>
+                          <th style={{ textAlign: 'right', padding: '4px 8px' }}>ShipStation</th>
+                          <th style={{ textAlign: 'right', padding: '4px 8px' }}>Invoice</th>
+                          <th style={{ textAlign: 'right', padding: '4px 8px' }}>Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.invoice.top_overstatement_outliers.map(o => (
+                          <tr key={o.tracking_number} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '4px 8px', fontFamily: 'monospace', fontSize: 11 }}>{o.tracking_number}</td>
+                            <td style={{ padding: '4px 8px', fontFamily: 'monospace', fontSize: 10, color: 'var(--muted)' }}>{o.service_type || '—'}</td>
+                            <td style={{ padding: '4px 8px' }}>{o.ship_to_state || '—'}</td>
+                            <td style={{ padding: '4px 8px', color: 'var(--muted)', fontSize: 10 }}>{o.ship_date || '—'}</td>
+                            <td style={{ textAlign: 'right', padding: '4px 8px' }}>{fmtUsd2(o.shipstation_cost_usd)}</td>
+                            <td style={{ textAlign: 'right', padding: '4px 8px' }}>{fmtUsd2(o.invoice_cost_usd)}</td>
+                            <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600,
+                              color: o.delta_usd < 0 ? '#ff6d7a' : '#39d08f'
+                            }}>
+                              {fmtUsd2(o.delta_usd)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
             {data.method_note}
           </div>
         </>
       )}
     </section>
+  )
+}
+
+function ComponentTile({ label, amount, negative, dimWhenZero }: {
+  label: string
+  amount: number
+  negative?: boolean
+  dimWhenZero?: boolean
+}) {
+  const muted = dimWhenZero && (amount === 0 || Math.abs(amount) < 0.01)
+  return (
+    <div style={{
+      padding: '6px 10px',
+      background: 'rgba(255,255,255,0.02)',
+      borderRadius: 4,
+      opacity: muted ? 0.4 : 1,
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--muted)' }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 600, color: negative ? '#39d08f' : undefined }}>
+        {fmtUsd(amount)}
+      </div>
+    </div>
   )
 }
