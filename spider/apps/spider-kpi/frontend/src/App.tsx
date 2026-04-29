@@ -6,24 +6,15 @@ import { AuthGate, useAuth } from './components/AuthGate'
 
 const LORE_LEDGER_OWNER_EMAIL = 'joseph@spidergrills.com'
 
-// Charcoal JIT is owner-tier but Joseph asked to give Bailey access too.
-// Keep separate from OwnerOnlyRoute so Firmware/ECR/Lore stay Joseph-only.
-const CHARCOAL_JIT_ALLOWED = new Set<string>([
-  'joseph@spidergrills.com',
-  'bailey@spidergrills.com',
-])
+// Charcoal JIT was originally owner+Bailey only; opened to all
+// authenticated dashboard users 2026-04-29 per Joseph's request.
+// AuthGate already enforces the company-domain restriction, so no
+// per-route allowlist is needed here. Firmware/ECR/Lore stay
+// owner-only via OwnerOnlyRoute below.
 
 function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   if ((user?.email ?? '').toLowerCase() !== LORE_LEDGER_OWNER_EMAIL) {
-    return <Navigate to="/" replace />
-  }
-  return <>{children}</>
-}
-
-function CharcoalJITRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth()
-  if (!CHARCOAL_JIT_ALLOWED.has((user?.email ?? '').toLowerCase())) {
     return <Navigate to="/" replace />
   }
   return <>{children}</>
@@ -69,7 +60,7 @@ export function App() {
         <Route path="/division/marketing" element={withBoundary('Marketing Division', <MarketingDivision />)} />
         <Route path="/division/product-engineering" element={withBoundary('Product / Engineering Division', <ProductEngineeringDivision />)} />
         <Route path="/division/product-engineering/firmware" element={<OwnerOnlyRoute>{withBoundary('Firmware Hub', <FirmwareHub />)}</OwnerOnlyRoute>} />
-        <Route path="/division/product-engineering/charcoal" element={<CharcoalJITRoute>{withBoundary('Charcoal JIT', <CharcoalUsage />)}</CharcoalJITRoute>} />
+        <Route path="/division/product-engineering/charcoal" element={withBoundary('Charcoal JIT', <CharcoalUsage />)} />
         <Route path="/division/operations" element={withBoundary('Operations Division', <OperationsDivision />)} />
         <Route path="/division/production-manufacturing" element={withBoundary('Production / Manufacturing Division', <ProductionManufacturingDivision />)} />
         <Route path="/division/product-enginering" element={<Navigate to="/division/product-engineering" replace />} />

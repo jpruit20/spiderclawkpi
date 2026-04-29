@@ -3,14 +3,9 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../components/AuthGate'
 
 // Firmware sub-page stays owner-only (wrapped in OwnerOnlyRoute in App.tsx).
-// Charcoal JIT is owner + Bailey per Joseph's request — see App.tsx
-// CharcoalJITRoute. Mirror those gates on the UI links so
-// non-permitted dashboard users don't see buttons that would 404 them.
+// Charcoal JIT was opened to all dashboard users 2026-04-29 per Joseph's
+// request — no gate on the link or the route.
 const OWNER_EMAIL = 'joseph@spidergrills.com'
-const CHARCOAL_JIT_EMAILS = new Set<string>([
-  'joseph@spidergrills.com',
-  'bailey@spidergrills.com',
-])
 import { Card } from '../components/Card'
 import { BarIndicator } from '../components/BarIndicator'
 import { TruthBadge, type TruthState } from '../components/TruthBadge'
@@ -387,7 +382,6 @@ function ClusterDetailPanel({ detail, onClose }: { detail: ClusterTicketDetail; 
 export function ProductEngineeringDivision() {
   const { user } = useAuth()
   const isOwner = (user?.email ?? '').toLowerCase() === OWNER_EMAIL
-  const canSeeCharcoalJIT = CHARCOAL_JIT_EMAILS.has((user?.email ?? '').toLowerCase())
   const [view, setView] = useState<SubView>('fleet')
   const [telemetry, setTelemetry] = useState<TelemetrySummary | null>(null)
   const [githubIssues, setGithubIssues] = useState<GithubIssuesResponse | null>(null)
@@ -860,9 +854,7 @@ export function ProductEngineeringDivision() {
                   {isOwner ? (
                     <Link to="/division/product-engineering/firmware" className="range-button" style={{ textDecoration: 'none' }}>Firmware ↗</Link>
                   ) : null}
-                  {canSeeCharcoalJIT ? (
-                    <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
-                  ) : null}
+                  <Link to="/division/product-engineering/charcoal" className="range-button" style={{ textDecoration: 'none' }}>Charcoal JIT ↗</Link>
                 </div>
                 <div style={{ position: 'relative' }}>
                   <button className="range-button active" onClick={() => setShowDatePicker(!showDatePicker)}>
