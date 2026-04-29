@@ -395,11 +395,34 @@ def sync_klaviyo(db: Session) -> dict[str, Any]:
             events_by_metric[metric_name] = n
             total_events += n
 
+        # --- Synthesize app-side observations + daily rollup from
+        # the Klaviyo events we just pulled. This populates the PE
+        # page's "App backend (spidergrills.app)" cards from the same
+        # events the dashboard already reads — no separate DB tunnel
+        # required. Idempotent via (source, source_ref_id) unique
+        # constraint, so re-running on already-ingested events is a
+        # no-op. Runs INSIDE the connector so each Klaviyo poll
+        # produces a fresh rollup for the dashboard. ---
+        synth_summary: dict[str, int] = {}
+        try:
+            from app.compute.app_side_klaviyo import synthesize_from_klaviyo_events
+            from app.compute.app_side import rebuild_app_side_daily
+            synth_summary = synthesize_from_klaviyo_events(db)
+            if synth_summary.get("user_observations_inserted") or synth_summary.get("device_observations_inserted"):
+                rebuild_app_side_daily(db)
+                db.commit()
+        except Exception:
+            # Don't fail the Klaviyo sync if the synthesis trips —
+            # the events themselves are already saved, and the next
+            # poll will retry. Log so we see it in the journal.
+            logger.exception("klaviyo→app_side synthesis failed (events already persisted)")
+
         summary = {
             "ok": True,
             "profiles": profiles_n,
             "events": events_by_metric,
             "events_total": total_events,
+            "app_side_synth": synth_summary,
         }
         run.metadata_json = {**(run.metadata_json or {}), "summary": summary}
         finish_sync_run(

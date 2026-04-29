@@ -223,8 +223,12 @@ def app_side_fleet(
                 "Represents only users who triggered the in-app diagnostics flow, not the full app population."
             ),
             "app_backend": (
-                "Reserved for direct spidergrills.app backend sync — not yet connected. "
-                "Once wired, this source will give full MAU/DAU and every paired device."
+                "Materialized from Klaviyo events the Spider Grills app fires (Device Paired, "
+                "Device Unpaired, Cook Completed). Each event becomes an app-side observation; "
+                "the daily rollup gives the active-app population and every device that's been "
+                "paired or used since the events started flowing on 2026-04-28. The 'app_backend' "
+                "label is preserved for schema continuity — a future direct-DB pull would write "
+                "to the same partition."
             ),
             "combined": (
                 "Users deduped by sha256(email), devices deduped by normalized MAC across sources. "

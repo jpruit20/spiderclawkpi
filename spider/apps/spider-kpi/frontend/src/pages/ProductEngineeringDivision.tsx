@@ -1684,7 +1684,7 @@ export function ProductEngineeringDivision() {
               <CollapsibleSection
                 id="pe-app-side-fleet"
                 title="App-side fleet"
-                subtitle="Freshdesk-derived app user + device stats; app backend integration pending"
+                subtitle="App-fired Klaviyo events + Freshdesk diagnostics — two angles on the app population"
                 accentColor="#4ade80"
               >
               {/* App-side fleet — Freshdesk-derived today, app backend pending */}
@@ -1698,10 +1698,11 @@ export function ProductEngineeringDivision() {
                   </span>
                 </div>
                 <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-                  Complements the device-side DynamoDB/S3 telemetry with data reported directly from
-                  the Spider Grills mobile app (React Native). Every metric is explicitly tagged
-                  by source so Freshdesk-derived rows and direct app-backend rows stay separable
-                  and never double-count.
+                  Complements the device-side DynamoDB/S3 telemetry with data reported from the
+                  Spider Grills mobile app (React Native). Two streams: <strong>Freshdesk</strong>{' '}
+                  diagnostic tickets (a passive floor) and <strong>Klaviyo</strong> per-event
+                  ingestion (Device Paired, Device Unpaired, Cook Completed). Tagged by source so
+                  the streams never double-count.
                 </p>
 
                 <div className="two-col two-col-equal" style={{ marginBottom: 12 }}>
@@ -1738,19 +1739,28 @@ export function ProductEngineeringDivision() {
                     </div>
                   </div>
 
-                  {/* App backend source column */}
+                  {/* App backend source column — populated from the
+                      Klaviyo events Agustín ships from the app
+                      (Device Paired / Unpaired / Cook Completed).
+                      Synthesized into the app_side observation tables
+                      via app_side_klaviyo.synthesize_from_klaviyo_events
+                      after each Klaviyo poll. The "app_backend" source
+                      label is preserved for schema continuity — a
+                      future direct-DB pull would write to the same
+                      partition. */}
                   <div>
                     <div className="venom-panel-head" style={{ marginBottom: 6 }}>
-                      <strong style={{ fontSize: 13 }}>App backend (spidergrills.app)</strong>
+                      <strong style={{ fontSize: 13 }}>App backend (via Klaviyo events)</strong>
                       <span
-                        className={`badge ${appSide?.sources?.app_backend?.connected ? 'badge-neutral' : 'badge-warn'}`}
+                        className={`badge ${(appSide?.sources?.app_backend?.observations ?? 0) > 0 ? 'badge-good' : 'badge-warn'}`}
                         style={{ fontSize: 10 }}
                       >
-                        {appSide?.sources?.app_backend?.connected ? 'connected' : 'pending credentials'}
+                        {(appSide?.sources?.app_backend?.observations ?? 0) > 0 ? 'live' : 'awaiting events'}
                       </span>
                     </div>
                     <p style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
-                      Full DAU/MAU, every paired device, signup funnel. Live once the direct DB pull is wired in.
+                      Per-event ingestion via Klaviyo: device pair / unpair / cook completed.
+                      Active population — every device that's been used since the events started firing.
                     </p>
                     <div className="venom-bar-list">
                       <div className="venom-breakdown-row">
