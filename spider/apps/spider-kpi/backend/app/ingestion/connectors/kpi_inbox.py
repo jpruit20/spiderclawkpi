@@ -518,6 +518,72 @@ _FEDEX_CHARGE_COMPONENTS: list[tuple[str, str, str]] = [
     ("Shipment Duty and Tax Charge USD",   "DUTY_TAX", "Duties and taxes (typically zero for domestic)"),
 ]
 
+# Flush invoice rows in chunks of this size. For a 13K-shipment CSV
+# (~65K total rows after charge-category expansion) this drops the
+# DB round-trip count from ~65K (one per row) to ~65 (one per batch),
+# turning a 10+ minute job into ~30 seconds. Larger batches are slightly
+# faster but bigger memory + harder-to-roll-back-cleanly chunks; 1000
+# is a good middle ground given each row carries ~3KB of JSONB payload.
+BATCH_SIZE = 1000
+
+
+def _flush_invoice_batch(db: Session, rows: list[dict[str, Any]]) -> None:
+    """Bulk-insert a batch of fedex_invoice_charges rows with ON CONFLICT
+    DO UPDATE so re-running the parser refreshes existing rows in place.
+
+    PostgreSQL's executemany-via-INSERT...ON CONFLICT pattern: build one
+    INSERT statement, pass the row list as a single SQL execute. The
+    driver pipelines them as a single network round-trip. Conflict key
+    matches uq_fedex_invoice_charges_invoice_tracking_category exactly.
+
+    Within-batch dedupe note: PostgreSQL refuses to ON CONFLICT-update the
+    same target row twice in one INSERT ("command cannot affect row a
+    second time"). FedEx FBO occasionally emits two rows with the same
+    (invoice, tracking, category) for re-rated shipments. We collapse
+    those to last-wins inside the batch before flushing — safe because
+    cross-batch conflicts are still handled by the ON CONFLICT clause.
+    """
+    if not rows:
+        return
+    from app.models import FedexInvoiceCharge
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    # Dedupe inside the batch by the unique-constraint key. Later
+    # entries overwrite earlier ones — matches the cross-batch
+    # ON CONFLICT DO UPDATE semantics (latest wins).
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for r in rows:
+        key = (r["invoice_number"], r["tracking_number"], r["charge_category"])
+        deduped[key] = r
+    rows = list(deduped.values())
+
+    stmt = pg_insert(FedexInvoiceCharge)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_fedex_invoice_charges_invoice_tracking_category",
+        # Reference the EXCLUDED pseudo-table so the new values win on
+        # conflict — equivalent to "if row exists, overwrite with the
+        # incoming charge_amount, dates, raw_payload, etc."
+        set_={
+            "charge_amount_usd": stmt.excluded.charge_amount_usd,
+            "charge_description": stmt.excluded.charge_description,
+            "is_spider": stmt.excluded.is_spider,
+            "reference_value": stmt.excluded.reference_value,
+            "account_number": stmt.excluded.account_number,
+            "service_type": stmt.excluded.service_type,
+            "ship_date": stmt.excluded.ship_date,
+            "delivery_date": stmt.excluded.delivery_date,
+            "invoice_date": stmt.excluded.invoice_date,
+            "shipper_postal_code": stmt.excluded.shipper_postal_code,
+            "recipient_postal_code": stmt.excluded.recipient_postal_code,
+            "recipient_state": stmt.excluded.recipient_state,
+            "billed_weight_lb": stmt.excluded.billed_weight_lb,
+            "actual_weight_lb": stmt.excluded.actual_weight_lb,
+            "dim_weight_lb": stmt.excluded.dim_weight_lb,
+            "raw_payload": stmt.excluded.raw_payload,
+        },
+    )
+    db.execute(stmt, rows)
+
 
 def _parse_fedex_invoice(
     db: Session, msg: Message, attachments: list[dict[str, Any]]
@@ -588,6 +654,10 @@ def _parse_fedex_invoice(
         # corruption). Keeps total ID length ≤ 26 chars regardless of
         # filename so [:64] truncation can't collide.
         file_hash = hashlib.md5(payload["filename"].encode("utf-8")).hexdigest()[:10]
+
+        # Buffer of rows pending DB flush. Drained every BATCH_SIZE
+        # rows during the loop and once more in a tail flush after.
+        pending_rows: list[dict[str, Any]] = []
 
         for row_idx, row in enumerate(reader):
             # ── Identity ──
@@ -679,36 +749,25 @@ def _parse_fedex_invoice(
                     },
                 })
 
-            # ON CONFLICT DO UPDATE so re-runs (parser refinements,
-            # manual re-uploads of the same CSV) refresh existing rows
-            # rather than failing on the unique constraint OR silently
-            # skipping new mappings. Conflict key matches the
-            # uq_fedex_invoice_charges_invoice_tracking_category
-            # constraint exactly.
-            for r in rows_to_insert:
-                stmt = pg_insert(FedexInvoiceCharge).values(**r).on_conflict_do_update(
-                    constraint="uq_fedex_invoice_charges_invoice_tracking_category",
-                    set_={
-                        "charge_amount_usd": r["charge_amount_usd"],
-                        "charge_description": r["charge_description"],
-                        "is_spider": r["is_spider"],
-                        "reference_value": r.get("reference_value"),
-                        "account_number": r.get("account_number"),
-                        "service_type": r.get("service_type"),
-                        "ship_date": r.get("ship_date"),
-                        "delivery_date": r.get("delivery_date"),
-                        "invoice_date": r.get("invoice_date"),
-                        "shipper_postal_code": r.get("shipper_postal_code"),
-                        "recipient_postal_code": r.get("recipient_postal_code"),
-                        "recipient_state": r.get("recipient_state"),
-                        "billed_weight_lb": r.get("billed_weight_lb"),
-                        "actual_weight_lb": r.get("actual_weight_lb"),
-                        "dim_weight_lb": r.get("dim_weight_lb"),
-                        "raw_payload": r["raw_payload"],
-                    },
-                )
-                db.execute(stmt)
-                inserted += 1
+            # Buffer rows; flush in batches below to avoid 65K
+            # individual round-trips on a 13K-shipment CSV.
+            pending_rows.extend(rows_to_insert)
+            inserted += len(rows_to_insert)
+
+            # Flush every BATCH_SIZE rows so memory doesn't bloat and
+            # progress is visible to monitors mid-run. The unique-
+            # constraint ON CONFLICT logic means partial batches are
+            # safe — if the last commit dies we re-run and dupes fall
+            # through. ON CONFLICT DO UPDATE refreshes existing rows
+            # (parser refinement, manual re-upload of same CSV).
+            if len(pending_rows) >= BATCH_SIZE:
+                _flush_invoice_batch(db, pending_rows)
+                pending_rows.clear()
+
+        # Tail flush for whatever's left below the batch threshold.
+        if pending_rows:
+            _flush_invoice_batch(db, pending_rows)
+            pending_rows.clear()
 
     return {"records_created": inserted, "extra": {"csv_payloads_seen": len(csv_payloads)}}
 
