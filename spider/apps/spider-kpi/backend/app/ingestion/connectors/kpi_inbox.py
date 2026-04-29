@@ -473,29 +473,81 @@ def _expand_csv_payloads(attachments: list[dict[str, Any]]) -> list[dict[str, An
     return out
 
 
+def _to_decimal_usd(value: Optional[str]) -> Optional[float]:
+    """Parse a FedEx CSV currency string. Strips $, commas, whitespace.
+    Returns None on empty / unparseable; 0.0 is a valid value."""
+    if value is None:
+        return None
+    cleaned = str(value).strip().replace("$", "").replace(",", "")
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_mdy(value: Optional[str]):
+    """Parse a 'mm/dd/yyyy' FedEx date string into a date.
+    Returns None on empty / unparseable. Strips whitespace and
+    accepts both 'mm/dd/yyyy' and 'm/d/yyyy'."""
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    from datetime import datetime as _dt
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+        try:
+            return _dt.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+# Map FedEx's per-component charge columns to our charge_category enum.
+# Each shipment row produces 1-5 fedex_invoice_charges rows (one per
+# non-null component). NET_CHARGE is always written as the headline
+# row; component rows are written only when their amount is non-zero
+# so the table doesn't fill with empty $0 entries.
+_FEDEX_CHARGE_COMPONENTS: list[tuple[str, str, str]] = [
+    # (column_name, charge_category, human_description)
+    ("Shipment Freight Charge Amount USD", "BASE", "Base freight charge before discounts/surcharges"),
+    ("Shipment Discount Amount USD",       "DISCOUNT", "Negotiated contract discount (negative value)"),
+    ("Shipment Miscellaneous Charge USD",  "SURCHARGE", "Bundled surcharges (fuel, residential, dim, etc — FBO Detail report combines these)"),
+    ("Shipment Duty and Tax Charge USD",   "DUTY_TAX", "Duties and taxes (typically zero for domestic)"),
+]
+
+
 def _parse_fedex_invoice(
     db: Session, msg: Message, attachments: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Parse a FedEx Billing Online invoice CSV into fedex_invoice_charges.
+    """Parse a FedEx Billing Online "Detail Shipment Report" CSV.
 
-    Capture-first strategy: until the first real CSV arrives we don't
-    know FedEx's exact column names (they vary by report flavor and
-    account region). Rather than guess, this parser:
+    Schema confirmed against the 18-month historical backfill (2026-04-29).
+    Each input row (one shipment) produces up to 5 ``fedex_invoice_charges``
+    rows — one NET total + up to 4 non-zero components (BASE / DISCOUNT /
+    SURCHARGE / DUTY_TAX). All rows on a shipment share the same
+    invoice_number + tracking_number; charge_category disambiguates.
 
-      1. Expands each attachment via _expand_csv_payloads (handles raw
-         CSV, single ZIP, multi-CSV ZIP).
-      2. Decodes (UTF-8 with BOM tolerance, falls back to latin-1).
-      3. Iterates rows via csv.DictReader.
-      4. For each row, writes a fedex_invoice_charges entry with
-         charge_category='UNPARSED' and the full row preserved in
-         raw_payload. Required columns get defaulted to safe values.
-      5. Logs sample column names so a refinement pass can swap in
-         the real schema after a real invoice lands.
+    Spider tenancy filter
+    ---------------------
+    ``Reference Notes Line 1`` carries the customer name on Spider
+    labels (verified value: "Spider Grills"). Rows where this field
+    contains "spider" (case-insensitive) get ``is_spider=true`` —
+    everything else is captured anyway (so we have visibility into
+    sibling-company charges) but stays out of the dashboard's
+    Spider-only WHERE clauses. This decouples our reporting from the
+    Payer Account number, which is the umbrella account billed for
+    multiple companies under one FedEx login.
 
-    Once a real invoice arrives, swap the body for a precise mapping;
-    re-running this parser via the admin manual-trigger route is safe
-    because the unique constraint on (invoice_number, tracking_number,
-    charge_category) prevents duplicates.
+    Idempotency
+    -----------
+    Insert uses ``ON CONFLICT (invoice_number, tracking_number,
+    charge_category) DO UPDATE`` — re-running the parser on the same
+    CSV (or a refined parser pass over historical rows) replaces the
+    existing row's charge_amount + raw_payload while preserving the
+    natural key. Safe to re-fire without dedup logic upstream.
     """
     from app.models import FedexInvoiceCharge
     import csv
@@ -518,7 +570,6 @@ def _parse_fedex_invoice(
         except UnicodeDecodeError:
             text = raw.decode("latin-1", errors="replace")
 
-        # csv.Sniffer can guess the delimiter; default to comma if it can't
         try:
             dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t|")
         except csv.Error:
@@ -532,58 +583,132 @@ def _parse_fedex_invoice(
             payload["filename"], len(reader.fieldnames), list(reader.fieldnames)[:10],
         )
 
-        # Stable short hash of the filename so synthetic invoice/tracking
-        # values fit within the 64-char column AND are deterministic
-        # across re-runs (combined with ON CONFLICT DO NOTHING this
-        # makes the parser fully idempotent).
+        # Stable short hash for fallback synthetic IDs when a row is
+        # missing the natural key columns (rare; usually CSV header
+        # corruption). Keeps total ID length ≤ 26 chars regardless of
+        # filename so [:64] truncation can't collide.
         file_hash = hashlib.md5(payload["filename"].encode("utf-8")).hexdigest()[:10]
 
         for row_idx, row in enumerate(reader):
-            # Synthetic invoice_number / tracking_number until we know
-            # which columns hold them. Once we do, swap to row[<col>].
-            # Format keeps total length ≤ 26 chars regardless of filename
-            # so [:64] truncation never produces collisions.
-            synth_invoice = (
-                row.get("Invoice Number") or row.get("InvoiceNumber") or row.get("invoice_number")
-                or f"unparsed-{file_hash}"
-            )[:64]
-            synth_tracking = (
-                row.get("Tracking Number") or row.get("TrackingNumber")
-                or row.get("Tracking #") or row.get("tracking_number")
+            # ── Identity ──
+            invoice_number = (row.get("Invoice Number") or f"unparsed-{file_hash}").strip()[:64]
+            tracking_number = (
+                row.get("Shipment Tracking Number") or row.get("Master Tracking Number")
                 or f"unparsed-{file_hash}-{row_idx:07d}"
-            )[:64]
-            try:
-                charge_amount = float(
-                    (row.get("Total Charges") or row.get("TotalCharges")
-                     or row.get("Net Charge") or row.get("Amount") or "0").replace(",", "").replace("$", "")
-                )
-            except (TypeError, ValueError):
-                charge_amount = 0.0
+            ).strip()[:64]
 
-            # ON CONFLICT DO NOTHING so a second pass over the same file
-            # (e.g. user re-uploads, parser refinement re-runs) is a
-            # no-op rather than a transaction-killing constraint
-            # violation. Conflict key matches the unique constraint:
-            # (invoice_number, tracking_number, charge_category).
-            stmt = pg_insert(FedexInvoiceCharge).values(
-                invoice_number=synth_invoice,
+            # ── Spider tenancy filter ──
+            ref_line_1 = (row.get("Reference Notes Line 1") or "").strip().lower()
+            ref_line_2 = (row.get("Reference Notes Line 2") or "").strip().lower()
+            is_spider = ("spider" in ref_line_1) or ("spider" in ref_line_2)
+
+            # ── Dates / geography / service ──
+            invoice_date = _parse_mdy(row.get("Invoice Date (mm/dd/yyyy)"))
+            ship_date = _parse_mdy(row.get("Shipment Date (mm/dd/yyyy)"))
+            delivery_date = _parse_mdy(row.get("Shipment Delivery Date (mm/dd/yyyy)"))
+            service_type = (
+                row.get("Service Description") or row.get("Service Type") or ""
+            ).strip()[:64] or None
+            account_number = (row.get("Payer Account") or "").strip()[:32] or None
+            shipper_postal = (row.get("Shipper Postal Code") or "").strip()[:16] or None
+            recipient_postal = (row.get("Recipient Postal Code") or "").strip()[:16] or None
+            recipient_state = (row.get("Recipient State/Province") or "").strip()[:64] or None
+
+            # ── Weights ──
+            actual_weight = _to_decimal_usd(row.get("Original Weight (Pounds)"))
+            rated_weight = _to_decimal_usd(row.get("Shipment Rated Weight (Pounds)"))
+            dim_flag_y = (row.get("Shipment DIM Flag (Y or N)") or "").strip().upper() == "Y"
+
+            # ── Charges ──
+            net_charge = _to_decimal_usd(row.get("Net Charge Amount USD"))
+
+            # Common fields on every produced row for this shipment.
+            base_fields = dict(
+                invoice_number=invoice_number,
+                invoice_date=invoice_date,
                 invoice_currency="USD",
-                tracking_number=synth_tracking,
-                is_spider=True,
-                charge_category="UNPARSED",
-                charge_description="Captured prior to parser refinement; see raw_payload",
-                charge_amount_usd=charge_amount,
+                tracking_number=tracking_number,
+                ship_date=ship_date,
+                delivery_date=delivery_date,
+                is_spider=is_spider,
+                reference_value=(row.get("Reference Notes Line 1") or "").strip()[:128] or None,
+                account_number=account_number,
+                service_type=service_type,
                 carrier="fedex",
-                raw_payload={
+                shipper_postal_code=shipper_postal,
+                recipient_postal_code=recipient_postal,
+                recipient_state=recipient_state,
+                billed_weight_lb=rated_weight,
+                actual_weight_lb=actual_weight,
+                # FedEx FBO doesn't provide dim_weight separately; if
+                # the DIM flag is Y, rated_weight IS the dim weight.
+                dim_weight_lb=rated_weight if dim_flag_y else None,
+            )
+
+            rows_to_insert: list[dict[str, Any]] = []
+
+            # 1) Always write the NET row — the headline bill amount
+            # the dashboard reconciles against ShipStation actuals.
+            rows_to_insert.append({
+                **base_fields,
+                "charge_category": "NET",
+                "charge_description": "Net invoiced charge (sum of base + discount + misc + duty/tax)",
+                "charge_amount_usd": net_charge if net_charge is not None else 0.0,
+                "raw_payload": {
                     "filename": payload["filename"],
                     "row_index": row_idx,
                     "row": row,
                 },
-            ).on_conflict_do_nothing(
-                constraint="uq_fedex_invoice_charges_invoice_tracking_category",
-            )
-            db.execute(stmt)
-            inserted += 1
+            })
+
+            # 2) Component rows — only when non-zero, to keep the
+            # table from filling with $0 placeholders.
+            for col, category, description in _FEDEX_CHARGE_COMPONENTS:
+                amount = _to_decimal_usd(row.get(col))
+                if amount is None or amount == 0.0:
+                    continue
+                rows_to_insert.append({
+                    **base_fields,
+                    "charge_category": category,
+                    "charge_description": description,
+                    "charge_amount_usd": amount,
+                    "raw_payload": {
+                        "filename": payload["filename"],
+                        "row_index": row_idx,
+                        "source_column": col,
+                    },
+                })
+
+            # ON CONFLICT DO UPDATE so re-runs (parser refinements,
+            # manual re-uploads of the same CSV) refresh existing rows
+            # rather than failing on the unique constraint OR silently
+            # skipping new mappings. Conflict key matches the
+            # uq_fedex_invoice_charges_invoice_tracking_category
+            # constraint exactly.
+            for r in rows_to_insert:
+                stmt = pg_insert(FedexInvoiceCharge).values(**r).on_conflict_do_update(
+                    constraint="uq_fedex_invoice_charges_invoice_tracking_category",
+                    set_={
+                        "charge_amount_usd": r["charge_amount_usd"],
+                        "charge_description": r["charge_description"],
+                        "is_spider": r["is_spider"],
+                        "reference_value": r.get("reference_value"),
+                        "account_number": r.get("account_number"),
+                        "service_type": r.get("service_type"),
+                        "ship_date": r.get("ship_date"),
+                        "delivery_date": r.get("delivery_date"),
+                        "invoice_date": r.get("invoice_date"),
+                        "shipper_postal_code": r.get("shipper_postal_code"),
+                        "recipient_postal_code": r.get("recipient_postal_code"),
+                        "recipient_state": r.get("recipient_state"),
+                        "billed_weight_lb": r.get("billed_weight_lb"),
+                        "actual_weight_lb": r.get("actual_weight_lb"),
+                        "dim_weight_lb": r.get("dim_weight_lb"),
+                        "raw_payload": r["raw_payload"],
+                    },
+                )
+                db.execute(stmt)
+                inserted += 1
 
     return {"records_created": inserted, "extra": {"csv_payloads_seen": len(csv_payloads)}}
 
