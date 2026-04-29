@@ -10,7 +10,10 @@ from app.compute.kpis import recompute_daily_kpis, recompute_diagnostics
 from app.core.config import get_settings
 from app.ingestion.connectors.aws_telemetry import sync_aws_telemetry
 from app.ingestion.connectors.clarity import sync_clarity
-from app.ingestion.connectors.fedex import health_check as fedex_health_check
+from app.ingestion.connectors.fedex import (
+    health_check as fedex_health_check,
+    register_source as fedex_register_source,
+)
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
@@ -213,7 +216,7 @@ def debug_ga4():
 
 
 @router.get('/debug/fedex')
-def debug_fedex():
+def debug_fedex(db: Session = Depends(db_session)):
     """Confirm FedEx Web Services creds + endpoint reachability.
 
     Used to detect when the production project leaves FedEx review and
@@ -223,7 +226,13 @@ def debug_fedex():
       * status='unconfigured' — env vars missing
       * status='error'        — creds set but token mint failed
     Safe to call from anywhere; performs no real data fetching.
+
+    Side effect: calls register_source() to upsert the SourceConfig
+    row so System Health surfaces fedex as a known connector even
+    before the first real sync runs.
     """
+    fedex_register_source(db)
+    db.commit()
     return fedex_health_check()
 
 

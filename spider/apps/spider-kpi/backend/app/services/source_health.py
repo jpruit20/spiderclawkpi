@@ -25,6 +25,13 @@ STALE_MINUTES_BY_SOURCE = {
     "aws_telemetry_stream": 30,
     "decision-engine": 180,
     "shipstation": 360,
+    # FedEx via Web Services. Two distinct cadences — see
+    # SOURCE_TYPES below for why we register them separately:
+    # `fedex` is the API connector (Rates cross-check + Freight LTL +
+    # Ground EOD) on a daily-ish cadence; `fedex_invoice_email` is
+    # the FBO weekly CSV export ingestor.
+    "fedex": 1440,                # daily LTL/EOD/rate-quote pull → 24h
+    "fedex_invoice_email": 10080, # weekly FBO export → 7d
     # Daily / 12h-cadence sources — set staleness to ~2× the cron
     # interval so a single missed run is "stale" but the normal
     # cadence stays "healthy". Audit on 2026-04-28 found these were
@@ -54,6 +61,8 @@ SOURCE_TYPES = {
     "sharepoint_intelligence": "connector",
     "sharepoint_deep_analysis": "connector",
     "shipstation": "connector",
+    "fedex": "connector",
+    "fedex_invoice_email": "connector",
     "youtube": "connector",
     "youtube_lore": "connector",
     "amazon": "connector",

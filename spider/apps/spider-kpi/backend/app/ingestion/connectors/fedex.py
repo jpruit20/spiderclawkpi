@@ -48,6 +48,7 @@ import time
 from typing import Any, Optional
 
 import requests
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 
@@ -218,6 +219,33 @@ def _txn(resp: requests.Response) -> Optional[str]:
         return resp.json().get("transactionId")
     except Exception:
         return None
+
+
+def register_source(db: Session) -> None:
+    """Make the connector visible on the System Health page.
+
+    Idempotent — calls upsert_source_config('fedex'). Run once on
+    application startup AND on every health-check call so the source
+    row always exists with current configured/sync_mode metadata,
+    even on a fresh DB.
+    """
+    # Local import to avoid a circular dependency at module load time
+    # (source_health imports from app.models, which the connector
+    # doesn't need at import time).
+    from app.services.source_health import upsert_source_config
+
+    is_sandbox = "sandbox" in settings.fedex_api_host.lower()
+    upsert_source_config(
+        db,
+        "fedex",
+        configured=bool(settings.fedex_api_key and settings.fedex_api_secret),
+        sync_mode="poll",
+        config_json={
+            "host": settings.fedex_api_host,
+            "environment": "sandbox" if is_sandbox else "production",
+            "account_number_set": bool(settings.fedex_account_number),
+        },
+    )
 
 
 def health_check() -> dict[str, Any]:
