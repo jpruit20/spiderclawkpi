@@ -1300,6 +1300,11 @@ export const api = {
     ),
   shipping3plRoi: (days: number = 365, signal?: AbortSignal) =>
     request<Shipping3plRoi>(`/api/shipping/3pl-roi?days=${days}`, { signal }),
+  shippingFedexReconciliation: (days: number = 30, top_n_outliers: number = 10, signal?: AbortSignal) =>
+    request<ShippingFedexReconciliation>(
+      `/api/shipping/fedex-reconciliation?days=${days}&top_n_outliers=${top_n_outliers}`,
+      { signal },
+    ),
   shippingCxCorrelation: (days: number = 30, signal?: AbortSignal) =>
     request<ShippingCxCorrelation>(`/api/shipping/cx-correlation?days=${days}`, { signal }),
   klaviyoFriendbuyAttribution: (days: number = 30, signal?: AbortSignal) =>
@@ -1964,6 +1969,51 @@ export interface Shipping3plRoi {
   candidates: Array<{
     name: string; state: string; estimated_annual_savings_usd: number; in_window_savings_usd: number
     shipments_better_served: number; savings_pct: number
+  }>
+  method_note: string
+}
+
+/**
+ * FedEx rate cross-check reconciliation. Compares ShipStation actuals
+ * against FedEx's own ACCOUNT and LIST quotes for every recent FedEx
+ * shipment. ACCOUNT delta near zero = healthy; LIST−SS = contract value.
+ * Powered by the daily cross_check_rates job (07:30 ET).
+ */
+export interface ShippingFedexReconciliation {
+  window_days: number
+  as_of: string
+  totals: {
+    quoted_shipments: number
+    account_quotes: number
+    list_quotes: number
+    /** LIST quote − ShipStation actual, summed and projected to a year. */
+    annualized_savings_vs_list_usd: number
+    in_window_savings_vs_list_usd: number
+    /** Sum of ACCOUNT − ShipStation deltas. ~zero = aligned. */
+    in_window_account_delta_usd: number
+  }
+  alignment_health: {
+    avg_delta_usd: number | null
+    stddev_usd: number | null
+    median_delta_usd: number | null
+  }
+  by_service: Array<{
+    service_type: string
+    n: number
+    avg_account_delta_usd: number | null
+    avg_list_savings_usd: number | null
+    total_account_delta_usd: number
+    total_list_savings_usd: number
+  }>
+  top_outliers: Array<{
+    tracking_number: string
+    service_type: string | null
+    ss_service_code: string | null
+    quoted_charge_usd: number | null
+    shipstation_charge_usd: number | null
+    delta_usd: number | null
+    ship_date: string | null
+    ship_to_state: string | null
   }>
   method_note: string
 }

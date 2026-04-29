@@ -354,14 +354,24 @@ def _quote_payload_for_shipment(
     pkg: dict[str, Any] = {"weight": {"units": "LB", "value": float(weight_lb)}}
     if dimensions:
         # ShipStation dimensions JSON is {"length": .., "width": .., "height": .., "units": "inches"}
-        units = (dimensions.get("units") or "IN").upper()
-        units = "IN" if units.startswith("IN") else "CM"
-        pkg["dimensions"] = {
-            "length": int(dimensions["length"]),
-            "width": int(dimensions["width"]),
-            "height": int(dimensions["height"]),
-            "units": units,
-        }
+        # FedEx Rates API rejects dimensions < 1 (PACKAGEDIMENSION.TYPE.ERROR);
+        # if any side rounds to 0 we just drop the dimensions entirely and let
+        # FedEx quote on weight alone — better than failing the whole row.
+        try:
+            length = int(dimensions["length"])
+            width = int(dimensions["width"])
+            height = int(dimensions["height"])
+        except (KeyError, TypeError, ValueError):
+            length = width = height = 0
+        if length >= 1 and width >= 1 and height >= 1:
+            units = (dimensions.get("units") or "IN").upper()
+            units = "IN" if units.startswith("IN") else "CM"
+            pkg["dimensions"] = {
+                "length": length,
+                "width": width,
+                "height": height,
+                "units": units,
+            }
     recipient_address: dict[str, Any] = {
         "postalCode": recipient_postal,
         "countryCode": recipient_country,
@@ -517,8 +527,11 @@ def cross_check_rates(db: Session, *, days: int = 7, max_shipments: int = 200) -
 
     # Spider-only by virtue of the existing shipstation_shipments rows
     # (the connector already filters non-Spider stores at ingest); pull
-    # FedEx-only by carrier_code prefix. Order DESC so a partial run
-    # covers the most recent days first.
+    # FedEx-only by carrier_code = 'fedex' (NOT 'fedex_walleted', which
+    # is ShipStation's own 3PL "wallet" account — not Spider's, so the
+    # rate cross-check would compare apples to oranges and produce
+    # noise rather than signal). Order DESC so a partial run covers
+    # the most recent days first.
     shipments = db.execute(
         select(ShipstationShipment)
         .where(
@@ -526,7 +539,7 @@ def cross_check_rates(db: Session, *, days: int = 7, max_shipments: int = 200) -
             ShipstationShipment.shipment_cost > 0,
             ShipstationShipment.create_date >= start_dt,
             ShipstationShipment.create_date < end_dt,
-            ShipstationShipment.carrier_code.like("fedex%"),
+            ShipstationShipment.carrier_code == "fedex",
             ShipstationShipment.tracking_number.isnot(None),
         )
         .order_by(ShipstationShipment.create_date.desc())

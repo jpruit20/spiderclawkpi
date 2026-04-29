@@ -10,6 +10,7 @@ import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { ShippingCostBySkuCard } from '../components/ShippingCostBySkuCard'
+import { FedexReconciliationCard } from '../components/FedexReconciliationCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { CustomizableCard } from '../components/CustomizableCard'
@@ -140,6 +141,17 @@ export function OperationsDivision() {
         >
           <ShippingCostBySkuCard />
         </CollapsibleSection>
+      </CustomizableCard>
+
+      {/* FedEx rate cross-check / contract-savings reconciliation card.
+          Powered by the daily cross_check_rates job (07:30 ET) which
+          asks the FedEx Rates API for ACCOUNT + LIST quotes per
+          ShipStation FedEx label and persists the deltas. Two angles:
+          (a) ShipStation actual vs FedEx ACCOUNT quote — anomaly
+          detector for surcharges sneaking past us, (b) LIST − actual
+          summed and annualized — contract value at FedEx renewals. */}
+      <CustomizableCard id="fedex_reconciliation" defaultTitle="FedEx rate reconciliation" cfg={cfg}>
+        <FedexReconciliationCard />
       </CustomizableCard>
 
       <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>

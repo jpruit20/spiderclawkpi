@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session
 from app.services.shipping_intelligence import (
     carrier_mix,
+    fedex_rate_reconciliation,
     geographic_distribution,
     shipping_cost_by_sku,
     shipping_cost_trend,
@@ -62,3 +63,19 @@ def get_cost_by_sku(
     db: Session = Depends(db_session),
 ) -> dict[str, Any]:
     return shipping_cost_by_sku(db, days=days, bucket=bucket, top_n_skus=top_n_skus)
+
+
+@router.get("/fedex-reconciliation")
+def get_fedex_reconciliation(
+    days: int = Query(30, ge=7, le=365),
+    top_n_outliers: int = Query(10, ge=1, le=50),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """ShipStation actual vs FedEx ACCOUNT/LIST quote reconciliation.
+
+    Powered by the daily cross_check_rates job (07:30 ET). Surfaces
+    contract savings vs LIST, alignment health (where ShipStation
+    diverges from FedEx ACCOUNT — anomaly detector), and per-shipment
+    outliers worth investigating.
+    """
+    return fedex_rate_reconciliation(db, days=days, top_n_outliers=top_n_outliers)

@@ -799,3 +799,182 @@ def shipping_cost_by_sku(
             "~$120/unit). Free-shipping (cost=0) and voided shipments excluded."
         ),
     }
+
+
+# ── FedEx rate cross-check / reconciliation summary ────────────────────
+# Joseph asked 2026-04-29 to cross-check ShipStation actuals against
+# FedEx's own ACCOUNT and LIST quotes. The ingestion job
+# (cross_check_rates in connectors/fedex.py) writes per-shipment rows
+# to fedex_rate_quotes; this service rolls them into the headline
+# numbers the Operations dashboard surfaces.
+#
+# Three lenses, all on the same window:
+#
+#   1) ShipStation actual vs FedEx ACCOUNT quote — operational health.
+#      Big absolute deltas mean ShipStation is mis-rating something
+#      (dim-weight surprise, residential surcharge missed, wrong
+#      carrier account routing). Tight distribution = healthy.
+#
+#   2) FedEx ACCOUNT vs LIST quote — strategic margin lens. The total
+#      LIST−ACCOUNT delta is hard evidence of contract value at the
+#      next FedEx renewal.
+#
+#   3) Top outliers (highest abs ACCOUNT delta) — single-shipment
+#      anomalies for inspection.
+
+def fedex_rate_reconciliation(db: Session, *, days: int = 30, top_n_outliers: int = 10) -> dict[str, Any]:
+    """Reconciliation summary card data for the Operations page.
+
+    Reads from fedex_rate_quotes (populated by cross_check_rates) and
+    JOINs to shipstation_shipments where useful for the outlier table.
+    Returns headline aggregates suitable for direct rendering.
+    """
+    if days <= 0:
+        days = 30
+
+    rows = db.execute(text("""
+        WITH window_quotes AS (
+            SELECT
+                rq.tracking_number,
+                rq.rate_type,
+                rq.service_type,
+                rq.quoted_charge_usd,
+                rq.shipstation_charge_usd,
+                rq.delta_usd,
+                rq.quoted_at,
+                ss.ship_date,
+                ss.carrier_code,
+                ss.service_code AS ss_service_code,
+                ss.ship_to_state
+            FROM fedex_rate_quotes rq
+            LEFT JOIN shipstation_shipments ss
+              ON ss.tracking_number = rq.tracking_number
+            WHERE rq.quoted_at >= NOW() - (:days || ' days')::interval
+        )
+        SELECT * FROM window_quotes
+    """), {"days": days}).all()
+
+    if not rows:
+        return {
+            "window_days": days,
+            "as_of": datetime.now(timezone.utc).date().isoformat(),
+            "totals": {
+                "quoted_shipments": 0,
+                "account_quotes": 0,
+                "list_quotes": 0,
+                "annualized_savings_vs_list_usd": 0.0,
+                "in_window_savings_vs_list_usd": 0.0,
+                "in_window_account_delta_usd": 0.0,
+            },
+            "alignment_health": {"avg_delta_usd": None, "stddev_usd": None, "median_delta_usd": None},
+            "by_service": [],
+            "top_outliers": [],
+            "method_note": _RECONCILIATION_METHOD_NOTE,
+        }
+
+    # Split into ACCOUNT and LIST views by tracking_number
+    account_rows = [r for r in rows if r.rate_type == "ACCOUNT"]
+    list_rows = [r for r in rows if r.rate_type == "LIST"]
+
+    # ── Headline totals ──
+    account_deltas = [float(r.delta_usd) for r in account_rows if r.delta_usd is not None]
+    list_deltas = [float(r.delta_usd) for r in list_rows if r.delta_usd is not None]
+    in_window_savings = sum(list_deltas)  # +ve = LIST > SS, i.e. contract savings
+    in_window_account_delta = sum(account_deltas)
+    quoted_shipments = len({r.tracking_number for r in rows})
+
+    annualized = in_window_savings * (365 / days) if days > 0 else 0.0
+
+    # ── Alignment health (ACCOUNT-only) ──
+    if account_deltas:
+        avg_delta = sum(account_deltas) / len(account_deltas)
+        # Population stddev (no scipy needed for this size)
+        variance = sum((d - avg_delta) ** 2 for d in account_deltas) / len(account_deltas)
+        stddev = variance ** 0.5
+        sorted_deltas = sorted(account_deltas)
+        mid = len(sorted_deltas) // 2
+        median = (sorted_deltas[mid] if len(sorted_deltas) % 2 == 1
+                  else (sorted_deltas[mid - 1] + sorted_deltas[mid]) / 2)
+    else:
+        avg_delta = stddev = median = None
+
+    # ── Per-service breakdown ──
+    from collections import defaultdict
+    by_service: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "service_type": None, "n": 0,
+        "avg_account_delta_usd": 0.0, "avg_list_savings_usd": 0.0,
+        "total_account_delta_usd": 0.0, "total_list_savings_usd": 0.0,
+        "_acc_sum": 0.0, "_list_sum": 0.0, "_acc_n": 0, "_list_n": 0,
+    })
+    for r in rows:
+        st = r.service_type or "UNKNOWN"
+        b = by_service[st]
+        b["service_type"] = st
+        if r.rate_type == "ACCOUNT" and r.delta_usd is not None:
+            b["_acc_sum"] += float(r.delta_usd)
+            b["_acc_n"] += 1
+            b["n"] = max(b["n"], b["_acc_n"])  # use ACCOUNT count as the row count
+        if r.rate_type == "LIST" and r.delta_usd is not None:
+            b["_list_sum"] += float(r.delta_usd)
+            b["_list_n"] += 1
+
+    by_service_list = []
+    for st, b in by_service.items():
+        b["avg_account_delta_usd"] = round(b["_acc_sum"] / b["_acc_n"], 2) if b["_acc_n"] else None
+        b["avg_list_savings_usd"] = round(b["_list_sum"] / b["_list_n"], 2) if b["_list_n"] else None
+        b["total_account_delta_usd"] = round(b["_acc_sum"], 2)
+        b["total_list_savings_usd"] = round(b["_list_sum"], 2)
+        # drop the underscore-prefixed bookkeeping fields from the output
+        for k in ("_acc_sum", "_list_sum", "_acc_n", "_list_n"):
+            b.pop(k, None)
+        by_service_list.append(b)
+    by_service_list.sort(key=lambda x: -(x.get("total_list_savings_usd") or 0))
+
+    # ── Top outliers (largest abs ACCOUNT delta) ──
+    sorted_outliers = sorted(account_rows, key=lambda r: -abs(float(r.delta_usd or 0)))
+    top_outliers = []
+    for r in sorted_outliers[:top_n_outliers]:
+        top_outliers.append({
+            "tracking_number": r.tracking_number,
+            "service_type": r.service_type,
+            "ss_service_code": r.ss_service_code,
+            "quoted_charge_usd": float(r.quoted_charge_usd) if r.quoted_charge_usd is not None else None,
+            "shipstation_charge_usd": float(r.shipstation_charge_usd) if r.shipstation_charge_usd is not None else None,
+            "delta_usd": round(float(r.delta_usd), 2) if r.delta_usd is not None else None,
+            "ship_date": r.ship_date.isoformat() if r.ship_date else None,
+            "ship_to_state": r.ship_to_state,
+        })
+
+    return {
+        "window_days": days,
+        "as_of": datetime.now(timezone.utc).date().isoformat(),
+        "totals": {
+            "quoted_shipments": quoted_shipments,
+            "account_quotes": len(account_rows),
+            "list_quotes": len(list_rows),
+            "annualized_savings_vs_list_usd": round(annualized, 2),
+            "in_window_savings_vs_list_usd": round(in_window_savings, 2),
+            "in_window_account_delta_usd": round(in_window_account_delta, 2),
+        },
+        "alignment_health": {
+            "avg_delta_usd": round(avg_delta, 2) if avg_delta is not None else None,
+            "stddev_usd": round(stddev, 2) if stddev is not None else None,
+            "median_delta_usd": round(median, 2) if median is not None else None,
+        },
+        "by_service": by_service_list,
+        "top_outliers": top_outliers,
+        "method_note": _RECONCILIATION_METHOD_NOTE,
+    }
+
+
+_RECONCILIATION_METHOD_NOTE = (
+    "Per-shipment quotes pulled live from the FedEx Rates API for every "
+    "ShipStation FedEx label, persisted to fedex_rate_quotes daily at 07:30 ET. "
+    "Each shipment yields one ACCOUNT quote (our negotiated rate) and one LIST "
+    "quote (sticker price). ShipStation 'fedex' carrier_code only — fedex_walleted "
+    "(ShipStation's 3PL pass-through account) is excluded since it's billed to "
+    "ShipStation's account, not Spider's. ACCOUNT delta = quoted − shipstation, "
+    "where ~zero means rates are perfectly aligned. LIST−ShipStation = contract "
+    "value vs sticker price; the in-window total annualized is the renewal-leverage "
+    "number."
+)
