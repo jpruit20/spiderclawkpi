@@ -391,10 +391,13 @@ def shipping_cost_by_sku(
     rows = db.execute(text(f"""
         WITH eligible_orders AS (
             -- Latest non-cancelled snapshot per Shopify order, with
-            -- line_items present. Gives us the canonical line list.
+            -- line_items present. shopify_order_events.order_id is
+            -- the Shopify numeric foreign id (e.g. 7079596130615).
+            -- raw_payload->>'order_number' is empty in our snapshot
+            -- ingestion path so we don't rely on it; we join on
+            -- order_id directly.
             SELECT DISTINCT ON (order_id)
                 order_id,
-                raw_payload->>'order_number' AS order_number,
                 raw_payload AS payload
             FROM shopify_order_events
             WHERE event_type = 'poll.order_snapshot'
@@ -405,12 +408,16 @@ def shipping_cost_by_sku(
             ORDER BY order_id, event_timestamp DESC NULLS LAST, id DESC
         ),
         shipments AS (
-            -- Shipments we want to attribute. ShipStation order_number
-            -- often includes a leading '#' for Shopify; strip it.
+            -- Shipments we want to attribute. ShipStation's
+            -- raw_payload.orderKey carries the original Shopify
+            -- foreign id as '<shopify_order_id>-<line_item_id>'.
+            -- Splitting on '-' and taking the first part recovers
+            -- the Shopify order_id we can join against.
             SELECT
                 ss.id,
+                ss.ss_order_id,
                 ss.ss_order_number,
-                LTRIM(COALESCE(ss.ss_order_number, ''), '#') AS order_number_norm,
+                NULLIF(SPLIT_PART(COALESCE(ss.raw_payload->>'orderKey', ''), '-', 1), '') AS shopify_order_id,
                 ss.carrier_code,
                 ss.service_code,
                 ss.shipment_cost,
@@ -435,8 +442,7 @@ def shipping_cost_by_sku(
                 COALESCE((line->>'price')::numeric, 0) AS unit_price
             FROM shipments s
             JOIN eligible_orders eo
-              ON eo.order_number = s.order_number_norm
-              OR eo.order_number = s.ss_order_number
+              ON eo.order_id::text = s.shopify_order_id
             CROSS JOIN LATERAL jsonb_array_elements(eo.payload->'line_items') AS line
             WHERE COALESCE(line->>'sku', '') <> ''
         ),
