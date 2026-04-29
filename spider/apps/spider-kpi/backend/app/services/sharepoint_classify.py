@@ -29,13 +29,143 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import sqlalchemy as sa
 from sqlalchemy import bindparam as sa_bindparam, select, update
 from sqlalchemy.orm import Session
 
 from app.models import SharepointDocument
 
 
-CLASSIFIER_VERSION = "v1.0.0"
+CLASSIFIER_VERSION = "v1.1.0"  # adds spider_relevant + detected_doc_kind for vendor sites
+
+
+# ── Spider-relevance detection (vendor sites) ────────────────────────
+#
+# Kienco / Qifei / future vendor workspace sites have ``spider_product``
+# left NULL at the ingest layer because the workspace contains both
+# Spider-relevant docs and the vendor's own internal stuff. This
+# classifier runs after the ingest and tags each document with
+# ``spider_relevant`` (boolean) and ``detected_doc_kind`` (short tag)
+# based on filename + path keyword matches.
+#
+# Why filename-only and not full-text: the vast majority of vendor
+# documents put the relevant signal in the filename (vendors tend to
+# be very explicit — "00163 Huntsman QA Inspection Report Apr 2026.pdf"
+# is the typical pattern). PDF/Excel content extraction is available
+# via app/services/sharepoint_content_extractor.py for cases where
+# filenames are uninformative; we'll add it as a second pass if the
+# filename pass misses too many docs in practice.
+
+# Spider product / SKU / project-tag keywords. Case-insensitive match.
+# Anything matching here flips spider_relevant=true.
+_SPIDER_KEYWORDS_RE = re.compile(
+    r"\b("
+    # Brand mentions
+    r"spider[ \-_]?grills?|spidergrills?|"
+    # Product names
+    r"huntsman|giant[ \-_]?huntsman|venom|webcraft|giant[ \-_]?webcraft|joehy|"
+    # Common Spider SKU prefixes (SG-H-01, SG-GH-01, SG-22KC, SG-NL-HWC, etc)
+    r"sg-[a-z0-9]{1,8}(?:-[a-z0-9]{1,8})*|"
+    # AMW project numbers we know correspond to Spider products
+    # (00116=Venom, 00163=Huntsman, 00171=Webcraft, 00176=Giant Huntsman,
+    #  00177=Giant Webcraft, 00178=Spider Kettle Cart). Add new project
+    #  numbers here as Spider expands its product line.
+    r"00116|00163|00171|00176|00177|00178"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Map detected keyword → spider_product display value. First match wins.
+# When multiple products are mentioned (e.g. a generic "Spider Grills
+# packing list" PDF that names both Huntsman and Venom), we currently
+# tag with the first-listed product; an upgrade path would be to
+# detect multi-product docs and store all in parsed_metadata.
+_SPIDER_PRODUCT_PATTERNS = [
+    (re.compile(r"\bgiant[ \-_]?huntsman|sg-gh\b|00176\b", re.IGNORECASE), "Giant Huntsman"),
+    (re.compile(r"\bgiant[ \-_]?webcraft|00177\b", re.IGNORECASE), "Giant Webcraft"),
+    (re.compile(r"\bhuntsman|sg-h-01\b|00163\b", re.IGNORECASE), "Huntsman"),
+    (re.compile(r"\bwebcraft|00171\b", re.IGNORECASE), "Webcraft"),
+    (re.compile(r"\bvenom|00116\b", re.IGNORECASE), "Venom"),
+    (re.compile(r"\bjoehy\b", re.IGNORECASE), "Huntsman"),  # Joehy is the Huntsman QC code
+    (re.compile(r"\b00178\b", re.IGNORECASE), "Spider Kettle Cart"),
+]
+
+
+def detect_spider_relevance(name: Optional[str], path: Optional[str]) -> bool:
+    """True iff filename or path contains a known Spider product /
+    SKU / project tag. False positives are intentionally tolerated
+    (better to surface a non-Spider doc than silently drop a real
+    one); the cards downstream filter by detected_doc_kind for
+    further precision."""
+    haystack = f"{name or ''} {path or ''}"
+    return bool(_SPIDER_KEYWORDS_RE.search(haystack))
+
+
+def detect_spider_product(name: Optional[str], path: Optional[str]) -> Optional[str]:
+    """Returns the canonical Spider product display name when a
+    specific product is detected, else None. Used to backfill
+    ``spider_product`` on docs that came from a NULL-spider_product
+    site."""
+    haystack = f"{name or ''} {path or ''}"
+    for pattern, product in _SPIDER_PRODUCT_PATTERNS:
+        if pattern.search(haystack):
+            return product
+    return None
+
+
+# ── Document-kind detection (QA / freight / shipping) ────────────────
+#
+# Joseph asked specifically for QA reports and ocean / air freight
+# tracking from the vendor sites. These tags drive the Operations and
+# Manufacturing dashboard cards. Match order matters — more specific
+# patterns first so a "Air Freight QA Report" isn't double-tagged.
+
+_DOC_KIND_PATTERNS = [
+    # Air freight (most specific freight type — match before generic shipping)
+    (re.compile(
+        r"\b(air[ \-_]?waybill|airway[ \-_]?bill|\bawb\b|air[ \-_]?freight|air[ \-_]?cargo)",
+        re.IGNORECASE,
+    ), "freight_air"),
+    # Ocean freight
+    (re.compile(
+        r"\b(bill[ \-_]?of[ \-_]?lading|\bbol\b|\bb/l\b|ocean[ \-_]?freight|"
+        r"sea[ \-_]?freight|container[ \-_]?(?:#|number|no)|vessel|"
+        r"shipping[ \-_]?manifest|port[ \-_]?of[ \-_]?(?:loading|discharge))",
+        re.IGNORECASE,
+    ), "freight_ocean"),
+    # QA / inspection (very specific to product quality, not fire safety etc.)
+    (re.compile(
+        r"\b(qc[ \-_]?report|qa[ \-_]?report|first[ \-_]?article[ \-_]?inspection|"
+        r"\bfai\b|\bppap\b|incoming[ \-_]?inspection|outgoing[ \-_]?inspection|"
+        r"product[ \-_]?inspection|quality[ \-_]?report|test[ \-_]?report|"
+        r"dim(?:ensional)?[ \-_]?report|cmm[ \-_]?report|control[ \-_]?plan|"
+        r"non[ \-_]?conformance|\bncr\b|\bcpk\b|defect[ \-_]?rate)",
+        re.IGNORECASE,
+    ), "qa"),
+    # Generic shipping / packing lists (not specifically tagged ocean or air)
+    (re.compile(
+        r"\b(packing[ \-_]?list|packing[ \-_]?slip|shipping[ \-_]?list|"
+        r"shipment[ \-_]?(?:advice|notice|notification)|loading[ \-_]?(?:list|plan))",
+        re.IGNORECASE,
+    ), "shipping"),
+    # Commercial invoices (vendor billing us — distinct from FedEx invoices)
+    (re.compile(
+        r"\b(commercial[ \-_]?invoice|proforma|pro[ \-_]?forma|vendor[ \-_]?invoice)",
+        re.IGNORECASE,
+    ), "invoice"),
+]
+
+
+def detect_doc_kind(name: Optional[str], path: Optional[str], semantic_type: Optional[str]) -> Optional[str]:
+    """Tag the document's purpose: 'qa' | 'freight_ocean' | 'freight_air'
+    | 'shipping' | 'invoice' | None. Filename + path scan; falls back
+    to None when no pattern matches (most documents). Pure function
+    so unit-testable without DB."""
+    haystack = f"{name or ''} {path or ''}"
+    for pattern, kind in _DOC_KIND_PATTERNS:
+        if pattern.search(haystack):
+            return kind
+    return None
 
 
 # ── Archive classification ──────────────────────────────────────────
@@ -198,13 +328,26 @@ def classify_documents(
     """Walk every (non-folder) sharepoint_document and write classification
     columns. Bulk UPDATE in batches of ``batch_size`` so 12k rows
     process in seconds, not minutes.
+
+    For sites where ``spider_product`` is already set at the site level
+    (per-product Spider sites: Huntsman/Webcraft/etc), spider_relevant
+    is forced true and the per-row spider_product is preserved.
+
+    For vendor sites (Kienco, Qifei, future) where the site-level
+    ``spider_product`` is NULL, the per-row spider_product is backfilled
+    from filename detection, and spider_relevant is set based on
+    keyword match.
     """
+    # Pull site-level spider_product so we know whether a row came
+    # from a per-product Spider site (always-relevant) or a vendor
+    # workspace (needs content classification).
     q = (
         select(
             SharepointDocument.id,
             SharepointDocument.name,
             SharepointDocument.path,
             SharepointDocument.mime_type,
+            SharepointDocument.spider_product,
         )
         .where(SharepointDocument.is_folder == False)  # noqa: E712
     )
@@ -214,16 +357,35 @@ def classify_documents(
         q = q.limit(limit)
 
     rows = db.execute(q).all()
-    counts = {"seen": 0, "updated": 0}
+    counts = {"seen": 0, "updated": 0, "spider_relevant": 0, "doc_kinds_tagged": 0}
     now = datetime.now(timezone.utc)
     payload: list[dict[str, Any]] = []
     for row in rows:
         counts["seen"] += 1
+        semantic = classify_semantic_type(row.name, row.mime_type)
+        # Spider-relevance: per-product Spider sites are always true;
+        # vendor sites depend on filename match.
+        if row.spider_product:
+            spider_relevant = True
+            detected_product = None  # don't overwrite the per-site value
+        else:
+            spider_relevant = detect_spider_relevance(row.name, row.path)
+            detected_product = (
+                detect_spider_product(row.name, row.path) if spider_relevant else None
+            )
+        if spider_relevant:
+            counts["spider_relevant"] += 1
+        doc_kind = detect_doc_kind(row.name, row.path, semantic)
+        if doc_kind:
+            counts["doc_kinds_tagged"] += 1
         payload.append({
             "_id": row.id,
             "archive_status": classify_archive_status(row.path),
-            "semantic_type": classify_semantic_type(row.name, row.mime_type),
+            "semantic_type": semantic,
             "parsed_metadata": parse_filename_metadata(row.name),
+            "spider_relevant": spider_relevant,
+            "detected_doc_kind": doc_kind,
+            "detected_product": detected_product,  # only used for vendor-site backfill
             "classified_at": now,
         })
         if len(payload) >= batch_size:
@@ -240,7 +402,12 @@ def classify_documents(
 def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
     """Bulk UPDATE via Core (not ORM) — one prepared statement, many
     parameter sets. Uses ``__table__`` to bypass SA 2.0's "ORM bulk by
-    PK" path which has stricter requirements on the parameter names."""
+    PK" path which has stricter requirements on the parameter names.
+
+    spider_product is backfilled with COALESCE so vendor-site rows
+    (which arrived NULL) get the detected product, while per-product
+    Spider site rows keep their original site-level value.
+    """
     tbl = SharepointDocument.__table__
     stmt = (
         update(tbl)
@@ -249,6 +416,13 @@ def _flush_classify_batch(db: Session, payload: list[dict[str, Any]]) -> None:
             archive_status=sa_bindparam("archive_status"),
             semantic_type=sa_bindparam("semantic_type"),
             parsed_metadata=sa_bindparam("parsed_metadata"),
+            spider_relevant=sa_bindparam("spider_relevant"),
+            detected_doc_kind=sa_bindparam("detected_doc_kind"),
+            # Only overwrite spider_product when the row currently has
+            # NULL (vendor-site path). Per-product Spider sites already
+            # have spider_product set at ingest from the site row;
+            # don't clobber it.
+            spider_product=sa.func.coalesce(tbl.c.spider_product, sa_bindparam("detected_product")),
             classified_at=sa_bindparam("classified_at"),
         )
     )

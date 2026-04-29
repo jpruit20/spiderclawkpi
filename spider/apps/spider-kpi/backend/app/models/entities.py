@@ -1703,6 +1703,11 @@ class SharepointDocument(TimestampMixin, Base):
     semantic_type: Mapped[Optional[str]] = mapped_column(String(32), index=True)
     parsed_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Vendor-workspace content classification — for Kienco / Qifei /
+    # future mixed-content sites where spider_product is NULL at the
+    # site level. NULL until the classifier has run on this row.
+    spider_relevant: Mapped[Optional[bool]] = mapped_column(Boolean)
+    detected_doc_kind: Mapped[Optional[str]] = mapped_column(String(64))
 
 
 class SharepointBomLine(Base):
