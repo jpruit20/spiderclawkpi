@@ -314,3 +314,289 @@ def threepl_roi_estimator(db: Session, *, days: int = 365) -> dict[str, Any]:
             "operating cost. Use as direction-finder, not financial commitment."
         ),
     }
+
+
+# ── Cost-by-SKU drill-down ──────────────────────────────────────────────
+# Joseph asked 2026-04-29 for shipping cost broken out by SKU, by carrier,
+# and over time. Mechanics: shipment cost lives on shipstation_shipments
+# (per-shipment), but SKU lives on the Shopify order's line_items. We
+# join on ss_order_number → shopify_order_events.order_number to recover
+# the line items, then attribute the shipment cost across the lines
+# pro-rata by line value (price × qty) — same allocator product_cogs
+# uses for COGS attribution, so the shares reconcile.
+#
+# Trade-offs we're explicit about:
+# - One shipment can cover multiple SKUs, so "cost per SKU per shipment"
+#   is allocated, not measured. The aggregate at SKU level is still
+#   meaningful — it answers "did this SKU's bundles get expensive to
+#   ship this quarter."
+# - Free-shipping orders show shipment_cost=0 on our side (we paid the
+#   carrier nothing because we didn't book a label), so SKU-level
+#   averages are weighted toward orders we actually paid to ship.
+
+def shipping_cost_by_sku(
+    db: Session,
+    days: int = 90,
+    bucket: str = "week",  # 'week' | 'month' | 'day'
+    top_n_skus: int = 20,
+) -> dict[str, Any]:
+    """Per-SKU shipping cost over time, broken down by carrier.
+
+    Returns:
+        {
+          "window_days": 90,
+          "as_of": "...",
+          "totals": {
+              "shipments": int,
+              "shipped_units": int,         # sum of qty across attributed lines
+              "total_shipping_cost_usd": float,
+              "skus_seen": int,
+              "carriers_seen": int,
+          },
+          "by_sku": [
+              {
+                "sku": "SG-H-01",
+                "title": "The Huntsman™",
+                "shipments": int,
+                "units": int,
+                "attributed_cost_usd": float,
+                "avg_cost_per_unit_usd": float,
+                "carriers": [
+                    {"carrier_code": "fedex", "service_code": "fedex_home_delivery",
+                     "shipments": int, "units": int, "attributed_cost_usd": float},
+                    ...
+                ],
+              },
+              ...  (top N by attributed_cost desc)
+          ],
+          "by_carrier": [
+              {"carrier_code": "fedex", "shipments": int,
+               "attributed_cost_usd": float, "service_codes": [...]},
+              ...
+          ],
+          "trend": [
+              {"bucket": "2026-W17", "carrier_code": "fedex",
+               "attributed_cost_usd": float, "shipments": int},
+              ...
+          ],
+        }
+    """
+    if days <= 0:
+        days = 90
+    bucket = bucket if bucket in {"day", "week", "month"} else "week"
+
+    # date_trunc unit — Postgres expects 'week' / 'month' / 'day'.
+    trunc_unit = bucket
+
+    rows = db.execute(text(f"""
+        WITH eligible_orders AS (
+            -- Latest non-cancelled snapshot per Shopify order, with
+            -- line_items present. Gives us the canonical line list.
+            SELECT DISTINCT ON (order_id)
+                order_id,
+                raw_payload->>'order_number' AS order_number,
+                raw_payload AS payload
+            FROM shopify_order_events
+            WHERE event_type = 'poll.order_snapshot'
+              AND jsonb_typeof(raw_payload->'line_items') = 'array'
+              AND COALESCE(raw_payload->>'cancelled_at','') = ''
+              AND COALESCE(raw_payload->>'financial_status','') <> 'refunded'
+              AND business_date >= CURRENT_DATE - (:days || ' days')::interval
+            ORDER BY order_id, event_timestamp DESC NULLS LAST, id DESC
+        ),
+        shipments AS (
+            -- Shipments we want to attribute. ShipStation order_number
+            -- often includes a leading '#' for Shopify; strip it.
+            SELECT
+                ss.id,
+                ss.ss_order_number,
+                LTRIM(COALESCE(ss.ss_order_number, ''), '#') AS order_number_norm,
+                ss.carrier_code,
+                ss.service_code,
+                ss.shipment_cost,
+                ss.ship_date,
+                ss.weight_oz
+            FROM shipstation_shipments ss
+            WHERE ss.voided = false
+              AND ss.ship_date >= CURRENT_DATE - (:days || ' days')::interval
+              AND ss.shipment_cost > 0
+        ),
+        joined AS (
+            -- One row per (shipment × line) so we can allocate cost.
+            SELECT
+                s.id AS shipment_id,
+                s.carrier_code,
+                s.service_code,
+                s.shipment_cost,
+                s.ship_date,
+                line->>'sku' AS sku,
+                line->>'title' AS title,
+                COALESCE((line->>'quantity')::int, 0) AS qty,
+                COALESCE((line->>'price')::numeric, 0) AS unit_price
+            FROM shipments s
+            JOIN eligible_orders eo
+              ON eo.order_number = s.order_number_norm
+              OR eo.order_number = s.ss_order_number
+            CROSS JOIN LATERAL jsonb_array_elements(eo.payload->'line_items') AS line
+            WHERE COALESCE(line->>'sku', '') <> ''
+        ),
+        with_share AS (
+            -- Pro-rata allocation: each line's share of its shipment's
+            -- total line-value gets that fraction of the shipment cost.
+            SELECT
+                shipment_id, carrier_code, service_code, shipment_cost,
+                ship_date, sku, title, qty,
+                (qty * unit_price)
+                  / NULLIF(SUM(qty * unit_price) OVER (PARTITION BY shipment_id), 0)
+                  AS line_share,
+                (shipment_cost * (qty * unit_price)
+                  / NULLIF(SUM(qty * unit_price) OVER (PARTITION BY shipment_id), 0))
+                  AS attributed_cost
+            FROM joined
+        )
+        SELECT
+            sku,
+            title,
+            carrier_code,
+            service_code,
+            ship_date,
+            shipment_id,
+            qty,
+            attributed_cost
+        FROM with_share
+        WHERE attributed_cost IS NOT NULL
+    """), {"days": days}).all()
+
+    if not rows:
+        return {
+            "window_days": days, "bucket": bucket,
+            "as_of": datetime.now(timezone.utc).date().isoformat(),
+            "totals": {"shipments": 0, "shipped_units": 0, "total_shipping_cost_usd": 0.0,
+                       "skus_seen": 0, "carriers_seen": 0},
+            "by_sku": [], "by_carrier": [], "trend": [],
+        }
+
+    # Group in Python — query already aggregated to the line/shipment grain.
+    from collections import defaultdict
+    sku_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "title": None, "shipments": set(), "units": 0, "attributed_cost_usd": 0.0,
+        "by_carrier": defaultdict(lambda: {"shipments": set(), "units": 0, "attributed_cost_usd": 0.0}),
+    })
+    carrier_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "shipments": set(), "attributed_cost_usd": 0.0, "service_codes": set(),
+    })
+    trend_totals: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {
+        "shipments": set(), "attributed_cost_usd": 0.0,
+    })
+
+    all_shipments: set[int] = set()
+    for r in rows:
+        sku = r.sku or "unknown"
+        carrier = r.carrier_code or "unknown"
+        cost = float(r.attributed_cost or 0)
+        units = int(r.qty or 0)
+
+        st = sku_totals[sku]
+        if not st["title"] and r.title:
+            st["title"] = r.title
+        st["shipments"].add(r.shipment_id)
+        st["units"] += units
+        st["attributed_cost_usd"] += cost
+
+        ckey = (carrier, r.service_code or "—")
+        sc = st["by_carrier"][ckey]
+        sc["shipments"].add(r.shipment_id)
+        sc["units"] += units
+        sc["attributed_cost_usd"] += cost
+
+        ct = carrier_totals[carrier]
+        ct["shipments"].add(r.shipment_id)
+        ct["attributed_cost_usd"] += cost
+        if r.service_code:
+            ct["service_codes"].add(r.service_code)
+
+        # Trend bucket key — snap ship_date to the bucket boundary.
+        if r.ship_date:
+            if bucket == "day":
+                bk = r.ship_date.isoformat()
+            elif bucket == "month":
+                bk = r.ship_date.strftime("%Y-%m")
+            else:
+                # ISO week; format YYYY-W##
+                iso = r.ship_date.isocalendar()
+                bk = f"{iso.year}-W{iso.week:02d}"
+            tk = (bk, carrier)
+            tt = trend_totals[tk]
+            tt["shipments"].add(r.shipment_id)
+            tt["attributed_cost_usd"] += cost
+
+        all_shipments.add(r.shipment_id)
+
+    # Materialize.
+    by_sku_list = []
+    for sku, t in sku_totals.items():
+        carriers_out = []
+        for (cc, sc_), v in sorted(t["by_carrier"].items(), key=lambda kv: -kv[1]["attributed_cost_usd"]):
+            carriers_out.append({
+                "carrier_code": cc,
+                "service_code": sc_ if sc_ != "—" else None,
+                "shipments": len(v["shipments"]),
+                "units": v["units"],
+                "attributed_cost_usd": round(v["attributed_cost_usd"], 2),
+            })
+        units = t["units"]
+        cost = t["attributed_cost_usd"]
+        by_sku_list.append({
+            "sku": sku,
+            "title": t["title"],
+            "shipments": len(t["shipments"]),
+            "units": units,
+            "attributed_cost_usd": round(cost, 2),
+            "avg_cost_per_unit_usd": round(cost / units, 2) if units > 0 else None,
+            "carriers": carriers_out,
+        })
+    by_sku_list.sort(key=lambda d: -d["attributed_cost_usd"])
+
+    by_carrier_list = []
+    for cc, v in sorted(carrier_totals.items(), key=lambda kv: -kv[1]["attributed_cost_usd"]):
+        by_carrier_list.append({
+            "carrier_code": cc,
+            "shipments": len(v["shipments"]),
+            "attributed_cost_usd": round(v["attributed_cost_usd"], 2),
+            "service_codes": sorted(v["service_codes"]),
+        })
+
+    trend_list = []
+    for (bk, cc), v in sorted(trend_totals.items()):
+        trend_list.append({
+            "bucket": bk,
+            "carrier_code": cc,
+            "shipments": len(v["shipments"]),
+            "attributed_cost_usd": round(v["attributed_cost_usd"], 2),
+        })
+
+    total_units = sum(s["units"] for s in by_sku_list)
+    total_cost = sum(s["attributed_cost_usd"] for s in by_sku_list)
+
+    return {
+        "window_days": days,
+        "bucket": bucket,
+        "as_of": datetime.now(timezone.utc).date().isoformat(),
+        "totals": {
+            "shipments": len(all_shipments),
+            "shipped_units": total_units,
+            "total_shipping_cost_usd": round(total_cost, 2),
+            "skus_seen": len(by_sku_list),
+            "carriers_seen": len(by_carrier_list),
+        },
+        "by_sku": by_sku_list[:top_n_skus],
+        "by_carrier": by_carrier_list,
+        "trend": trend_list,
+        "method_note": (
+            "Cost is attributed across line_items pro-rata by line value (price × qty). "
+            "One shipment with multiple SKUs splits its cost by line-value share — same "
+            "allocator the GP calculator uses, so totals reconcile. Free-shipping rows "
+            "(cost=0) are excluded so the per-SKU averages reflect labels we actually paid for. "
+            "Voided shipments excluded."
+        ),
+    }

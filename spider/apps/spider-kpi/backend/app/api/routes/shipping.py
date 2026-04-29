@@ -15,6 +15,7 @@ from app.api.deps import db_session
 from app.services.shipping_intelligence import (
     carrier_mix,
     geographic_distribution,
+    shipping_cost_by_sku,
     shipping_cost_trend,
     threepl_roi_estimator,
 )
@@ -51,3 +52,13 @@ def get_3pl_roi(days: int = Query(365, ge=30, le=1825), db: Session = Depends(db
 @router.get("/cx-correlation")
 def get_cx_correlation(days: int = Query(30, ge=1, le=365), db: Session = Depends(db_session)) -> dict[str, Any]:
     return cx_shipping_summary(db, days=days)
+
+
+@router.get("/cost-by-sku")
+def get_cost_by_sku(
+    days: int = Query(90, ge=7, le=730),
+    bucket: str = Query("week", description="week | day | month"),
+    top_n_skus: int = Query(20, ge=1, le=100),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    return shipping_cost_by_sku(db, days=days, bucket=bucket, top_n_skus=top_n_skus)
