@@ -515,6 +515,44 @@ def run_partner_catalog_refresh_job() -> None:
         db.close()
 
 
+def run_kpi_inbox_poll_job() -> None:
+    """Twice-daily 12:00 UTC + 00:00 UTC (08:00 + 20:00 ET): walk
+    UNSEEN messages in kpi@spidergrills.ai (forwarded to the dedicated
+    Gmail), route through the parser registry, persist records.
+
+    Idempotent: each message is keyed on Message-ID in the
+    processed_emails ledger, so a missed run is fully recovered on
+    the next fire. Single-instance + coalescing so a slow run can't
+    double-fire.
+
+    Runs at 12:00/00:00 UTC instead of 12:30/00:30 because the inbox
+    is independent of the FedEx Rates job (07:30 ET / 11:30 UTC); no
+    coordination needed.
+    """
+    db = SessionLocal()
+    try:
+        from app.ingestion.connectors.kpi_inbox import poll_inbox
+        from app.services.source_health import start_sync_run, finish_sync_run
+        run = start_sync_run(db, "kpi_inbox", "imap_poll_scheduled", {"max_messages": 100})
+        db.commit()
+        try:
+            result = poll_inbox(db, max_messages=100)
+            finish_sync_run(db, run, status='success', records_processed=int(result.get('records_created_total', 0)))
+            db.commit()
+            import logging as _log
+            _log.getLogger(__name__).info("kpi_inbox poll: %s", result)
+        except Exception as exc:
+            finish_sync_run(db, run, status='failure', records_processed=0, error_message=str(exc)[:500])
+            db.commit()
+            raise
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("kpi_inbox poll failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_fedex_rate_cross_check_job() -> None:
     """Daily 11:30 UTC / 07:30 ET: ask the FedEx Rates API for ACCOUNT
     + LIST quotes for every recent FedEx ShipStation shipment, persist
@@ -780,6 +818,10 @@ def build_scheduler() -> BackgroundScheduler:
     # so a slow run can't double-fire and burn through the per-account
     # API rate limit.
     scheduler.add_job(run_fedex_rate_cross_check_job, "cron", hour=11, minute=30, id="fedex-rate-cross-check-daily", replace_existing=True, max_instances=1, coalesce=True)
+    # KPI inbox poll twice daily at 12:00 + 00:00 UTC (08:00 + 20:00 ET).
+    # Walks UNSEEN messages in kpi@spidergrills.ai, routes vendor invoices
+    # through the parser registry. Idempotent on Message-ID.
+    scheduler.add_job(run_kpi_inbox_poll_job, "cron", hour="0,12", minute=0, id="kpi-inbox-poll-twice-daily", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(run_charcoal_jit_forecast_job, "cron", hour=11, minute=0, id="charcoal-jit-forecast-daily", replace_existing=True, max_instances=1, coalesce=True)
     # Expire stale beta-invitation rows daily at 11:05 UTC — runs right
     # after the forecast pass so the Beta rollout tab always renders

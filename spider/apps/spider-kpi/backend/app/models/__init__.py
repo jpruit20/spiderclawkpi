@@ -65,6 +65,7 @@ from app.models.entities import (
     FedexInvoiceCharge,
     FedexGroundEodSummary,
     FedexRateQuote,
+    ProcessedEmail,
     LoreEvent,
     NotificationSend,
     Recommendation,

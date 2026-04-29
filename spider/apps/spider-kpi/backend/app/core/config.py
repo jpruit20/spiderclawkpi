@@ -129,6 +129,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices('FEDEX_API_HOST', 'FEDEX_HOST'),
     )
 
+    # KPI inbox — kpi@spidergrills.ai routed (via Cloudflare Email Routing)
+    # to a dedicated free Gmail account. Vendor invoices (FedEx FBO weekly
+    # CSV exports first, future LTL carriers later) get forwarded into
+    # this mailbox; the dashboard polls it twice daily to ingest.
+    kpi_inbox_host: Optional[str] = None
+    kpi_inbox_port: int = 993
+    kpi_inbox_user: Optional[str] = None
+    kpi_inbox_password: Optional[str] = None
+
     triplewhale_api_key: Optional[str] = None
 
     ga4_property_id: Optional[str] = Field(default=None, validation_alias=AliasChoices('GA4_PROPERTY_ID', 'GOOGLE_ANALYTICS_PROPERTY_ID', 'GA_PROPERTY_ID'))

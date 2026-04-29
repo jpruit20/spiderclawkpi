@@ -2328,6 +2328,38 @@ class FedexRateQuote(Base):
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
+class ProcessedEmail(Base):
+    """Idempotency ledger for the kpi@spidergrills.ai IMAP poll.
+
+    Identity = RFC 5322 Message-ID. One row per message we've examined,
+    regardless of whether a parser matched. Status tells us why a
+    message did/didn't produce records; error_message captures parser
+    exceptions for debugging without re-fetching the email.
+    """
+    __tablename__ = "processed_emails"
+    __table_args__ = (
+        Index("ix_processed_emails_status_processed_at", "status", "processed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    gmail_uid: Mapped[Optional[int]] = mapped_column(BigInteger)
+    mailbox: Mapped[str] = mapped_column(String(64), default="INBOX", nullable=False)
+    subject: Mapped[Optional[str]] = mapped_column(Text)
+    from_addr: Mapped[Optional[str]] = mapped_column(Text)
+    to_addr: Mapped[Optional[str]] = mapped_column(Text)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    parser_used: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    records_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    attachment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    raw_headers_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class PageConfig(Base):
     """Per-user-per-division layout preferences. Each division lead
     edits their own division's row; Joseph can edit any. Audit-logged

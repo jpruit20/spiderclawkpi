@@ -15,6 +15,11 @@ from app.ingestion.connectors.fedex import (
     health_check as fedex_health_check,
     register_source as fedex_register_source,
 )
+from app.ingestion.connectors.kpi_inbox import (
+    health_check as kpi_inbox_health_check,
+    poll_inbox as kpi_inbox_poll,
+    register_source as kpi_inbox_register_source,
+)
 from app.ingestion.connectors.freshdesk import sync_freshdesk
 from app.ingestion.connectors.ga4 import ga4_debug_self_check, sync_ga4
 from app.ingestion.connectors.shopify import sync_shopify_orders
@@ -235,6 +240,44 @@ def debug_fedex(db: Session = Depends(db_session)):
     fedex_register_source(db)
     db.commit()
     return fedex_health_check()
+
+
+@router.get('/debug/kpi-inbox')
+def debug_kpi_inbox(db: Session = Depends(db_session)):
+    """Confirm IMAP login + report inbox stats. Idempotent — also
+    upserts the source_config row so System Health surfaces this
+    connector. No messages read or modified."""
+    kpi_inbox_register_source(db)
+    db.commit()
+    return kpi_inbox_health_check()
+
+
+@router.post('/run-sync/kpi-inbox')
+def run_kpi_inbox_poll(
+    max_messages: int = 100,
+    mailbox: str = "INBOX",
+    db: Session = Depends(db_session),
+):
+    """Manually trigger the KPI inbox IMAP poll.
+
+    Walks UNSEEN messages, routes through the parser registry,
+    persists ledger + parsed records, marks each \\Seen on success.
+    The scheduler runs this at 08:00 and 20:00 ET; this route is
+    for ad-hoc triggers (post-FBO-export-setup, debugging, etc).
+    """
+    if _already_running(db, "kpi_inbox"):
+        return {"ok": True, "skipped": True, "message": "kpi_inbox sync already running"}
+    run = start_sync_run(db, "kpi_inbox", "imap_poll", {"max_messages": max_messages, "mailbox": mailbox})
+    db.commit()
+    try:
+        result = kpi_inbox_poll(db, mailbox=mailbox, max_messages=max_messages)
+        finish_sync_run(db, run, status='success', records_processed=int(result.get('records_created_total', 0)))
+        db.commit()
+        return {"ok": True, **result}
+    except Exception as exc:
+        finish_sync_run(db, run, status='failure', records_processed=0, error_message=str(exc)[:500])
+        db.commit()
+        raise
 
 
 @router.post('/run-sync/fedex/rates')
