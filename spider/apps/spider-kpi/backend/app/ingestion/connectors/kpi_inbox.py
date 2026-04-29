@@ -519,10 +519,26 @@ def _parse_fedex_invoice(
     return {"records_created": inserted, "extra": {"csv_attachments_seen": len(csv_attachments)}}
 
 
-# Registration order = priority (first match wins)
+# Registration order = priority (first match wins).
+#
+# Sender regex accepts both:
+#   * direct FedEx senders (when FBO emails kpi@ directly once we get
+#     the recipient configured upstream)
+#   * forwarded FedEx senders — the email arrives from the forwarder's
+#     address, not FedEx's. We accept Spider/AMW domains as known
+#     forwarders so today's manual + auto-forward setup works.
+#
+# Subject regex stays specific so we don't ingest unrelated mail from
+# the same forwarder addresses (random work email forwarded by accident
+# shouldn't trigger the FedEx parser).
 register_parser(
     "fedex_invoice",
-    sender_re=r"@(?:fedex\.com|invoicing\.fedex\.com|billonline\.fedex\.com|fedexbilling\.com)",
-    subject_re=r"(?:invoice|FedEx Billing|shipment detail|ground shipment)",
+    sender_re=(
+        r"@(?:"
+        r"fedex\.com|invoicing\.fedex\.com|billonline\.fedex\.com|fedexbilling\.com"
+        r"|alignmachineworks\.com|spidergrills\.com|spidergrills\.app|spidergrills\.ai"
+        r")"
+    ),
+    subject_re=r"FedEx",
     fn=_parse_fedex_invoice,
 )
