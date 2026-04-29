@@ -111,7 +111,8 @@ def _device_type_to_controller_model(device_type: str | None) -> str | None:
 def synthesize_from_klaviyo_events(
     db: Session,
     *,
-    batch_limit: int = 5000,
+    user_batch_limit: int = 20000,
+    device_batch_limit: int = 50000,
 ) -> dict[str, int]:
     """Walk every klaviyo_events row that matches our metric set and
     upsert AppSide observations. Idempotent via the unique constraint
@@ -119,13 +120,37 @@ def synthesize_from_klaviyo_events(
     source_ref_id so re-running this is a no-op for already-ingested
     events.
 
-    Returns counts: ``{'device_observations_inserted': N, 'user_observations_inserted': N, 'events_scanned': N}``.
+    Why two batches: the original single-query approach pulled events
+    ordered by event_datetime ASC with a LIMIT, then iterated. With
+    20k+ historical "Opened App" events back-filled and only ~80
+    Device Paired / Cook Completed events at the front of the live
+    window, the LIMIT consistently truncated the scan BEFORE the new
+    device events. Splitting into a dedicated device-event query
+    (much smaller volume, no truncation risk) plus a separate
+    user-relevant query keeps both partitions covered.
+
+    Returns counts: ``{'device_observations_inserted': N,
+    'user_observations_inserted': N, 'events_scanned': N}``.
     """
-    # Pull ALL relevant klaviyo events. Idempotency comes from the unique
-    # constraint on (source, source_ref_id), so we can scan from the top
-    # without a watermark. Volume is bounded by the configured backfill
-    # window on the Klaviyo connector (30 days by default).
-    events = db.execute(
+    # Device-relevant events first — small volume (live window only).
+    device_events = db.execute(
+        select(
+            KlaviyoEvent.klaviyo_event_id,
+            KlaviyoEvent.metric_name,
+            KlaviyoEvent.event_datetime,
+            KlaviyoEvent.klaviyo_profile_id,
+            KlaviyoEvent.email,
+            KlaviyoEvent.properties,
+        )
+        .where(KlaviyoEvent.metric_name.in_(_DEVICE_METRICS))
+        .order_by(KlaviyoEvent.event_datetime.asc())
+        .limit(device_batch_limit)
+    ).all()
+
+    # User-relevant events — larger volume across the full backfill
+    # window. We dedupe on (source, source_ref_id) inside the loop so
+    # the device events being in both lists is harmless.
+    user_events = db.execute(
         select(
             KlaviyoEvent.klaviyo_event_id,
             KlaviyoEvent.metric_name,
@@ -135,9 +160,19 @@ def synthesize_from_klaviyo_events(
             KlaviyoEvent.properties,
         )
         .where(KlaviyoEvent.metric_name.in_(_USER_METRICS))
-        .order_by(KlaviyoEvent.event_datetime.asc())
-        .limit(batch_limit)
+        .order_by(KlaviyoEvent.event_datetime.desc())  # newest-first so a partial run still covers fresh data
+        .limit(user_batch_limit)
     ).all()
+
+    # De-duplicate by event id (device events may also be in user_events).
+    seen_ids: set[str] = set()
+    events: list[Any] = []
+    for src in (device_events, user_events):
+        for evt in src:
+            if not evt.klaviyo_event_id or evt.klaviyo_event_id in seen_ids:
+                continue
+            seen_ids.add(evt.klaviyo_event_id)
+            events.append(evt)
 
     if not events:
         return {"device_observations_inserted": 0, "user_observations_inserted": 0, "events_scanned": 0}
