@@ -252,7 +252,7 @@ def debug_kpi_inbox(db: Session = Depends(db_session)):
     return kpi_inbox_health_check()
 
 
-@router.post('/run-sync/kpi-inbox')
+@router.post('/run-sync/kpi-inbox/poll')
 def run_kpi_inbox_poll(
     max_messages: int = 100,
     mailbox: str = "INBOX",
@@ -264,6 +264,10 @@ def run_kpi_inbox_poll(
     persists ledger + parsed records, marks each \\Seen on success.
     The scheduler runs this at 08:00 and 20:00 ET; this route is
     for ad-hoc triggers (post-FBO-export-setup, debugging, etc).
+
+    Path is /run-sync/kpi-inbox/poll (extra segment) to avoid the
+    generic /run-sync/{source} catch-all route that returns 'Unknown
+    source' for any source not in its if/elif chain.
     """
     if _already_running(db, "kpi_inbox"):
         return {"ok": True, "skipped": True, "message": "kpi_inbox sync already running"}
