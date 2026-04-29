@@ -499,6 +499,8 @@ def _parse_fedex_invoice(
     """
     from app.models import FedexInvoiceCharge
     import csv
+    import hashlib
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     csv_payloads = _expand_csv_payloads(attachments)
     if not csv_payloads:
@@ -530,17 +532,25 @@ def _parse_fedex_invoice(
             payload["filename"], len(reader.fieldnames), list(reader.fieldnames)[:10],
         )
 
+        # Stable short hash of the filename so synthetic invoice/tracking
+        # values fit within the 64-char column AND are deterministic
+        # across re-runs (combined with ON CONFLICT DO NOTHING this
+        # makes the parser fully idempotent).
+        file_hash = hashlib.md5(payload["filename"].encode("utf-8")).hexdigest()[:10]
+
         for row_idx, row in enumerate(reader):
             # Synthetic invoice_number / tracking_number until we know
             # which columns hold them. Once we do, swap to row[<col>].
+            # Format keeps total length ≤ 26 chars regardless of filename
+            # so [:64] truncation never produces collisions.
             synth_invoice = (
                 row.get("Invoice Number") or row.get("InvoiceNumber") or row.get("invoice_number")
-                or f"unparsed-{payload['filename']}"
+                or f"unparsed-{file_hash}"
             )[:64]
             synth_tracking = (
                 row.get("Tracking Number") or row.get("TrackingNumber")
                 or row.get("Tracking #") or row.get("tracking_number")
-                or f"unparsed-{payload['filename']}-{row_idx}"
+                or f"unparsed-{file_hash}-{row_idx:07d}"
             )[:64]
             try:
                 charge_amount = float(
@@ -550,21 +560,29 @@ def _parse_fedex_invoice(
             except (TypeError, ValueError):
                 charge_amount = 0.0
 
-            charge = FedexInvoiceCharge(
+            # ON CONFLICT DO NOTHING so a second pass over the same file
+            # (e.g. user re-uploads, parser refinement re-runs) is a
+            # no-op rather than a transaction-killing constraint
+            # violation. Conflict key matches the unique constraint:
+            # (invoice_number, tracking_number, charge_category).
+            stmt = pg_insert(FedexInvoiceCharge).values(
                 invoice_number=synth_invoice,
                 invoice_currency="USD",
                 tracking_number=synth_tracking,
-                is_spider=True,  # everything in this inbox is Spider's by definition
+                is_spider=True,
                 charge_category="UNPARSED",
                 charge_description="Captured prior to parser refinement; see raw_payload",
                 charge_amount_usd=charge_amount,
+                carrier="fedex",
                 raw_payload={
                     "filename": payload["filename"],
                     "row_index": row_idx,
                     "row": row,
                 },
+            ).on_conflict_do_nothing(
+                constraint="uq_fedex_invoice_charges_invoice_tracking_category",
             )
-            db.add(charge)
+            db.execute(stmt)
             inserted += 1
 
     return {"records_created": inserted, "extra": {"csv_payloads_seen": len(csv_payloads)}}
