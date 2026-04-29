@@ -410,15 +410,18 @@ def shipping_cost_by_sku(
         ),
         shipments AS (
             -- Shipments we want to attribute. ShipStation's
-            -- raw_payload.orderKey carries the original Shopify
-            -- foreign id as '<shopify_order_id>-<line_item_id>'.
-            -- Splitting on '-' and taking the first part recovers
-            -- the Shopify order_id we can join against.
+            -- raw_payload.orderKey carries the Shopify order id
+            -- in its first '-' part (the suffix is a checkout token,
+            -- NOT a line_item_id — verified). The trackingNumber is
+            -- the truth-key: it pairs 1:1 with a Shopify fulfillment
+            -- record, which carries the actual line_items that went
+            -- in this physical box.
             SELECT
                 ss.id,
                 ss.ss_order_id,
                 ss.ss_order_number,
                 NULLIF(SPLIT_PART(COALESCE(ss.raw_payload->>'orderKey', ''), '-', 1), '') AS shopify_order_id,
+                NULLIF(ss.raw_payload->>'trackingNumber', '') AS tracking_number,
                 ss.carrier_code,
                 ss.service_code,
                 ss.shipment_cost,
@@ -429,14 +432,77 @@ def shipping_cost_by_sku(
               AND ss.ship_date >= CURRENT_DATE - (:days || ' days')::interval
               AND ss.shipment_cost > 0
         ),
-        joined AS (
-            -- One row per (shipment × line) so we can allocate cost.
-            -- WITH ORDINALITY exposes the line_idx so unit dedupe can
-            -- key on (order_id, line_idx) — critical because a single
-            -- customer line (e.g. 1× Huntsman) can show up across
-            -- multiple shipments (Huntsman ships in 2 boxes), and we
-            -- must NOT double-count the customer unit each time the
-            -- line appears in a fresh shipment row.
+        fulfillment_lines AS (
+            -- Per-(order_id, tracking_number) line manifest from
+            -- Shopify fulfillments[]. Each fulfillment is one
+            -- physical box; its line_items[] tells us EXACTLY which
+            -- order lines went in that box. JOIN-key is tracking_number
+            -- (1:1 with ShipStation.trackingNumber).
+            --
+            -- WITH ORDINALITY on the OUTER fulfillments array so we
+            -- preserve a stable line_idx for unit dedupe — but we
+            -- want the line_idx from the ORIGINAL order line_items
+            -- ordering (so dedupe matches the prorata path), so we
+            -- compute it via a JOIN to the order's line_items by id.
+            SELECT
+                eo.order_id::text AS order_id,
+                fulfillment->>'tracking_number' AS tracking_number,
+                ful_line.line->>'sku' AS sku,
+                ful_line.line->>'title' AS title,
+                COALESCE((ful_line.line->>'quantity')::int, 0) AS qty,
+                COALESCE((ful_line.line->>'price')::numeric, 0) AS unit_price,
+                ful_line.line->>'id' AS shopify_line_id,
+                -- Stable line_idx from the order's full line_items
+                -- (NOT from this fulfillment's line subset) so dedupe
+                -- across multiple shipments of the same line aligns.
+                (
+                    SELECT order_line.idx::int
+                    FROM jsonb_array_elements(eo.payload->'line_items')
+                      WITH ORDINALITY AS order_line(line, idx)
+                    WHERE (order_line.line->>'id') = (ful_line.line->>'id')
+                    LIMIT 1
+                ) AS line_idx
+            FROM eligible_orders eo
+            CROSS JOIN LATERAL jsonb_array_elements(eo.payload->'fulfillments') AS fulfillment
+            CROSS JOIN LATERAL jsonb_array_elements(fulfillment->'line_items') AS ful_line(line)
+            WHERE jsonb_typeof(eo.payload->'fulfillments') = 'array'
+              AND COALESCE(fulfillment->>'tracking_number', '') <> ''
+              AND COALESCE(ful_line.line->>'sku', '') <> ''
+        ),
+        line_keyed AS (
+            -- LINE-KEYED (TRUTH) PATH: shipment's tracking_number
+            -- matches a Shopify fulfillment's tracking_number — we
+            -- know the exact lines in this box. Cost goes pro-rata
+            -- across ONLY those lines (usually 1; sometimes a few
+            -- if multiple lines combined into one box). This is
+            -- exact per-SKU shipping cost — no allocator bleed.
+            --
+            -- Pro-rata WITHIN the box: if a box carries 2 lines
+            -- (e.g. cover + accessory), split by their value share.
+            -- If the box carries 1 line (typical), 100% goes to it.
+            SELECT
+                s.id AS shipment_id,
+                s.shopify_order_id AS order_id,
+                s.carrier_code,
+                s.service_code,
+                s.shipment_cost,
+                s.ship_date,
+                fl.sku, fl.title, fl.line_idx, fl.qty,
+                (s.shipment_cost * (fl.qty * fl.unit_price)
+                  / NULLIF(SUM(fl.qty * fl.unit_price) OVER (PARTITION BY s.id), 0))
+                  AS attributed_cost,
+                'line_keyed' AS attribution_mode
+            FROM shipments s
+            JOIN fulfillment_lines fl
+              ON fl.order_id = s.shopify_order_id
+             AND fl.tracking_number = s.tracking_number
+            WHERE s.tracking_number IS NOT NULL
+              AND fl.line_idx IS NOT NULL
+        ),
+        prorata_join AS (
+            -- PRO-RATA FALLBACK: no fulfillment match for this
+            -- shipment (rare — older orders or unusual paths).
+            -- Spread cost across all lines by line value share.
             SELECT
                 s.id AS shipment_id,
                 s.shopify_order_id AS order_id,
@@ -454,37 +520,32 @@ def shipping_cost_by_sku(
               ON eo.order_id::text = s.shopify_order_id
             CROSS JOIN LATERAL jsonb_array_elements(eo.payload->'line_items')
               WITH ORDINALITY AS line_data(line, idx)
-            WHERE COALESCE(line_data.line->>'sku', '') <> ''
+            WHERE NOT EXISTS (
+                SELECT 1 FROM fulfillment_lines fl
+                WHERE fl.order_id = s.shopify_order_id
+                  AND fl.tracking_number = s.tracking_number
+            )
+            AND COALESCE(line_data.line->>'sku', '') <> ''
         ),
-        with_share AS (
-            -- Pro-rata allocation: each line's share of its shipment's
-            -- total line-value gets that fraction of the shipment cost.
-            -- The cost-per-row is correct (every shipment contributes
-            -- its full cost across its lines); unit dedupe happens in
-            -- Python using (order_id, sku, line_idx).
+        prorata_allocated AS (
             SELECT
                 shipment_id, order_id, carrier_code, service_code, shipment_cost,
                 ship_date, sku, title, line_idx, qty,
-                (qty * unit_price)
-                  / NULLIF(SUM(qty * unit_price) OVER (PARTITION BY shipment_id), 0)
-                  AS line_share,
                 (shipment_cost * (qty * unit_price)
                   / NULLIF(SUM(qty * unit_price) OVER (PARTITION BY shipment_id), 0))
-                  AS attributed_cost
-            FROM joined
+                  AS attributed_cost,
+                'prorata' AS attribution_mode
+            FROM prorata_join
         )
         SELECT
-            sku,
-            title,
-            carrier_code,
-            service_code,
-            ship_date,
-            shipment_id,
-            order_id,
-            line_idx,
-            qty,
-            attributed_cost
-        FROM with_share
+            sku, title, carrier_code, service_code, ship_date, shipment_id,
+            order_id, line_idx, qty, attributed_cost, attribution_mode
+        FROM line_keyed
+        UNION ALL
+        SELECT
+            sku, title, carrier_code, service_code, ship_date, shipment_id,
+            order_id, line_idx, qty, attributed_cost, attribution_mode
+        FROM prorata_allocated
         WHERE attributed_cost IS NOT NULL
     """), {"days": days}).all()
 
@@ -528,12 +589,21 @@ def shipping_cost_by_sku(
     # at the carrier level. Headline unit count lives at the SKU level.
     seen_units: set[tuple[str, str, int]] = set()
 
+    # Track attribution mode mix so the UI can show "X% of cost is
+    # line-keyed (truth) vs pro-rata (estimate)".
+    line_keyed_cost = 0.0
+    prorata_cost = 0.0
+
     all_shipments: set[int] = set()
     for r in rows:
         sku = r.sku or "unknown"
         carrier = r.carrier_code or "unknown"
         cost = float(r.attributed_cost or 0)
         unit_key = (str(r.order_id or ""), sku, int(r.line_idx or 0))
+        if getattr(r, "attribution_mode", "prorata") == "line_keyed":
+            line_keyed_cost += cost
+        else:
+            prorata_cost += cost
 
         st = sku_totals[sku]
         if not st["title"] and r.title:
@@ -633,17 +703,34 @@ def shipping_cost_by_sku(
             "total_shipping_cost_usd": round(total_cost, 2),
             "skus_seen": len(by_sku_list),
             "carriers_seen": len(by_carrier_list),
+            # Mix of attribution methods: line-keyed = exact (one shipment
+            # → one line via Shopify line_item_id in orderKey); pro-rata
+            # = legacy fallback (split across all lines by value share).
+            "attribution_mode": {
+                "line_keyed_cost_usd": round(line_keyed_cost, 2),
+                "prorata_cost_usd": round(prorata_cost, 2),
+                "line_keyed_share": (
+                    round(line_keyed_cost / (line_keyed_cost + prorata_cost), 3)
+                    if (line_keyed_cost + prorata_cost) > 0 else None
+                ),
+            },
         },
         "by_sku": by_sku_list[:top_n_skus],
         "by_carrier": by_carrier_list,
         "trend": trend_list,
         "method_note": (
-            "Cost is attributed across line_items pro-rata by line value (price × qty). "
-            "One shipment with multiple SKUs splits its cost by line-value share — same "
-            "allocator the GP calculator uses, so totals reconcile. Units are deduped on "
-            "(order_id, sku, line_idx) so SKUs that ship in multiple boxes (e.g. Huntsman "
-            "ships in 2 parcels) are counted once per customer unit; the boxes_per_unit "
-            "field exposes the multiplier directly. Free-shipping rows (cost=0) are excluded "
-            "so the per-SKU averages reflect labels we actually paid for. Voided shipments excluded."
+            "Two-mode attribution. (1) LINE-KEYED (truth): every ShipStation shipment "
+            "is JOINed to its Shopify fulfillment via tracking_number — Shopify's "
+            "fulfillments[].line_items tells us EXACTLY which order lines went in that "
+            "box. Cost goes pro-rata only across those lines (usually 1 line per box, "
+            "100% to that SKU; sometimes a few lines combined, split by value). For "
+            "multi-box SKUs (Huntsman ships in 2 boxes) both boxes' fulfillments cite "
+            "the same line, so the SKU gets ALL the parcel cost — no bleed onto "
+            "accessories. (2) PRO-RATA fallback: shipments with no fulfillment match "
+            "(rare — older orders) split cost across all order lines by value share. "
+            "attribution_mode.line_keyed_share shows what fraction of the window is exact. "
+            "Units are deduped on (order_id, sku, line_idx); boxes_per_unit exposes the "
+            "true parcel-per-customer-unit ratio (Huntsman ≈ 2.0). Free-shipping (cost=0) "
+            "and voided shipments excluded."
         ),
     }
