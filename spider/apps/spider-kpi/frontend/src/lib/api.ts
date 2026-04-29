@@ -1123,6 +1123,10 @@ export const api = {
     request<KlaviyoEngagementByOwnership>(`/api/klaviyo/engagement-by-ownership`, { signal }),
   klaviyoRecentEvents: (limit: number = 50, signal?: AbortSignal) =>
     request<KlaviyoRecentEvents>(`/api/klaviyo/recent-events?limit=${limit}`, { signal }),
+  klaviyoCookReconciliation: (days: number = 30, signal?: AbortSignal) =>
+    request<KlaviyoCookReconciliation>(`/api/klaviyo/cook-reconciliation?days=${days}`, { signal }),
+  klaviyoPairingLifecycle: (days: number = 30, signal?: AbortSignal) =>
+    request<KlaviyoPairingLifecycle>(`/api/klaviyo/pairing-lifecycle?days=${days}`, { signal }),
   klaviyoCampaignsRecent: (limit: number = 20, signal?: AbortSignal) =>
     request<KlaviyoCampaignsRecent>(`/api/klaviyo/campaigns-recent?limit=${limit}`, { signal }),
   klaviyoFlowsStatus: (signal?: AbortSignal) =>
@@ -1442,6 +1446,72 @@ export interface KlaviyoRecentEvents {
     product_ownership: string | null
     device_types: string[]
     phone_os: string | null
+  }>
+}
+
+/**
+ * App-vs-telemetry cook reconciliation. Compares Klaviyo Cook Completed
+ * events against the telemetry-side cook-session count from
+ * telemetry_history_daily.cook_styles_json.
+ */
+export interface KlaviyoCookReconciliation {
+  window_days: number
+  as_of: string
+  /** First time the Cook Completed metric ever fired — null until any event lands.
+   *  Frontend uses this to render an "events started flowing on …" note so the
+   *  pre-launch zeros on the daily chart aren't confusing. */
+  events_first_seen_at: string | null
+  daily: Array<{
+    business_date: string
+    app_cooks: number
+    telemetry_cooks: number
+    /** Signed: positive = telemetry sees more, negative = app sees more. */
+    gap: number
+    gap_pct: number | null
+  }>
+  totals: {
+    app_cooks: number
+    telemetry_cooks: number
+    gap: number
+    completed_normally_pct: number | null
+    completed_normally_n: number
+    duration_p50_seconds: number | null
+    duration_p75_seconds: number | null
+    duration_p95_seconds: number | null
+    /** Cooks > 24h, excluded from percentile math, surfaced as data-quality flag. */
+    long_cook_anomaly_count: number
+  }
+  target_temp_bands: {
+    low_below_250: number
+    mid_250_to_350: number
+    high_350_plus: number
+    unknown: number
+  }
+}
+
+/**
+ * Device pairing lifecycle. Klaviyo Device Paired / Device Unpaired
+ * events plus a telemetry-active-devices baseline for pair-success rate.
+ */
+export interface KlaviyoPairingLifecycle {
+  window_days: number
+  as_of: string
+  totals: {
+    pair_events: number
+    unpair_events: number
+    /** Cumulative paired - unpaired in window. */
+    net_app_active: number
+    /** Latest engaged_devices reading from telemetry_history_daily — denominator for pair-success. */
+    telemetry_active_devices_recent: number
+    pair_success_rate_pct: number | null
+  }
+  by_device_type: Array<{ device_type: string; paired: number; unpaired: number }>
+  by_firmware: Array<{ firmware_version: string; paired: number; unpaired: number }>
+  recent_unpairs: Array<{
+    event_datetime: string | null
+    mac_normalized: string | null
+    device_type: string
+    firmware_version: string
   }>
 }
 

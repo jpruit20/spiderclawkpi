@@ -179,9 +179,22 @@ def cook_reconciliation(db: Session, days: int = 30) -> dict[str, Any]:
     if quality and quality.classified_count:
         completed_normally_pct = round(100.0 * (quality.normal_count or 0) / quality.classified_count, 1)
 
+    # When did the app start firing Cook Completed events at all?
+    # Useful for the frontend to render an honest "events started
+    # flowing on …" note — otherwise the daily chart looks broken on
+    # the first ~30 days because the app side is all zeros even though
+    # telemetry sees thousands of cooks.
+    events_first_seen = db.execute(text("""
+        SELECT MIN(event_datetime) AS first_seen
+        FROM klaviyo_events
+        WHERE metric_name = 'Cook Completed'
+    """)).first()
+    first_seen_iso = events_first_seen.first_seen.isoformat() if events_first_seen and events_first_seen.first_seen else None
+
     return {
         "window_days": days,
         "as_of": today.isoformat(),
+        "events_first_seen_at": first_seen_iso,
         "daily": daily,
         "totals": {
             "app_cooks": totals_app,

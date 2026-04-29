@@ -39,6 +39,8 @@ import { AppLiveFeedCard } from '../components/AppLiveFeedCard'
 import { AppUsersCard } from '../components/AppUsersCard'
 import { KlaviyoOwnershipBreakdownCard } from '../components/KlaviyoOwnershipBreakdownCard'
 import { LifetimeFleetCard } from '../components/LifetimeFleetCard'
+import { CookReconciliationCard } from '../components/CookReconciliationCard'
+import { PairingLifecycleCard } from '../components/PairingLifecycleCard'
 import { TelemetryReportCard } from '../components/TelemetryReportCard'
 import { BaselineBand } from '../components/BaselineBand'
 import { EventTimelinePanel } from '../components/EventTimelinePanel'
@@ -1060,6 +1062,16 @@ export function ProductEngineeringDivision() {
                   several places. */}
               <LifetimeFleetCard />
 
+              {/* App-vs-telemetry reconciliation cards. Powered by
+                  Agustín's three new Klaviyo events (Device Paired,
+                  Device Unpaired, Cook Completed) shipped 2026-04-28.
+                  These sit alongside the controller-fleet truth cards
+                  (LifetimeFleetCard above) because they're "fleet
+                  reality from two angles" — telemetry side and app
+                  side — not pure app analytics. */}
+              <CookReconciliationCard days={30} />
+              <PairingLifecycleCard days={30} />
+
               {/* ========================================================
                   Mobile App (Klaviyo-backed)
                   ========================================================
@@ -1067,9 +1079,10 @@ export function ProductEngineeringDivision() {
                   — distinct from the Venom-controller telemetry above.
                   Klaviyo is the intermediary: Agustin's app fires
                   events into Klaviyo, the dashboard mirrors them.
-                  Awaiting Agustin's `Device Paired` / `Cook Completed`
-                  / `Device Error` / `Firmware Updated` events to
-                  expand this section. */}
+                  Device Error + Firmware Updated events still pending
+                  per Agustín 2026-04-28 (Device Error needs firmware
+                  changes for internal-state errors; Firmware Updated
+                  ships next app release). */}
               {/* Mobile App block consolidated — 6 Klaviyo-backed cards
                   collapsed under one fold so the PE page leads with
                   controller-fleet telemetry. App data still drillable. */}
