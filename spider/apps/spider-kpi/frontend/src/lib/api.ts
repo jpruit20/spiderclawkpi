@@ -1288,6 +1288,16 @@ export const api = {
     request<ShippingGeographic>(`/api/shipping/geographic-distribution?days=${days}`, { signal }),
   shippingCostTrend: (days: number = 90, bucket: 'week' | 'day' = 'week', signal?: AbortSignal) =>
     request<ShippingCostTrend>(`/api/shipping/cost-trend?days=${days}&bucket=${bucket}`, { signal }),
+  shippingCostBySku: (
+    days: number = 90,
+    bucket: 'week' | 'day' | 'month' = 'week',
+    top_n_skus: number = 20,
+    signal?: AbortSignal,
+  ) =>
+    request<ShippingCostBySku>(
+      `/api/shipping/cost-by-sku?days=${days}&bucket=${bucket}&top_n_skus=${top_n_skus}`,
+      { signal },
+    ),
   shipping3plRoi: (days: number = 365, signal?: AbortSignal) =>
     request<Shipping3plRoi>(`/api/shipping/3pl-roi?days=${days}`, { signal }),
   shippingCxCorrelation: (days: number = 30, signal?: AbortSignal) =>
@@ -1886,6 +1896,53 @@ export interface ShippingGeographic {
 export interface ShippingCostTrend {
   window: ShippingWindow & { bucket: string }
   series: Array<{ bucket: string; shipments: number; cost_usd: number; avg_cost_usd: number }>
+}
+
+/**
+ * Shipping cost broken out by SKU, with carrier breakdown nested per SKU
+ * and a per-bucket-per-carrier trend series. Cost is pro-rata allocated
+ * across line_items by line value (price × qty), same allocator the GP
+ * calculator uses, so totals reconcile.
+ */
+export interface ShippingCostBySku {
+  window_days: number
+  bucket: 'week' | 'day' | 'month'
+  as_of: string
+  totals: {
+    shipments: number
+    shipped_units: number
+    total_shipping_cost_usd: number
+    skus_seen: number
+    carriers_seen: number
+  }
+  by_sku: Array<{
+    sku: string
+    title: string | null
+    shipments: number
+    units: number
+    attributed_cost_usd: number
+    avg_cost_per_unit_usd: number | null
+    carriers: Array<{
+      carrier_code: string
+      service_code: string | null
+      shipments: number
+      units: number
+      attributed_cost_usd: number
+    }>
+  }>
+  by_carrier: Array<{
+    carrier_code: string
+    shipments: number
+    attributed_cost_usd: number
+    service_codes: string[]
+  }>
+  trend: Array<{
+    bucket: string
+    carrier_code: string
+    shipments: number
+    attributed_cost_usd: number
+  }>
+  method_note: string
 }
 
 export interface Shipping3plRoi {

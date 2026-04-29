@@ -9,6 +9,7 @@ import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
+import { ShippingCostBySkuCard } from '../components/ShippingCostBySkuCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { CustomizableCard } from '../components/CustomizableCard'
@@ -123,6 +124,22 @@ export function OperationsDivision() {
 
       <CustomizableCard id="shipping_intelligence" defaultTitle="Shipping intelligence" cfg={cfg}>
         <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
+      </CustomizableCard>
+
+      {/* Shipping cost drill-down: per-SKU spend, carrier mix per SKU,
+          and per-carrier trend over time. Joseph asked for this on
+          2026-04-28 — folded by default since the parent shipping card
+          already covers carrier mix headline. Owners click in for the
+          "is this SKU still profitable to ship?" view. */}
+      <CustomizableCard id="shipping_cost_by_sku" defaultTitle="Shipping cost by SKU" cfg={cfg}>
+        <CollapsibleSection
+          id="ops-shipping-cost-by-sku"
+          title="Shipping cost by SKU"
+          subtitle="Per-SKU shipping spend, carrier mix per SKU, trend by carrier"
+          density="compact"
+        >
+          <ShippingCostBySkuCard />
+        </CollapsibleSection>
       </CustomizableCard>
 
       <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>
