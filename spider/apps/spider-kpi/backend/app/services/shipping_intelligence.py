@@ -34,6 +34,40 @@ PRIMARY_WAREHOUSE = {
     "lon": -84.3880,
 }
 
+
+# Per-SKU physical-parcel count for cost-per-physical-box derivation.
+#
+# Why this exists: ShipStation shipment records don't always map 1:1
+# to physical parcels. Huntsman, for example, *always* ships in 2
+# boxes (body + grates/accessories) per customer unit, but ShipStation
+# typically captures both legs as a single entry whose shipment_cost
+# is the combined carrier charge for both boxes. So `len(shipments)`
+# undercounts physical parcels and `avg_cost_per_unit` is the
+# all-boxes-bundled cost per customer unit, NOT per parcel.
+#
+# This map lets the rollup divide cost-per-customer-unit by the known
+# parcel count to surface a per-physical-box figure that lines up with
+# carrier rate sheets — important because ops/finance tracks "what does
+# it cost us to ship one Huntsman box" against the carrier contract.
+#
+# Joseph confirmed (2026-04-28):
+#   - SG-H-01 Huntsman: 2 boxes per customer unit. Warranty replacement
+#     ships as 1 box, but those are negligible volume in this report.
+#   - Total cost per Huntsman: ~$100-$120 → ~$50-$60 per physical box.
+#   - Default for unmapped SKUs: 1 box per unit.
+#
+# Add SKUs here as multi-parcel patterns are confirmed (Giant Huntsman
+# may also be multi-box once LTL freight feed lands; the LTL grill
+# itself ships outside ShipStation).
+_PHYSICAL_BOXES_PER_UNIT: dict[str, int] = {
+    "SG-H-01": 2,
+}
+
+def _physical_boxes_for_sku(sku: str | None) -> int:
+    if not sku:
+        return 1
+    return _PHYSICAL_BOXES_PER_UNIT.get(sku, 1)
+
 # Hand-curated lat/lon for US state centroids — used by the geographic
 # distribution + 3PL ROI distance proxy. Approximate; the goal is
 # "which broad region" not turn-by-turn directions.
@@ -357,11 +391,12 @@ def shipping_cost_by_sku(
               {
                 "sku": "SG-H-01",
                 "title": "The Huntsman™",
-                "shipments": int,        # parcels paid for this SKU
-                "units": int,            # customer units (deduped across boxes)
-                "boxes_per_unit": float, # ~2.0 for Huntsman, ~1.0 single-box SKUs
+                "shipments": int,                # ShipStation entries (NOT parcels)
+                "units": int,                    # customer units (deduped)
+                "physical_boxes_per_unit": int,  # config: Huntsman=2, default=1
                 "attributed_cost_usd": float,
-                "avg_cost_per_unit_usd": float,  # cost ÷ customer units
+                "avg_cost_per_unit_usd": float,  # all-boxes-bundled cost ÷ units
+                "cost_per_physical_box_usd": float,  # avg_per_unit ÷ boxes_per_unit
                 "carriers": [
                     {"carrier_code": "fedex", "service_code": "fedex_home_delivery",
                      "shipments": int, "attributed_cost_usd": float},
@@ -672,18 +707,29 @@ def shipping_cost_by_sku(
         units = t["units"]
         shipments = len(t["shipments"])
         cost = t["attributed_cost_usd"]
-        # boxes_per_unit surfaces multi-parcel SKUs (e.g. Huntsman ≈ 2.0).
-        # Round to 2dp so a perfect 1-box SKU shows 1.0 and a 2-box SKU
-        # shows 2.0, with mixed (some bundles consolidated) showing 1.4-ish.
-        boxes_per_unit = round(shipments / units, 2) if units > 0 else None
+        # Truth source for physical parcel count is the per-SKU config
+        # map (Huntsman = 2). ShipStation entry counts can't be trusted
+        # as box counts because operations bundles 2 physical Huntsman
+        # parcels into 1 ShipStation entry whose cost is the carrier's
+        # combined charge for both. cost_per_physical_box_usd divides
+        # the all-boxes-bundled cost-per-unit by that known parcel
+        # count to surface a per-box figure that lines up with the
+        # carrier rate sheet (Huntsman: ~$60/box at $120/unit).
+        physical_boxes = _physical_boxes_for_sku(sku)
+        avg_per_unit = round(cost / units, 2) if units > 0 else None
+        cost_per_box = (
+            round(cost / (units * physical_boxes), 2)
+            if (units > 0 and physical_boxes > 0) else None
+        )
         by_sku_list.append({
             "sku": sku,
             "title": t["title"],
             "shipments": shipments,
             "units": units,
-            "boxes_per_unit": boxes_per_unit,
+            "physical_boxes_per_unit": physical_boxes,
             "attributed_cost_usd": round(cost, 2),
-            "avg_cost_per_unit_usd": round(cost / units, 2) if units > 0 else None,
+            "avg_cost_per_unit_usd": avg_per_unit,
+            "cost_per_physical_box_usd": cost_per_box,
             "carriers": carriers_out,
         })
     by_sku_list.sort(key=lambda d: -d["attributed_cost_usd"])
@@ -745,8 +791,11 @@ def shipping_cost_by_sku(
             "accessories. (2) PRO-RATA fallback: shipments with no fulfillment match "
             "(rare — older orders) split cost across all order lines by value share. "
             "attribution_mode.line_keyed_share shows what fraction of the window is exact. "
-            "Units are deduped on (order_id, sku, line_idx); boxes_per_unit exposes the "
-            "true parcel-per-customer-unit ratio (Huntsman ≈ 2.0). Free-shipping (cost=0) "
-            "and voided shipments excluded."
+            "Units are deduped on (order_id, sku, line_idx). Physical-box count is from "
+            "a per-SKU config (Huntsman=2, default=1) since ShipStation typically captures "
+            "Huntsman's 2 physical boxes as a single entry whose cost is the carrier's "
+            "combined charge — so cost_per_physical_box_usd = avg_cost_per_unit_usd / "
+            "physical_boxes_per_unit lines up with the carrier rate sheet (~$60/box at "
+            "~$120/unit). Free-shipping (cost=0) and voided shipments excluded."
         ),
     }

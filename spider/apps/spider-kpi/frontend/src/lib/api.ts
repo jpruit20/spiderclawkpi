@@ -1921,14 +1921,20 @@ export interface ShippingCostBySku {
     shipments: number
     units: number
     /**
-     * Average parcels-per-customer-unit. ~2.0 means the SKU ships in 2 boxes
-     * (Huntsman); ~1.0 means single-box; 1.x means mixed (some bundles
-     * consolidated). Multiplies through avg_cost_per_unit_usd already since
-     * units are deduped against multi-shipment lines.
+     * Physical parcels per customer unit, from a per-SKU config map
+     * (Huntsman=2, default=1). NOT derived from shipment counts —
+     * ShipStation typically captures Huntsman's 2 physical boxes as
+     * a single entry whose cost is the carrier's combined charge.
      */
-    boxes_per_unit: number | null
+    physical_boxes_per_unit: number
     attributed_cost_usd: number
+    /** All-boxes-bundled shipping cost per customer unit. */
     avg_cost_per_unit_usd: number | null
+    /**
+     * avg_cost_per_unit_usd / physical_boxes_per_unit. Lines up with
+     * the carrier rate sheet (~$60/box for Huntsman at $120/unit).
+     */
+    cost_per_physical_box_usd: number | null
     carriers: Array<{
       carrier_code: string
       service_code: string | null

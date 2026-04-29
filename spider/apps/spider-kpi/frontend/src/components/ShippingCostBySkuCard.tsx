@@ -17,6 +17,12 @@ import type { ShippingCostBySku } from '../lib/api'
  *
  * Window control: 30d / 90d / 180d / 365d.
  *
+ * Multi-box SKUs (Huntsman = 2 boxes per customer unit, configured in
+ * shipping_intelligence.py): cost-per-unit reflects the all-boxes-bundled
+ * carrier charge per customer unit, and cost-per-box divides that by
+ * the configured parcel count so the per-box figure lines up with the
+ * carrier rate sheet (~$60/box for Huntsman at ~$120/unit).
+ *
  * NOTE on Giant Huntsman: this card only shows what shipped through
  * ShipStation (parcel carriers). Giant Huntsman LTL freight is booked
  * outside ShipStation and isn't in this dataset — once that integration
@@ -173,15 +179,25 @@ export function ShippingCostBySkuCard() {
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>SKU</th>
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>Title</th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Units</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Shipments</th>
                   <th
                     style={{ textAlign: 'right', padding: '6px 8px' }}
-                    title="Average parcels per customer unit. Huntsman ships in 2 boxes so it shows ~2.0; single-box SKUs show ~1.0."
+                    title="Physical parcels per customer unit (configured per SKU). Huntsman = 2 boxes; default = 1."
                   >
-                    Boxes / unit
+                    Boxes
                   </th>
                   <th style={{ textAlign: 'right', padding: '6px 8px' }}>Spend</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Avg / unit</th>
+                  <th
+                    style={{ textAlign: 'right', padding: '6px 8px' }}
+                    title="All-boxes-bundled shipping cost per customer unit."
+                  >
+                    Cost / unit
+                  </th>
+                  <th
+                    style={{ textAlign: 'right', padding: '6px 8px' }}
+                    title="Cost per physical parcel (cost-per-unit ÷ boxes-per-unit). Lines up with carrier rate sheet."
+                  >
+                    Cost / box
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -200,12 +216,15 @@ export function ShippingCostBySkuCard() {
                         </td>
                         <td style={{ padding: '6px 8px', maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title || '—'}</td>
                         <td style={{ textAlign: 'right', padding: '6px 8px' }}>{s.units.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', padding: '6px 8px' }}>{s.shipments.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', padding: '6px 8px', color: s.boxes_per_unit && s.boxes_per_unit >= 1.5 ? 'var(--orange)' : undefined }}>
-                          {s.boxes_per_unit != null ? s.boxes_per_unit.toFixed(2) : '—'}
+                        <td
+                          style={{ textAlign: 'right', padding: '6px 8px', color: s.physical_boxes_per_unit > 1 ? 'var(--orange)' : undefined }}
+                          title={s.physical_boxes_per_unit > 1 ? 'Multi-box SKU (config)' : 'Single-box SKU'}
+                        >
+                          {s.physical_boxes_per_unit}
                         </td>
                         <td style={{ textAlign: 'right', padding: '6px 8px', fontWeight: 600, color: 'var(--orange)' }}>{fmtCurrency(s.attributed_cost_usd)}</td>
                         <td style={{ textAlign: 'right', padding: '6px 8px' }}>{fmtCurrency2(s.avg_cost_per_unit_usd)}</td>
+                        <td style={{ textAlign: 'right', padding: '6px 8px', color: 'var(--muted)' }}>{fmtCurrency2(s.cost_per_physical_box_usd)}</td>
                       </tr>
                       {isOpen ? (
                         <tr key={`${s.sku}-detail`}>
