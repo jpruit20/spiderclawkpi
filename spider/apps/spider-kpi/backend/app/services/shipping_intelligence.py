@@ -451,6 +451,17 @@ def shipping_cost_by_sku(
             -- the truth-key: it pairs 1:1 with a Shopify fulfillment
             -- record, which carries the actual line_items that went
             -- in this physical box.
+            --
+            -- Cost truth source (Joseph 2026-04-29): when a FedEx
+            -- invoice exists for this tracking_number, use the
+            -- invoiced NET amount as the authoritative cost. Falls
+            -- back to ss.shipment_cost only when there's no invoice
+            -- yet (recent shipments — FBO has a 2-7 day lag). This
+            -- corrects the systematic ShipStation overstatement
+            -- found in the 22-month invoice backfill (~$17/ship
+            -- average drift, concentrated on commercial Ground).
+            -- The cost_source column lets the dashboard show what
+            -- fraction of cost is invoice-truth vs ShipStation-est.
             SELECT
                 ss.id,
                 ss.ss_order_id,
@@ -459,10 +470,18 @@ def shipping_cost_by_sku(
                 NULLIF(ss.raw_payload->>'trackingNumber', '') AS tracking_number,
                 ss.carrier_code,
                 ss.service_code,
-                ss.shipment_cost,
+                COALESCE(fic.charge_amount_usd, ss.shipment_cost) AS shipment_cost,
+                CASE
+                    WHEN fic.charge_amount_usd IS NOT NULL THEN 'fedex_invoice'
+                    ELSE 'shipstation_estimate'
+                END AS cost_source,
                 ss.ship_date,
                 ss.weight_oz
             FROM shipstation_shipments ss
+            LEFT JOIN fedex_invoice_charges fic
+              ON fic.tracking_number = NULLIF(ss.raw_payload->>'trackingNumber', '')
+              AND fic.charge_category = 'NET'
+              AND fic.is_spider = true
             WHERE ss.voided = false
               AND ss.ship_date >= CURRENT_DATE - (:days || ' days')::interval
               AND ss.shipment_cost > 0
@@ -537,6 +556,7 @@ def shipping_cost_by_sku(
                 s.carrier_code,
                 s.service_code,
                 s.shipment_cost,
+                s.cost_source,
                 s.ship_date,
                 fl.sku, fl.title, fl.line_idx, fl.qty,
                 (s.shipment_cost * (fl.qty * fl.unit_price)
@@ -560,6 +580,7 @@ def shipping_cost_by_sku(
                 s.carrier_code,
                 s.service_code,
                 s.shipment_cost,
+                s.cost_source,
                 s.ship_date,
                 line_data.line->>'sku' AS sku,
                 line_data.line->>'title' AS title,
@@ -581,7 +602,7 @@ def shipping_cost_by_sku(
         prorata_allocated AS (
             SELECT
                 shipment_id, order_id, carrier_code, service_code, shipment_cost,
-                ship_date, sku, title, line_idx, qty,
+                cost_source, ship_date, sku, title, line_idx, qty,
                 (shipment_cost * (qty * unit_price)
                   / NULLIF(SUM(qty * unit_price) OVER (PARTITION BY shipment_id), 0))
                   AS attributed_cost,
@@ -590,12 +611,12 @@ def shipping_cost_by_sku(
         )
         SELECT
             sku, title, carrier_code, service_code, ship_date, shipment_id,
-            order_id, line_idx, qty, attributed_cost, attribution_mode
+            order_id, line_idx, qty, attributed_cost, attribution_mode, cost_source
         FROM line_keyed
         UNION ALL
         SELECT
             sku, title, carrier_code, service_code, ship_date, shipment_id,
-            order_id, line_idx, qty, attributed_cost, attribution_mode
+            order_id, line_idx, qty, attributed_cost, attribution_mode, cost_source
         FROM prorata_allocated
         WHERE attributed_cost IS NOT NULL
     """), {"days": days}).all()
@@ -645,6 +666,14 @@ def shipping_cost_by_sku(
     line_keyed_cost = 0.0
     prorata_cost = 0.0
 
+    # Track cost-source mix (FedEx invoice = truth, ShipStation =
+    # estimate for not-yet-billed). Lets the dashboard show "X% of
+    # cost numbers come from FedEx invoiced truth".
+    invoice_truth_cost = 0.0
+    shipstation_estimate_cost = 0.0
+    invoice_truth_shipments: set[int] = set()
+    shipstation_estimate_shipments: set[int] = set()
+
     all_shipments: set[int] = set()
     for r in rows:
         sku = r.sku or "unknown"
@@ -655,6 +684,13 @@ def shipping_cost_by_sku(
             line_keyed_cost += cost
         else:
             prorata_cost += cost
+        # Cost source bookkeeping
+        if getattr(r, "cost_source", None) == "fedex_invoice":
+            invoice_truth_cost += cost
+            invoice_truth_shipments.add(r.shipment_id)
+        else:
+            shipstation_estimate_cost += cost
+            shipstation_estimate_shipments.add(r.shipment_id)
 
         st = sku_totals[sku]
         if not st["title"] and r.title:
@@ -776,12 +812,35 @@ def shipping_cost_by_sku(
                     if (line_keyed_cost + prorata_cost) > 0 else None
                 ),
             },
+            # Cost source mix: FedEx invoice (truth, billed amount) vs
+            # ShipStation estimate (fallback when invoice hasn't landed
+            # yet — typical for the most recent ~7 days due to FBO lag).
+            # invoice_truth_share = 1.0 means EVERY shipment in this
+            # window has a matched FedEx invoice; lower means the dashboard
+            # is partly relying on ShipStation's pre-ship estimates.
+            "cost_source": {
+                "invoice_truth_cost_usd": round(invoice_truth_cost, 2),
+                "shipstation_estimate_cost_usd": round(shipstation_estimate_cost, 2),
+                "invoice_truth_shipments": len(invoice_truth_shipments),
+                "shipstation_estimate_shipments": len(shipstation_estimate_shipments),
+                "invoice_truth_share": (
+                    round(invoice_truth_cost / (invoice_truth_cost + shipstation_estimate_cost), 3)
+                    if (invoice_truth_cost + shipstation_estimate_cost) > 0 else None
+                ),
+            },
         },
         "by_sku": by_sku_list[:top_n_skus],
         "by_carrier": by_carrier_list,
         "trend": trend_list,
         "method_note": (
-            "Two-mode attribution. (1) LINE-KEYED (truth): every ShipStation shipment "
+            "Cost source: FedEx invoice (NET billed amount, is_spider=true) is the "
+            "authoritative truth source for every shipment that has a matched "
+            "invoice in fedex_invoice_charges (joined by tracking_number). "
+            "ShipStation's shipment_cost is the FALLBACK only when no invoice has "
+            "landed yet — typical for the most recent 2-7 days because the FBO "
+            "weekly export has that lag. cost_source.invoice_truth_share shows "
+            "what fraction of the window's spend is from invoiced truth vs estimate. "
+            "Two-mode SKU attribution. (1) LINE-KEYED (truth): every ShipStation shipment "
             "is JOINed to its Shopify fulfillment via tracking_number — Shopify's "
             "fulfillments[].line_items tells us EXACTLY which order lines went in that "
             "box. Cost goes pro-rata only across those lines (usually 1 line per box, "

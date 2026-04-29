@@ -168,6 +168,34 @@ export function ShippingCostBySkuCard() {
           <div style={{ fontSize: 11, color: 'var(--muted)' }}>SKUs · carriers</div>
           <div style={{ fontSize: 22, fontWeight: 700 }}>{t.skus_seen} <span style={{ fontSize: 13, color: 'var(--muted)' }}>· {t.carriers_seen}</span></div>
         </div>
+        {t.cost_source && t.cost_source.invoice_truth_share != null ? (
+          <div
+            style={{
+              padding: '4px 8px',
+              borderRadius: 4,
+              background: t.cost_source.invoice_truth_share >= 0.95
+                ? 'rgba(57,208,143,0.10)'
+                : t.cost_source.invoice_truth_share >= 0.7
+                ? 'rgba(255,178,87,0.10)'
+                : 'rgba(255,109,122,0.10)',
+              borderLeft: `3px solid ${
+                t.cost_source.invoice_truth_share >= 0.95 ? '#39d08f'
+                : t.cost_source.invoice_truth_share >= 0.7 ? '#ffb257'
+                : '#ff6d7a'
+              }`,
+            }}
+            title={`${t.cost_source.invoice_truth_shipments.toLocaleString()} shipments use FedEx invoiced cost (truth); ${t.cost_source.shipstation_estimate_shipments.toLocaleString()} fall back to ShipStation estimate (typical for the most recent ~7 days due to FBO export lag)`}
+          >
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>Cost truth source</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>
+              {Math.round(t.cost_source.invoice_truth_share * 100)}%
+              <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 4 }}>FedEx invoice</span>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+              rest is ShipStation estimate
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {view === 'by_sku' ? (

@@ -1919,6 +1919,21 @@ export interface ShippingCostBySku {
     total_shipping_cost_usd: number
     skus_seen: number
     carriers_seen: number
+    /**
+     * Cost-source mix: FedEx invoice (truth, billed amount) vs
+     * ShipStation estimate (fallback when invoice hasn't landed yet,
+     * typical for the most recent 2-7 days due to FBO export lag).
+     * invoice_truth_share is the fraction of total cost from invoice
+     * truth — 1.0 means every shipment is invoice-backed; lower means
+     * the dashboard is partly relying on ShipStation pre-ship estimates.
+     */
+    cost_source?: {
+      invoice_truth_cost_usd: number
+      shipstation_estimate_cost_usd: number
+      invoice_truth_shipments: number
+      shipstation_estimate_shipments: number
+      invoice_truth_share: number | null
+    }
   }
   by_sku: Array<{
     sku: string
