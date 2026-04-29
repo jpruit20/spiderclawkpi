@@ -67,13 +67,19 @@ _USER_METRICS = {"Device Paired", "Device Unpaired", "Cook Completed", "Opened A
 
 def _profile_lookup(db: Session, profile_ids: list[str]) -> dict[str, KlaviyoProfile]:
     """Bulk-fetch Klaviyo profiles for a batch of event profile_ids.
-    Returns ``{profile_id: profile}`` map; missing IDs are simply absent."""
+    Returns ``{klaviyo_id: profile}`` map; missing IDs are simply absent.
+
+    Note the field-name mismatch: events store the profile reference as
+    ``klaviyo_profile_id``; the profile table calls the same value
+    ``klaviyo_id``. We key the returned map by ``klaviyo_id`` so callers
+    can look up profiles using the event's ``klaviyo_profile_id`` value
+    directly."""
     if not profile_ids:
         return {}
     rows = db.execute(
-        select(KlaviyoProfile).where(KlaviyoProfile.klaviyo_profile_id.in_(profile_ids))
+        select(KlaviyoProfile).where(KlaviyoProfile.klaviyo_id.in_(profile_ids))
     ).scalars().all()
-    return {p.klaviyo_profile_id: p for p in rows}
+    return {p.klaviyo_id: p for p in rows}
 
 
 def _device_type_to_controller_model(device_type: str | None) -> str | None:
