@@ -36,7 +36,7 @@ import logging
 import sys
 import time
 
-from app.core.db import SessionLocal
+from app.db.session import SessionLocal
 from app.ingestion.connectors.shopify import sync_shopify_orders
 
 
