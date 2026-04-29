@@ -422,6 +422,57 @@ def health_check() -> dict[str, Any]:
 # ── Parsers ──────────────────────────────────────────────────────────
 
 
+def _expand_csv_payloads(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Walk attachments, returning a flat list of CSV payloads.
+
+    Handles three packaging shapes FedEx FBO uses depending on report
+    size and account config:
+      * Direct .csv / text-csv attachment — return as-is.
+      * .zip archive — extract every CSV inside (ignores other entries).
+      * Multiple CSVs in one ZIP — yield one payload per extracted CSV.
+
+    Each payload is ``{filename, content_bytes}`` regardless of source
+    shape, so the parser body can stay flat.
+    """
+    import zipfile
+
+    out: list[dict[str, Any]] = []
+    for att in attachments:
+        name = att["filename"].lower()
+        ctype = att["content_type"]
+        if name.endswith(".csv") or "csv" in ctype:
+            out.append({"filename": att["filename"], "content_bytes": att["content_bytes"]})
+            continue
+        if name.endswith(".zip") or "zip" in ctype or ctype == "application/x-zip-compressed":
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(att["content_bytes"]))
+            except zipfile.BadZipFile:
+                logger.warning("kpi_inbox.fedex: bad zip archive %s", att["filename"])
+                continue
+            for member in zf.namelist():
+                if not member.lower().endswith(".csv"):
+                    continue
+                try:
+                    inner = zf.read(member)
+                except (KeyError, zipfile.BadZipFile) as exc:
+                    logger.warning("kpi_inbox.fedex: could not read %s from %s: %s", member, att["filename"], exc)
+                    continue
+                out.append({
+                    # Preserve the parent zip name in the filename for
+                    # provenance (raw_payload.filename gets the combined
+                    # path, useful when the same zip carries multiple CSVs).
+                    "filename": f"{att['filename']}::{member}",
+                    "content_bytes": inner,
+                })
+            continue
+        # Other types (PDF, XML, etc.) — log and skip
+        logger.debug(
+            "kpi_inbox.fedex: skipping non-CSV/non-ZIP attachment %s (type=%s)",
+            att["filename"], ctype,
+        )
+    return out
+
+
 def _parse_fedex_invoice(
     db: Session, msg: Message, attachments: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -431,14 +482,14 @@ def _parse_fedex_invoice(
     know FedEx's exact column names (they vary by report flavor and
     account region). Rather than guess, this parser:
 
-      1. Decodes each CSV attachment (UTF-8 with BOM tolerance, falls
-         back to latin-1).
-      2. Iterates rows via csv.DictReader (uses the first row as
-         header — FedEx FBO reports have one).
-      3. For each row, writes a fedex_invoice_charges entry with
+      1. Expands each attachment via _expand_csv_payloads (handles raw
+         CSV, single ZIP, multi-CSV ZIP).
+      2. Decodes (UTF-8 with BOM tolerance, falls back to latin-1).
+      3. Iterates rows via csv.DictReader.
+      4. For each row, writes a fedex_invoice_charges entry with
          charge_category='UNPARSED' and the full row preserved in
          raw_payload. Required columns get defaulted to safe values.
-      4. Logs sample column names so a refinement pass can swap in
+      5. Logs sample column names so a refinement pass can swap in
          the real schema after a real invoice lands.
 
     Once a real invoice arrives, swap the body for a precise mapping;
@@ -449,17 +500,17 @@ def _parse_fedex_invoice(
     from app.models import FedexInvoiceCharge
     import csv
 
-    csv_attachments = [
-        a for a in attachments
-        if a["filename"].lower().endswith(".csv") or "csv" in a["content_type"]
-    ]
-    if not csv_attachments:
-        logger.info("kpi_inbox.fedex: no CSV attachment in message subject=%r", msg.get("Subject"))
+    csv_payloads = _expand_csv_payloads(attachments)
+    if not csv_payloads:
+        logger.info(
+            "kpi_inbox.fedex: no CSV/ZIP attachment in message subject=%r (%d attachments)",
+            msg.get("Subject"), len(attachments),
+        )
         return {"records_created": 0}
 
     inserted = 0
-    for att in csv_attachments:
-        raw = att["content_bytes"]
+    for payload in csv_payloads:
+        raw = payload["content_bytes"]
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -472,11 +523,11 @@ def _parse_fedex_invoice(
             dialect = csv.excel
         reader = csv.DictReader(io.StringIO(text), dialect=dialect)
         if not reader.fieldnames:
-            logger.warning("kpi_inbox.fedex: CSV %s has no header", att["filename"])
+            logger.warning("kpi_inbox.fedex: CSV %s has no header", payload["filename"])
             continue
         logger.info(
-            "kpi_inbox.fedex: parsing %s columns=%s",
-            att["filename"], list(reader.fieldnames)[:8],
+            "kpi_inbox.fedex: parsing %s columns_count=%d sample_columns=%s",
+            payload["filename"], len(reader.fieldnames), list(reader.fieldnames)[:10],
         )
 
         for row_idx, row in enumerate(reader):
@@ -484,12 +535,12 @@ def _parse_fedex_invoice(
             # which columns hold them. Once we do, swap to row[<col>].
             synth_invoice = (
                 row.get("Invoice Number") or row.get("InvoiceNumber") or row.get("invoice_number")
-                or f"unparsed-{att['filename']}"
+                or f"unparsed-{payload['filename']}"
             )[:64]
             synth_tracking = (
                 row.get("Tracking Number") or row.get("TrackingNumber")
                 or row.get("Tracking #") or row.get("tracking_number")
-                or f"unparsed-{att['filename']}-{row_idx}"
+                or f"unparsed-{payload['filename']}-{row_idx}"
             )[:64]
             try:
                 charge_amount = float(
@@ -508,7 +559,7 @@ def _parse_fedex_invoice(
                 charge_description="Captured prior to parser refinement; see raw_payload",
                 charge_amount_usd=charge_amount,
                 raw_payload={
-                    "filename": att["filename"],
+                    "filename": payload["filename"],
                     "row_index": row_idx,
                     "row": row,
                 },
@@ -516,7 +567,7 @@ def _parse_fedex_invoice(
             db.add(charge)
             inserted += 1
 
-    return {"records_created": inserted, "extra": {"csv_attachments_seen": len(csv_attachments)}}
+    return {"records_created": inserted, "extra": {"csv_payloads_seen": len(csv_payloads)}}
 
 
 # Registration order = priority (first match wins).
