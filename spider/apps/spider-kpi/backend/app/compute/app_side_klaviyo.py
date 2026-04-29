@@ -65,21 +65,33 @@ _DEVICE_METRICS = {"Device Paired", "Device Unpaired", "Cook Completed"}
 _USER_METRICS = {"Device Paired", "Device Unpaired", "Cook Completed", "Opened App", "First Cooking Session"}
 
 
-def _profile_lookup(db: Session, profile_ids: list[str]) -> dict[str, KlaviyoProfile]:
-    """Bulk-fetch Klaviyo profiles for a batch of event profile_ids.
-    Returns ``{klaviyo_id: profile}`` map; missing IDs are simply absent.
+def _profile_lookup(db: Session, profile_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Bulk-fetch the email + klaviyo_id for each event's profile.
 
-    Note the field-name mismatch: events store the profile reference as
-    ``klaviyo_profile_id``; the profile table calls the same value
-    ``klaviyo_id``. We key the returned map by ``klaviyo_id`` so callers
-    can look up profiles using the event's ``klaviyo_profile_id`` value
-    directly."""
+    Why raw SQL: the ``KlaviyoProfile`` ORM model declares
+    ``TimestampMixin`` (which contributes ``created_at`` / ``updated_at``)
+    but the live ``klaviyo_profiles`` table doesn't have those columns —
+    a model/schema drift unrelated to this work. ``select(KlaviyoProfile)``
+    therefore raises ``UndefinedColumn`` on the live DB. We only need
+    email + klaviyo_id here, so go column-explicit and dodge the drift.
+
+    Returns ``{klaviyo_id: {"email": str | None}}``. Field-name mismatch
+    note: events store the profile reference as ``klaviyo_profile_id``;
+    the profile table calls the same value ``klaviyo_id``. We key the
+    returned map by ``klaviyo_id`` so callers can look up profiles using
+    the event's ``klaviyo_profile_id`` value directly.
+    """
     if not profile_ids:
         return {}
     rows = db.execute(
-        select(KlaviyoProfile).where(KlaviyoProfile.klaviyo_id.in_(profile_ids))
-    ).scalars().all()
-    return {p.klaviyo_id: p for p in rows}
+        text("""
+            SELECT klaviyo_id, email
+            FROM klaviyo_profiles
+            WHERE klaviyo_id = ANY(:ids)
+        """),
+        {"ids": profile_ids},
+    ).all()
+    return {r.klaviyo_id: {"email": r.email} for r in rows}
 
 
 def _device_type_to_controller_model(device_type: str | None) -> str | None:
@@ -156,7 +168,8 @@ def synthesize_from_klaviyo_events(
         props = evt.properties or {}
         # Email may live on the event row OR on the linked profile.
         profile = profiles.get(evt.klaviyo_profile_id) if evt.klaviyo_profile_id else None
-        email = (evt.email or (profile.email if profile else None)) if profile or evt.email else None
+        profile_email = profile.get("email") if profile else None
+        email = evt.email or profile_email
         ukey = _user_key(email)
 
         # User observation — needs user_key. Different ref-id per event
