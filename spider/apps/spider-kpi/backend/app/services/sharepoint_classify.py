@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.models import SharepointDocument
 
 
-CLASSIFIER_VERSION = "v1.2.0"  # broaden Spider keywords + Qifei doc-kind patterns (BL#/FAPIAO/API#/CTN/patent/quote/cad)
+CLASSIFIER_VERSION = "v1.2.1"  # remove kettle_joe / pellet_joe (different company); add kettle_cart correctly
 
 
 # ── Spider-relevance detection (vendor sites) ────────────────────────
@@ -58,29 +58,51 @@ CLASSIFIER_VERSION = "v1.2.0"  # broaden Spider keywords + Qifei doc-kind patter
 
 # Spider product / SKU / project-tag keywords. Case-insensitive match.
 # Anything matching here flips spider_relevant=true.
+#
+# IMPORTANT — only patterns that uniquely identify Spider Grills
+# products (per spidergrills.com) belong here. Vendor workspaces like
+# Qifei manufacture for multiple companies; matching too broadly
+# (e.g. plain "kettle" or product names of unrelated companies)
+# pollutes the dashboard with non-Spider docs. When in doubt: a doc
+# that doesn't pass this filter is correctly excluded — false
+# negatives are recoverable (add a SKU); false positives erode trust.
 _SPIDER_KEYWORDS_RE = re.compile(
     r"\b("
     # Brand mentions
     r"spider[ \-_]?grills?|spidergrills?|"
-    # Product names — `huntman` is a vendor typo of `huntsman` we see
-    # repeatedly in Qifei filenames; matching it broadens recall.
+    # Spider product names. `huntman` is a vendor typo of `huntsman`
+    # seen repeatedly in Qifei filenames — including it broadens recall
+    # without false-positive risk because no other product uses that
+    # spelling.
     r"huntsman|hunts?man|giant[ \-_]?huntsman|giant[ \-_]?hunts?man|"
-    r"venom|webcraft|giant[ \-_]?webcraft|joehy|"
-    # Joe-line products manufactured by Qifei before the IP transfer
-    # (Kettle Joe and Pellet Joe → now SPG-branded; CN appearance
-    # design + utility model patents reference these names).
-    r"kettle[ \-_]?joe|pellet[ \-_]?joe|"
-    # EH Oven is a Spider/Webcraft adjacent product Qifei makes parts for
+    r"venom|webcraft|giant[ \-_]?webcraft|"
+    # Joehy is the Spider internal QC/model code for Huntsman
+    # ('JOEHY W:K:22:1:V' per the product taxonomy memory). Distinct
+    # from the unrelated 'Kettle Joe' / 'Pellet Joe' products that
+    # belong to a different company; those are intentionally NOT
+    # matched here.
+    r"joehy|"
+    # Spider's Kettle Cart product (project 00178) — must be 'kettle
+    # cart' specifically; bare 'kettle' would over-match unrelated
+    # products like Kettle Joe.
+    r"kettle[ \-_]?cart|"
+    # EH Oven appears alongside Webcraft in Qifei's shipping docs
+    # ('EH Oven CTN3 Webcraft Shipment3 & Webcraft Kettle Ring').
+    # Treat as Webcraft adjacent.
     r"eh[ \-_]?oven|"
     # Common Spider SKU prefixes (SG-H-01, SG-GH-01, SG-22KC, SG-NL-HWC, etc)
     r"sg-[a-z0-9]{1,8}(?:-[a-z0-9]{1,8})*|"
-    # AMW project numbers we know correspond to Spider products
+    # AMW project numbers that correspond to Spider products
     # (00116=Venom, 00163=Huntsman, 00171=Webcraft, 00176=Giant Huntsman,
-    #  00177=Giant Webcraft, 00178=Spider Kettle Cart). Add new project
-    #  numbers here as Spider expands its product line.
+    #  00177=Giant Webcraft, 00178=Spider Kettle Cart). Update this
+    #  list as Spider expands its product line — DO NOT add project
+    #  numbers from unrelated companies even if Qifei manufactures
+    #  for them.
     r"00116|00163|00171|00176|00177|00178|"
-    # SPG abbreviation Qifei uses on commercial invoices to AMW
-    r"to[ \-_]?spg|spg[ \-_]?(?:venom|huntsman|hunts?man|kettle|webcraft)"
+    # SPG abbreviation Qifei uses on commercial invoices to AMW.
+    # Constrained to combinations with Spider product keywords so
+    # 'spg' alone doesn't false-positive (it's a common acronym).
+    r"to[ \-_]?spg|spg[ \-_]?(?:venom|huntsman|hunts?man|kettle[ \-_]?cart|webcraft)"
     r")\b",
     re.IGNORECASE,
 )
