@@ -312,6 +312,204 @@ def cogs_rollup(
     }
 
 
+@router.get("/vendor-workspace")
+def vendor_workspace(
+    days: int = Query(90, ge=1, le=730),
+    top_n_recent: int = Query(15, ge=1, le=50),
+    db: Session = Depends(db_session),
+) -> dict[str, Any]:
+    """Roll-up of Spider-relevant content from vendor SharePoint sites.
+
+    Vendor sites = sites where ``spider_product`` is NULL on the
+    sharepoint_sites row (Kienco, Qifei, future). Per-document
+    classification (sharepoint_classify) tags spider_relevant +
+    detected_doc_kind via filename keywords. This endpoint surfaces
+    those tagged docs grouped by vendor, kind, and product so the
+    Operations + Product Engineering cards can show "what's the
+    vendor universe doing this week / month".
+
+    Returns:
+      * totals: window stats (total docs, spider-relevant count,
+        recent activity, doc kinds seen)
+      * by_vendor: per-site breakdown (Kienco vs Qifei) with
+        counts/recent-activity
+      * by_doc_kind: counts grouped by detected_doc_kind
+        (qa / freight_ocean / freight_air / shipping / invoice /
+        quote / patent_ip / cad_drawing / unclassified)
+      * by_spider_product: counts grouped by detected product
+      * recent_docs: top-N most recently modified Spider-relevant docs
+        with web_url for click-through
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Identify vendor sites — those with NULL spider_product (mixed-content
+    # workspace pattern). Excludes per-product Spider sites which always
+    # carry a fixed spider_product set at the site level.
+    vendor_sites = db.execute(
+        select(SharepointSite.id, SharepointSite.site_path, SharepointSite.display_name, SharepointSite.graph_site_id)
+        .where(SharepointSite.spider_product.is_(None))
+        .where(SharepointSite.enabled.is_(True))
+    ).all()
+    vendor_site_ids = [s.graph_site_id for s in vendor_sites if s.graph_site_id]
+
+    if not vendor_site_ids:
+        return {
+            "window_days": days,
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "totals": {"vendor_sites": 0, "files_total": 0, "spider_relevant": 0,
+                       "recent_activity": 0, "doc_kinds_tagged": 0},
+            "by_vendor": [], "by_doc_kind": [], "by_spider_product": [],
+            "recent_docs": [],
+            "method_note": "No vendor sites configured. Run grant_sharepoint_sites.py first.",
+        }
+
+    # Per-vendor breakdown
+    by_vendor_rows = db.execute(
+        select(
+            SharepointDocument.graph_site_id,
+            func.count().label("files"),
+            func.count().filter(SharepointDocument.spider_relevant.is_(True)).label("spider_relevant"),
+            func.count().filter(
+                SharepointDocument.spider_relevant.is_(True),
+                SharepointDocument.modified_at_remote >= cutoff,
+            ).label("recent_activity"),
+            func.count().filter(
+                SharepointDocument.spider_relevant.is_(True),
+                SharepointDocument.detected_doc_kind.is_not(None),
+            ).label("doc_kinds_tagged"),
+        )
+        .where(SharepointDocument.graph_site_id.in_(vendor_site_ids))
+        .where(SharepointDocument.is_folder.is_(False))
+        .group_by(SharepointDocument.graph_site_id)
+    ).all()
+
+    site_meta = {
+        s.graph_site_id: {"id": s.id, "site_path": s.site_path, "display_name": s.display_name}
+        for s in vendor_sites
+    }
+    by_vendor = []
+    for r in by_vendor_rows:
+        meta = site_meta.get(r.graph_site_id, {})
+        by_vendor.append({
+            "site_path": meta.get("site_path", "?"),
+            "display_name": meta.get("display_name") or meta.get("site_path"),
+            "files_total": int(r.files or 0),
+            "spider_relevant": int(r.spider_relevant or 0),
+            "recent_activity_in_window": int(r.recent_activity or 0),
+            "doc_kinds_tagged": int(r.doc_kinds_tagged or 0),
+        })
+    by_vendor.sort(key=lambda x: -x["spider_relevant"])
+
+    # By doc kind (Spider-relevant only)
+    kind_rows = db.execute(
+        select(
+            SharepointDocument.detected_doc_kind,
+            func.count().label("n"),
+            func.count().filter(SharepointDocument.modified_at_remote >= cutoff).label("recent"),
+        )
+        .where(SharepointDocument.graph_site_id.in_(vendor_site_ids))
+        .where(SharepointDocument.is_folder.is_(False))
+        .where(SharepointDocument.spider_relevant.is_(True))
+        .group_by(SharepointDocument.detected_doc_kind)
+        .order_by(func.count().desc())
+    ).all()
+    by_doc_kind = [
+        {
+            "doc_kind": r.detected_doc_kind or "unclassified",
+            "count": int(r.n or 0),
+            "recent_in_window": int(r.recent or 0),
+        }
+        for r in kind_rows
+    ]
+
+    # By Spider product (detected from filename for vendor-site rows)
+    product_rows = db.execute(
+        select(
+            SharepointDocument.spider_product,
+            func.count().label("n"),
+            func.count().filter(SharepointDocument.modified_at_remote >= cutoff).label("recent"),
+        )
+        .where(SharepointDocument.graph_site_id.in_(vendor_site_ids))
+        .where(SharepointDocument.is_folder.is_(False))
+        .where(SharepointDocument.spider_relevant.is_(True))
+        .group_by(SharepointDocument.spider_product)
+        .order_by(func.count().desc())
+    ).all()
+    by_spider_product = [
+        {
+            "spider_product": r.spider_product or "unidentified",
+            "count": int(r.n or 0),
+            "recent_in_window": int(r.recent or 0),
+        }
+        for r in product_rows
+    ]
+
+    # Recent docs (top-N most recently modified)
+    recent_rows = db.execute(
+        select(
+            SharepointDocument.id,
+            SharepointDocument.graph_site_id,
+            SharepointDocument.name,
+            SharepointDocument.path,
+            SharepointDocument.web_url,
+            SharepointDocument.modified_at_remote,
+            SharepointDocument.modified_by_email,
+            SharepointDocument.detected_doc_kind,
+            SharepointDocument.spider_product,
+            SharepointDocument.semantic_type,
+            SharepointDocument.dashboard_division,
+        )
+        .where(SharepointDocument.graph_site_id.in_(vendor_site_ids))
+        .where(SharepointDocument.is_folder.is_(False))
+        .where(SharepointDocument.spider_relevant.is_(True))
+        .order_by(SharepointDocument.modified_at_remote.desc().nullslast())
+        .limit(top_n_recent)
+    ).all()
+    recent_docs = []
+    for r in recent_rows:
+        meta = site_meta.get(r.graph_site_id, {})
+        recent_docs.append({
+            "id": r.id,
+            "name": r.name,
+            "path": r.path,
+            "web_url": r.web_url,
+            "modified_at_remote": r.modified_at_remote.isoformat() if r.modified_at_remote else None,
+            "modified_by_email": r.modified_by_email,
+            "detected_doc_kind": r.detected_doc_kind,
+            "spider_product": r.spider_product,
+            "semantic_type": r.semantic_type,
+            "dashboard_division": r.dashboard_division,
+            "vendor_site_path": meta.get("site_path", "?"),
+            "vendor_display_name": meta.get("display_name") or meta.get("site_path"),
+        })
+
+    totals = {
+        "vendor_sites": len(by_vendor),
+        "files_total": sum(v["files_total"] for v in by_vendor),
+        "spider_relevant": sum(v["spider_relevant"] for v in by_vendor),
+        "recent_activity": sum(v["recent_activity_in_window"] for v in by_vendor),
+        "doc_kinds_tagged": sum(v["doc_kinds_tagged"] for v in by_vendor),
+    }
+    return {
+        "window_days": days,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "totals": totals,
+        "by_vendor": by_vendor,
+        "by_doc_kind": by_doc_kind,
+        "by_spider_product": by_spider_product,
+        "recent_docs": recent_docs,
+        "method_note": (
+            "Vendor sites = sharepoint_sites with spider_product=NULL "
+            "(Kienco, Qifei). Per-document Spider relevance is determined "
+            "by filename keyword match in app/services/sharepoint_classify.py. "
+            "Doc-kind tagging covers QA, freight (ocean/air), shipping, "
+            "invoice (commercial vendor billing including FAPIAO/API#), "
+            "quote, patent_ip, and CAD drawing extensions. Recent-activity "
+            "window is the requested days param."
+        ),
+    }
+
+
 @router.get("/intelligence/vendors")
 def vendor_directory(
     spider_product: Optional[str] = Query(None),

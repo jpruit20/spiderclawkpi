@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.models import SharepointDocument
 
 
-CLASSIFIER_VERSION = "v1.1.0"  # adds spider_relevant + detected_doc_kind for vendor sites
+CLASSIFIER_VERSION = "v1.2.0"  # broaden Spider keywords + Qifei doc-kind patterns (BL#/FAPIAO/API#/CTN/patent/quote/cad)
 
 
 # ── Spider-relevance detection (vendor sites) ────────────────────────
@@ -62,15 +62,25 @@ _SPIDER_KEYWORDS_RE = re.compile(
     r"\b("
     # Brand mentions
     r"spider[ \-_]?grills?|spidergrills?|"
-    # Product names
-    r"huntsman|giant[ \-_]?huntsman|venom|webcraft|giant[ \-_]?webcraft|joehy|"
+    # Product names — `huntman` is a vendor typo of `huntsman` we see
+    # repeatedly in Qifei filenames; matching it broadens recall.
+    r"huntsman|hunts?man|giant[ \-_]?huntsman|giant[ \-_]?hunts?man|"
+    r"venom|webcraft|giant[ \-_]?webcraft|joehy|"
+    # Joe-line products manufactured by Qifei before the IP transfer
+    # (Kettle Joe and Pellet Joe → now SPG-branded; CN appearance
+    # design + utility model patents reference these names).
+    r"kettle[ \-_]?joe|pellet[ \-_]?joe|"
+    # EH Oven is a Spider/Webcraft adjacent product Qifei makes parts for
+    r"eh[ \-_]?oven|"
     # Common Spider SKU prefixes (SG-H-01, SG-GH-01, SG-22KC, SG-NL-HWC, etc)
     r"sg-[a-z0-9]{1,8}(?:-[a-z0-9]{1,8})*|"
     # AMW project numbers we know correspond to Spider products
     # (00116=Venom, 00163=Huntsman, 00171=Webcraft, 00176=Giant Huntsman,
     #  00177=Giant Webcraft, 00178=Spider Kettle Cart). Add new project
     #  numbers here as Spider expands its product line.
-    r"00116|00163|00171|00176|00177|00178"
+    r"00116|00163|00171|00176|00177|00178|"
+    # SPG abbreviation Qifei uses on commercial invoices to AMW
+    r"to[ \-_]?spg|spg[ \-_]?(?:venom|huntsman|hunts?man|kettle|webcraft)"
     r")\b",
     re.IGNORECASE,
 )
@@ -121,16 +131,33 @@ def detect_spider_product(name: Optional[str], path: Optional[str]) -> Optional[
 # patterns first so a "Air Freight QA Report" isn't double-tagged.
 
 _DOC_KIND_PATTERNS = [
+    # Patent / IP filings (must match BEFORE generic shipping/invoice
+    # because some patent files mention "invoice" or "shipping" in
+    # context). Qifei has a lot of these: utility model patents,
+    # appearance designs, IP transfer agreements, FTO opinions.
+    (re.compile(
+        r"\b(patent|utility[ \-_]?model|appearance[ \-_]?design|"
+        r"ip[ \-_]?(?:certificate|transfer|assignment|transition|"
+        r"notice|filing|application|opinion|agency)|"
+        r"trademark[ \-_]?(?:application|registration|notice)|"
+        r"freedom[ \-_]?to[ \-_]?operate|\bfto\b|"
+        r"customs[ \-_]?recordation)",
+        re.IGNORECASE,
+    ), "patent_ip"),
     # Air freight (most specific freight type — match before generic shipping)
     (re.compile(
         r"\b(air[ \-_]?waybill|airway[ \-_]?bill|\bawb\b|air[ \-_]?freight|air[ \-_]?cargo)",
         re.IGNORECASE,
     ), "freight_air"),
-    # Ocean freight
+    # Ocean freight — broadened to capture Qifei's BL#/HBL/MBL/CTN
+    # patterns on Chinese vendor shipping docs.
     (re.compile(
-        r"\b(bill[ \-_]?of[ \-_]?lading|\bbol\b|\bb/l\b|ocean[ \-_]?freight|"
-        r"sea[ \-_]?freight|container[ \-_]?(?:#|number|no)|vessel|"
-        r"shipping[ \-_]?manifest|port[ \-_]?of[ \-_]?(?:loading|discharge))",
+        r"\b(bill[ \-_]?of[ \-_]?lading|\bbol\b|\bb/l\b|"
+        r"\bbl[ \-_]?#|\bhbl\b|\bmbl\b|"  # BL#xxxxx, HBL (House BL), MBL (Master BL)
+        r"ocean[ \-_]?freight|sea[ \-_]?freight|"
+        r"container[ \-_]?(?:#|number|no)|vessel|"
+        r"shipping[ \-_]?manifest|port[ \-_]?of[ \-_]?(?:loading|discharge)|"
+        r"ctn[0-9]{2,}|ctn[ \-_]?\d|\bcarton\b|debit[ \-_]?note)",
         re.IGNORECASE,
     ), "freight_ocean"),
     # QA / inspection (very specific to product quality, not fire safety etc.)
@@ -148,11 +175,28 @@ _DOC_KIND_PATTERNS = [
         r"shipment[ \-_]?(?:advice|notice|notification)|loading[ \-_]?(?:list|plan))",
         re.IGNORECASE,
     ), "shipping"),
-    # Commercial invoices (vendor billing us — distinct from FedEx invoices)
+    # Commercial invoices (vendor billing us — distinct from FedEx invoices).
+    # Includes API# (Asia Pacific Invoice prefix Qifei uses), FAPIAO
+    # (Chinese tax invoice), and proforma variants.
     (re.compile(
-        r"\b(commercial[ \-_]?invoice|proforma|pro[ \-_]?forma|vendor[ \-_]?invoice)",
+        r"\b(commercial[ \-_]?invoice|proforma|pro[ \-_]?forma|"
+        r"vendor[ \-_]?invoice|fapiao|api[ \-_]?#|api[ \-_]?dne|"
+        r"\binv[0-9]{6,}|sample[ \-_]?invoice|receivable|payable)",
         re.IGNORECASE,
     ), "invoice"),
+    # Quotes / cost proposals (forward-looking — what would the vendor
+    # charge if we ordered X). Useful for Operations sourcing.
+    (re.compile(
+        r"\b(quote|quotation|cost[ \-_]?(?:proposal|breakdown|estimate)|"
+        r"price[ \-_]?list|rfq|request[ \-_]?for[ \-_]?quote)",
+        re.IGNORECASE,
+    ), "quote"),
+    # Engineering / CAD drawings (Kienco's primary contribution — they
+    # produce CAD files for Spider parts before tooling).
+    (re.compile(
+        r"\.(dxf|dwg|step|stp|iges|igs|stl|prt|sldprt|sldasm|ipt|idw|iam|f3d)$",
+        re.IGNORECASE,
+    ), "cad_drawing"),
 ]
 
 

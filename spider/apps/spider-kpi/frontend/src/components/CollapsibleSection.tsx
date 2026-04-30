@@ -22,6 +22,19 @@ type Props = {
   children: ReactNode
   /** Optional density — 'compact' trims header padding for dense stacks. */
   density?: 'normal' | 'compact'
+  /**
+   * Optional mini-dashboard preview. When the section is COLLAPSED
+   * and `preview` is provided, this renders below the header instead
+   * of hiding the body entirely — letting users glance at high-level
+   * metrics/sparklines/text before deciding to drill in. Pattern:
+   * pass a small summary component (KPI tiles, mini-chart, 1–2
+   * sentence insight). When expanded, full `children` render.
+   *
+   * Convention: keep preview content under ~120px tall and avoid
+   * heavy per-render computations — the preview renders even when
+   * collapsed.
+   */
+  preview?: ReactNode
 }
 
 const STORAGE_PREFIX = 'spider-kpi:collapse:'
@@ -60,6 +73,7 @@ export function CollapsibleSection({
   accentColor,
   children,
   density = 'normal',
+  preview,
 }: Props) {
   // Resolve initial state from URL > localStorage > defaultOpen
   const computeInitial = (): boolean => {
@@ -146,11 +160,26 @@ export function CollapsibleSection({
           </div>
         )}
       </button>
-      {open && (
+      {open ? (
         <div style={{ padding: density === 'compact' ? '0 12px 12px' : '0 16px 16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           {children}
         </div>
-      )}
+      ) : preview ? (
+        // Mini-dashboard preview state: render compact summary so the
+        // user can glance at the section's high-level state without
+        // expanding. Border + lower padding distinguishes it from the
+        // expanded full-content state.
+        <div
+          style={{
+            padding: density === 'compact' ? '0 12px 10px' : '0 16px 12px',
+            borderTop: '1px solid rgba(255,255,255,0.04)',
+          }}
+          role="region"
+          aria-label={`${typeof title === 'string' ? title : 'Section'} preview — click header to expand`}
+        >
+          {preview}
+        </div>
+      ) : null}
     </section>
   )
 }
