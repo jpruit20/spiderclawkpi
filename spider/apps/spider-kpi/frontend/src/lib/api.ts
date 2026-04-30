@@ -1138,6 +1138,8 @@ export const api = {
   // SharePoint
   sharepointSites: (signal?: AbortSignal) =>
     request<SharepointSitesResponse>(`/api/sharepoint/sites`, { signal }),
+  sharepointVendorWorkspace: (days: number = 90, signal?: AbortSignal) =>
+    request<SharepointVendorWorkspace>(`/api/sharepoint/vendor-workspace?days=${days}`, { signal }),
   sharepointRecentChanges: (
     opts: { days?: number; division?: string; spider_product?: string; limit?: number },
     signal?: AbortSignal,
@@ -1621,6 +1623,56 @@ export interface KlaviyoAudienceSegmentation {
   device_to_app_user_ratio: number | null
   non_owner_audience: number
   non_owner_pct: number
+}
+
+/**
+ * Vendor workspace rollup — Spider-relevant content from sites where
+ * site.spider_product is NULL (Kienco, Qifei, future). Backed by
+ * /api/sharepoint/vendor-workspace.
+ */
+export interface SharepointVendorWorkspace {
+  window_days: number
+  as_of: string
+  totals: {
+    vendor_sites: number
+    files_total: number
+    spider_relevant: number
+    recent_activity: number
+    doc_kinds_tagged: number
+  }
+  by_vendor: Array<{
+    site_path: string
+    display_name: string
+    files_total: number
+    spider_relevant: number
+    recent_activity_in_window: number
+    doc_kinds_tagged: number
+  }>
+  by_doc_kind: Array<{
+    doc_kind: string  // 'qa' | 'freight_ocean' | 'freight_air' | 'shipping' | 'invoice' | 'quote' | 'patent_ip' | 'cad_drawing' | 'unclassified'
+    count: number
+    recent_in_window: number
+  }>
+  by_spider_product: Array<{
+    spider_product: string  // 'Huntsman' | 'Giant Huntsman' | 'Webcraft' | 'Giant Webcraft' | 'Venom' | 'Spider Kettle Cart' | 'unidentified'
+    count: number
+    recent_in_window: number
+  }>
+  recent_docs: Array<{
+    id: number
+    name: string
+    path: string
+    web_url: string | null
+    modified_at_remote: string | null
+    modified_by_email: string | null
+    detected_doc_kind: string | null
+    spider_product: string | null
+    semantic_type: string | null
+    dashboard_division: string | null
+    vendor_site_path: string
+    vendor_display_name: string
+  }>
+  method_note: string
 }
 
 export interface SharepointSitesResponse {

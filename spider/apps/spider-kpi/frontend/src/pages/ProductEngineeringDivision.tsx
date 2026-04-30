@@ -26,6 +26,7 @@ import { UniqueDeviceCohortPanel } from '../components/UniqueDeviceCohortPanel'
 import { AudienceSegmentationCard } from '../components/AudienceSegmentationCard'
 import { RecommendationsCard } from '../components/RecommendationsCard'
 import { SharepointActivityCard } from '../components/SharepointActivityCard'
+import { VendorWorkspaceCard } from '../components/VendorWorkspaceCard'
 import { SharepointIntelligenceCard } from '../components/SharepointIntelligenceCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { AppEngagementByOwnershipCard } from '../components/AppEngagementByOwnershipCard'
@@ -1047,6 +1048,12 @@ export function ProductEngineeringDivision() {
                 <SharepointIntelligenceCard division="pe" />
                 <SharepointActivityCard division="pe" />
               </CollapsibleSection>
+
+              {/* Vendor inbound — Kienco + Qifei. PE specifically cares
+                  about CAD drawings (Kienco) + patent/IP filings (Qifei).
+                  The card mini-preview surfaces those counts; expand to
+                  drill into individual recent docs. */}
+              <VendorWorkspaceCard />
 
               {/* Fleet composition — canonical 24mo active count +
                   lifetime breakdown by product family and source.

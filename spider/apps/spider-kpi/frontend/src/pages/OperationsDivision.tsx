@@ -11,6 +11,7 @@ import { SharepointIntelligenceCard } from '../components/SharepointIntelligence
 import { ShippingIntelligenceCard } from '../components/ShippingIntelligenceCard'
 import { ShippingCostBySkuCard } from '../components/ShippingCostBySkuCard'
 import { FedexReconciliationCard } from '../components/FedexReconciliationCard'
+import { VendorWorkspaceCard } from '../components/VendorWorkspaceCard'
 import { DivisionTargetsButton } from '../components/DivisionTargetsButton'
 import { OrderAgingCard } from '../components/OrderAgingCard'
 import { CustomizableCard } from '../components/CustomizableCard'
@@ -152,6 +153,16 @@ export function OperationsDivision() {
           summed and annualized — contract value at FedEx renewals. */}
       <CustomizableCard id="fedex_reconciliation" defaultTitle="FedEx rate reconciliation" cfg={cfg}>
         <FedexReconciliationCard />
+      </CustomizableCard>
+
+      {/* Vendor inbound — Kienco + Qifei SharePoint workspaces. Spider-
+          relevant content (freight docs, quotes, CAD drawings, IP filings,
+          commercial invoices) filtered via the keyword classifier in
+          app/services/sharepoint_classify.py. Mini-preview shows
+          headline counts + recent activity; expand to drill into
+          per-kind, per-product, recent-doc click-through. */}
+      <CustomizableCard id="vendor_workspace" defaultTitle="Vendor inbound (Kienco · Qifei)" cfg={cfg}>
+        <VendorWorkspaceCard />
       </CustomizableCard>
 
       <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>
