@@ -1,15 +1,25 @@
 import { ReactNode, useState } from 'react'
+import { CollapsibleSection } from './CollapsibleSection'
 
 /**
  * Wraps any card component on a division page so the page-config
- * customize mode can hide/rename/reorder it. When customize mode is
- * off, this is a transparent passthrough — no chrome, no overhead.
+ * customize mode can hide/rename/reorder it.
+ *
+ * Two modes:
+ *   * Default (no `collapsible` prop): transparent passthrough when not
+ *     in customize mode — no chrome, no overhead. Backward-compatible
+ *     with every existing call site.
+ *   * `collapsible` opt-in: wraps the children in a CollapsibleSection
+ *     so the user can collapse/expand the section. Optional `preview`
+ *     slot renders mini-dashboard summary content when collapsed.
  *
  * Usage:
  *   <CustomizableCard
  *     id="shipping_intelligence"
  *     defaultTitle="Shipping intelligence"
  *     cfg={cfg}
+ *     collapsible defaultOpen
+ *     preview={<MiniSummary />}
  *   >
  *     <ShippingIntelligenceCard ... />
  *   </CustomizableCard>
@@ -19,9 +29,38 @@ interface Props {
   defaultTitle: string
   cfg: ReturnType<typeof import('../lib/usePageConfig').usePageConfig>
   children: ReactNode
+  /**
+   * When true, wraps children in a CollapsibleSection in normal
+   * (non-customize) mode so users can collapse the section. Default
+   * false to preserve backward compatibility with existing usages.
+   */
+  collapsible?: boolean
+  /**
+   * Initial open state when `collapsible` is true. Default true so
+   * existing dashboards don't suddenly collapse on first paint;
+   * pages can pass false for less-important sections to make the
+   * landing view denser.
+   */
+  defaultOpen?: boolean
+  /**
+   * Subtitle to render in the CollapsibleSection header. Only used
+   * when `collapsible` is true.
+   */
+  subtitle?: ReactNode
+  /**
+   * Mini-dashboard preview to render when collapsed. Pass a small
+   * React node (KPI tiles, sparkline, 1-2 sentence text) — keeps
+   * collapsed state useful without being heavy.
+   */
+  preview?: ReactNode
+  /** Optional left-border accent forwarded to CollapsibleSection. */
+  accentColor?: string
 }
 
-export function CustomizableCard({ id, defaultTitle, cfg, children }: Props) {
+export function CustomizableCard({
+  id, defaultTitle, cfg, children,
+  collapsible = false, defaultOpen = true, subtitle, preview, accentColor,
+}: Props) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
 
@@ -31,8 +70,26 @@ export function CustomizableCard({ id, defaultTitle, cfg, children }: Props) {
   // Hidden + not customizing → render nothing.
   if (!visible && !cfg.customizeMode) return null
 
-  // Visible + not customizing → transparent passthrough (no chrome).
-  if (!cfg.customizeMode) return <>{children}</>
+  // Visible + not customizing →
+  //   collapsible: wrap in CollapsibleSection so user can fold/unfold.
+  //   default: transparent passthrough (legacy behavior).
+  if (!cfg.customizeMode) {
+    if (collapsible) {
+      return (
+        <CollapsibleSection
+          id={`card:${id}`}
+          title={title}
+          subtitle={subtitle}
+          defaultOpen={defaultOpen}
+          accentColor={accentColor}
+          preview={preview}
+        >
+          {children}
+        </CollapsibleSection>
+      )
+    }
+    return <>{children}</>
+  }
 
   // Customize mode → wrap with action toolbar.
   return (

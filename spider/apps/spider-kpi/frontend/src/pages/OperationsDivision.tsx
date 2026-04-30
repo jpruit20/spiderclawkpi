@@ -116,7 +116,11 @@ export function OperationsDivision() {
           { label: 'Late-ship reasons', value: '—', state: 'neutral' },
         ]}
       />
-      <CustomizableCard id="recommendations" defaultTitle="Recommendations" cfg={cfg}>
+      <CustomizableCard
+        id="recommendations" defaultTitle="Recommendations" cfg={cfg}
+        collapsible defaultOpen
+        subtitle="AI-generated action items for Operations"
+      >
         <RecommendationsCard division="operations" />
       </CustomizableCard>
 
@@ -124,65 +128,64 @@ export function OperationsDivision() {
         <DivisionTargetsButton division="operations" metrics={["orders", "tickets_created"]} label="Operations targets" />
       </div>
 
-      <CustomizableCard id="shipping_intelligence" defaultTitle="Shipping intelligence" cfg={cfg}>
+      <CustomizableCard
+        id="shipping_intelligence" defaultTitle="Shipping intelligence" cfg={cfg}
+        collapsible defaultOpen
+        subtitle="Carrier mix, transit times, geographic distribution, 3PL ROI"
+      >
         <ShippingIntelligenceCard defaultDays={90} showCxCorrelation />
       </CustomizableCard>
 
       {/* Shipping cost drill-down: per-SKU spend, carrier mix per SKU,
-          and per-carrier trend over time. Joseph asked for this on
-          2026-04-28 — folded by default since the parent shipping card
-          already covers carrier mix headline. Owners click in for the
-          "is this SKU still profitable to ship?" view. */}
-      <CustomizableCard id="shipping_cost_by_sku" defaultTitle="Shipping cost by SKU" cfg={cfg}>
-        <CollapsibleSection
-          id="ops-shipping-cost-by-sku"
-          title="Shipping cost by SKU"
-          subtitle="Per-SKU shipping spend, carrier mix per SKU, trend by carrier"
-          density="compact"
-        >
-          <ShippingCostBySkuCard />
-        </CollapsibleSection>
+          and per-carrier trend over time. Folded by default since the
+          parent shipping card already covers carrier mix headline. */}
+      <CustomizableCard
+        id="shipping_cost_by_sku" defaultTitle="Shipping cost by SKU" cfg={cfg}
+        collapsible defaultOpen={false}
+        subtitle="Per-SKU shipping spend · carrier mix · trend"
+      >
+        <ShippingCostBySkuCard />
       </CustomizableCard>
 
-      {/* FedEx rate cross-check / contract-savings reconciliation card.
-          Powered by the daily cross_check_rates job (07:30 ET) which
-          asks the FedEx Rates API for ACCOUNT + LIST quotes per
-          ShipStation FedEx label and persists the deltas. Two angles:
-          (a) ShipStation actual vs FedEx ACCOUNT quote — anomaly
-          detector for surcharges sneaking past us, (b) LIST − actual
-          summed and annualized — contract value at FedEx renewals. */}
-      <CustomizableCard id="fedex_reconciliation" defaultTitle="FedEx rate reconciliation" cfg={cfg}>
+      {/* FedEx rate cross-check / contract-savings reconciliation card. */}
+      <CustomizableCard
+        id="fedex_reconciliation" defaultTitle="FedEx rate reconciliation" cfg={cfg}
+        collapsible defaultOpen
+        subtitle="ShipStation est vs Rate-API quote vs invoice (truth)"
+      >
         <FedexReconciliationCard />
       </CustomizableCard>
 
-      {/* Vendor inbound — Kienco + Qifei SharePoint workspaces. Spider-
-          relevant content (freight docs, quotes, CAD drawings, IP filings,
-          commercial invoices) filtered via the keyword classifier in
-          app/services/sharepoint_classify.py. Mini-preview shows
-          headline counts + recent activity; expand to drill into
-          per-kind, per-product, recent-doc click-through. */}
+      {/* Vendor inbound — Kienco + Qifei SharePoint. The card itself
+          uses CollapsibleSection internally (with rich preview), so
+          we skip the outer collapsible wrapper to avoid double-nesting. */}
       <CustomizableCard id="vendor_workspace" defaultTitle="Vendor inbound (Kienco · Qifei)" cfg={cfg}>
         <VendorWorkspaceCard />
       </CustomizableCard>
 
-      <CustomizableCard id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}>
+      <CustomizableCard
+        id="sharepoint_intelligence" defaultTitle="SharePoint intelligence" cfg={cfg}
+        collapsible defaultOpen={false}
+        subtitle="Per-product engineering folder activity"
+      >
         <SharepointIntelligenceCard division="operations" />
       </CustomizableCard>
 
-      {/* SharePoint activity feed — long raw activity list. Folded so
-          the Ops landing isn't dominated by a per-file scroll. */}
-      <CustomizableCard id="sharepoint_activity" defaultTitle="SharePoint activity feed" cfg={cfg}>
-        <CollapsibleSection
-          id="ops-sharepoint-activity"
-          title="SharePoint activity feed"
-          subtitle="Per-file activity from AMW SharePoint folders"
-          density="compact"
-        >
-          <SharepointActivityCard division="operations" />
-        </CollapsibleSection>
+      {/* SharePoint activity feed — long per-file activity list, folded
+          by default so the Ops landing isn't dominated by it. */}
+      <CustomizableCard
+        id="sharepoint_activity" defaultTitle="SharePoint activity feed" cfg={cfg}
+        collapsible defaultOpen={false}
+        subtitle="Per-file activity from AMW SharePoint folders"
+      >
+        <SharepointActivityCard division="operations" />
       </CustomizableCard>
 
-      <CustomizableCard id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}>
+      <CustomizableCard
+        id="order_aging" defaultTitle="Order fulfillment aging" cfg={cfg}
+        collapsible defaultOpen
+        subtitle="0–1d / 1–3d / 3–7d / 7d+ buckets · 14-day trend"
+      >
         <OrderAgingCard variant="full" trendDays={14} />
       </CustomizableCard>
       <CollapsibleSection
@@ -223,33 +226,53 @@ export function OperationsDivision() {
         />
       </CollapsibleSection>
       <div className="page-grid" style={{ marginTop: 16 }}>
-        <CustomizableCard id="clickup_tasks" defaultTitle="ClickUp tasks — Operations" cfg={cfg}>
+        <CustomizableCard
+          id="clickup_tasks" defaultTitle="ClickUp tasks — Operations" cfg={cfg}
+          collapsible defaultOpen={false}
+          subtitle="Operational ClickUp tasks (filter narrows as tags improve)"
+        >
           <ClickUpTasksCard
             title={cfg.cardTitle('clickup_tasks', 'ClickUp tasks — Operations')}
             subtitle="Tasks from ClickUp that look operational (filter narrows as you tag / organize)."
             defaultFilter={{ limit: 30 }}
           />
         </CustomizableCard>
-        <CustomizableCard id="clickup_velocity" defaultTitle="Team velocity — all ClickUp" cfg={cfg}>
+        <CustomizableCard
+          id="clickup_velocity" defaultTitle="Team velocity — all ClickUp" cfg={cfg}
+          collapsible defaultOpen={false}
+          subtitle="Throughput + cycle time across spaces"
+        >
           <ClickUpVelocityCard
             title={cfg.cardTitle('clickup_velocity', 'Team velocity — all ClickUp')}
             subtitle="Throughput + cycle time across every space until an Ops space is stood up."
           />
         </CustomizableCard>
-        <CustomizableCard id="clickup_compliance" defaultTitle="Tagging compliance — all ClickUp" cfg={cfg}>
+        <CustomizableCard
+          id="clickup_compliance" defaultTitle="Tagging compliance — all ClickUp" cfg={cfg}
+          collapsible defaultOpen={false}
+          subtitle="Closed tasks carrying the required taxonomy"
+        >
           <ClickUpComplianceCard
             title={cfg.cardTitle('clickup_compliance', 'Tagging compliance — all ClickUp')}
             subtitle="Closed tasks carrying the required taxonomy (Division / Customer Impact / Category)."
           />
         </CustomizableCard>
-        <CustomizableCard id="slack_pulse" defaultTitle="Slack pulse — Inventory / Wholesale" cfg={cfg}>
+        <CustomizableCard
+          id="slack_pulse" defaultTitle="Slack pulse — Inventory / Wholesale" cfg={cfg}
+          collapsible defaultOpen={false}
+          subtitle="Operational Slack channels: inventory + retail/wholesale"
+        >
           <SlackPulseCard
             title={cfg.cardTitle('slack_pulse', 'Slack pulse — Inventory / Wholesale')}
             subtitle="Operational Slack channels: inventory updates, retail/wholesale conversation."
             defaultChannelName="inventory-updates"
           />
         </CustomizableCard>
-        <CustomizableCard id="email_pulse" defaultTitle="Email pulse — shipment / logistics" cfg={cfg}>
+        <CustomizableCard
+          id="email_pulse" defaultTitle="Email pulse — shipment / logistics" cfg={cfg}
+          collapsible defaultOpen={false}
+          subtitle="14-day email volume across shipment / logistics threads"
+        >
           <EmailPulseCard
             range={{
               startDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
